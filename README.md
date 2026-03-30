@@ -2,9 +2,9 @@
 
 # 🤖 What I Did — GitHub Copilot Impact Report
 
-**See exactly what GitHub Copilot accomplished for you — in dollars, hours, and lines of code.**
+**See exactly what GitHub Copilot accomplished for you — in dollars, hours, and more importantly skills substituted.**
 
-*Automatically harvests your Copilot session data, uses AI to categorize every task, and produces a polished impact report you can share with your team or manager.*
+*Automatically harvests your Copilot session data, uses AI to categorize every task, and produces a polished impact report you can share with your team or manager. Fearlessly answer any questions around those tokens consumed*
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://python.org)
 [![GitHub Copilot](https://img.shields.io/badge/GitHub%20Copilot-powered-green)](https://github.com/features/copilot)
@@ -17,10 +17,10 @@
 
 That's a real output from this tool. It reads your local Copilot session logs, classifies every task with AI, estimates what a human professional would charge, and renders a report with:
 
-- 🎯 **Goals & tasks** — what you actually accomplished, grouped by business outcome
-- ⏱️ **Professional services equivalent** — calibrated hours × market rate
+- 🎯 **Projects & tasks** — what you actually accomplished, grouped by business outcome
+- ⏱️ **Professional services equivalent** — what it might cost you to get the same done by a professional
 - 💰 **ROI multiplier** — your $39/mo seat vs. the value delivered
-- 📊 **Fixed vs. market pricing** — what the same tokens would cost at Anthropic API rates
+- 📊 **Fixed vs. market pricing** — what the same tokens would cost at public API rates
 - 🛠️ **Skills mobilized** — the professional roles Copilot substituted for (engineer, designer, analyst…)
 - 📈 **Code impact** — lines added/removed, PRs created, active days
 
@@ -42,11 +42,15 @@ git clone https://github.com/microsoft/mycopilotworks.git
 cd mycopilotworks
 ```
 
-### 2. Authenticate GitHub CLI (required for AI analysis)
-
-```bash
-gh auth login
-```
+### 2. Open in GitHub Copilot CLI or VS Code
+   
+   ```bash
+   # Option A: Open in VS Code with Copilot
+   code mycopilotworks
+   
+   # Option B: Use GitHub Copilot in the terminal
+   cd mycopilotworks
+   gh copilot
 
 ### 3. Run your first report
 
