@@ -358,9 +358,11 @@ def _activity_bar(analysis: dict) -> str:
     market_cost = (in_tok * 3.00 + out_tok * 15.00 + cr_tok * 0.30 + cc_tok * 3.75) / 1_000_000
 
     # Fixed rate: Copilot seat cost (monthly)
-    seat_cost   = SEAT_COST_PER_MONTH
-    savings     = market_cost - seat_cost
-    savings_x   = round(market_cost / seat_cost) if seat_cost > 0 else 0
+    seat_cost    = SEAT_COST_PER_MONTH
+    raw_savings  = market_cost - seat_cost
+    # Clamp savings to zero to avoid showing negative "You Saved" amounts.
+    savings      = raw_savings if raw_savings > 0 else 0.0
+    savings_x    = round(market_cost / seat_cost) if seat_cost > 0 else 0
 
     tok_str      = f"{total_t / 1_000:.0f}K" if total_t < 1_000_000 else f"{total_t / 1_000_000:.1f}M"
     api_time_str = _fmt_ms(total_api_ms)
