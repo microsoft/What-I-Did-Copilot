@@ -1,16 +1,54 @@
-# whatididghcp — Daily GitHub Copilot Activity Digest
+<div align="center">
 
-Generates a daily analytics report of what GitHub Copilot helped you accomplish. Harvests session data from `~/.copilot/session-state/`, uses AI to extract goals and estimate human effort, then produces a styled HTML report (optionally emailed via Outlook).
+# 🤖 What I Did — GitHub Copilot Impact Report
 
-## Features
+**See exactly what GitHub Copilot accomplished for you — in dollars, hours, and lines of code.**
 
-- **Session harvesting** — scans Copilot session logs for instructions, tool usage, code changes, and token metrics
-- **AI-powered analysis** — calls GitHub Models API (gpt-4o-mini) to categorize tasks, estimate human hours, and generate narrative
-- **Rich HTML report** — KPI cards, goal tables, activity timeline, token cost breakdown, and leverage metrics
-- **Email delivery** — sends report via Outlook COM automation
-- **Copilot skill** — can be invoked as a GitHub Copilot CLI skill
+*Automatically harvests your Copilot session data, uses AI to categorize every task, and produces a polished impact report you can share with your team or manager.*
 
-## Usage
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://python.org)
+[![GitHub Copilot](https://img.shields.io/badge/GitHub%20Copilot-powered-green)](https://github.com/features/copilot)
+
+</div>
+
+---
+
+> **"In March, Copilot delivered $4,380 worth of professional services for a $39/mo seat — a 112× return on investment."**
+
+That's a real output from this tool. It reads your local Copilot session logs, classifies every task with AI, estimates what a human professional would charge, and renders a report with:
+
+- 🎯 **Goals & tasks** — what you actually accomplished, grouped by business outcome
+- ⏱️ **Professional services equivalent** — calibrated hours × market rate
+- 💰 **ROI multiplier** — your $39/mo seat vs. the value delivered
+- 📊 **Fixed vs. market pricing** — what the same tokens would cost at Anthropic API rates
+- 🛠️ **Skills mobilized** — the professional roles Copilot substituted for (engineer, designer, analyst…)
+- 📈 **Code impact** — lines added/removed, PRs created, active days
+
+## 📸 Sample Report
+
+<div align="center">
+<em>Report generated with <code>whatidid --from 2026-03-01 --to 2026-03-30</code></em>
+
+<!-- Replace with actual screenshot: take a full-page screenshot of a generated report and save as docs/images/sample-report.png -->
+<img src="docs/images/sample-report.jpg" alt="Sample Impact Report" width="680">
+</div>
+
+## 🚀 Quick Start
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/microsoft/mycopilotworks.git
+cd mycopilotworks
+```
+
+### 2. Authenticate GitHub CLI (required for AI analysis)
+
+```bash
+gh auth login
+```
+
+### 3. Run your first report
 
 ```bash
 # Today's report
@@ -19,41 +57,67 @@ python whatidid.py
 # Specific date
 python whatidid.py --date 2026-03-19
 
-# Date range
-python whatidid.py --from 2026-03-09 --to 2026-03-19
+# Date range (e.g., all of March)
+python whatidid.py --from 2026-03-01 --to 2026-03-30
 
-# Send email
+# Save HTML without emailing
+python whatidid.py --from 2026-03-01 --to 2026-03-30 --html
+
+# Send report via Outlook
 python whatidid.py --email you@company.com
-
-# Save HTML only (no email)
-python whatidid.py --html
 
 # Force re-analysis (bypass cache)
 python whatidid.py --refresh
 ```
 
-## Architecture
+### 4. (Optional) Set up a shortcut
+
+Add this to your PowerShell profile (`$PROFILE`) so you can run `whatidid` from anywhere:
+
+```powershell
+function whatidid { python "C:/path/to/mycopilotworks/whatidid.py" @args }
+```
+
+Then:
+```bash
+whatidid --from 2026-03-01 --to 2026-03-30 --html
+```
+
+## 🏗️ How It Works
 
 ```
 ~/.copilot/session-state/<uuid>/events.jsonl
                 │
                 ▼
-           harvest.py    → scan sessions, extract instructions & metrics
+           harvest.py    → scan sessions, extract instructions, tools, metrics
                 │
                 ▼
-           analyze.py    → AI categorization via GitHub Models API
+           analyze.py    → AI categorization via GitHub Models API (gpt-4o-mini)
+                │         → calibrated effort estimation with quantitative signals
+                ▼
+           report.py     → Outlook-compatible HTML with ROI, skills, goal breakdown
                 │
                 ▼
-           report.py     → generate Outlook-compatible HTML
-                │
-                ▼
-         email_send.py   → send via Outlook COM (optional)
+         email_send.py   → send via Outlook COM automation (optional)
 ```
 
-See [docs/architecture.md](docs/architecture.md) for full details.
+See [docs/architecture.md](docs/architecture.md) for session file formats, token cost model, and leverage calculation details.
 
-## Requirements
+## 📋 Requirements
 
-- Python 3.10+
-- GitHub CLI (`gh`) authenticated (for GitHub Models API token)
-- Microsoft Outlook (for email delivery, optional)
+| Requirement | Why |
+|---|---|
+| **Python 3.10+** | Core runtime |
+| **GitHub CLI (`gh`)** | Provides API token for AI analysis — run `gh auth login` |
+| **GitHub Copilot** | Session data source — must have active sessions in `~/.copilot/session-state/` |
+| **Microsoft Outlook** | *(Optional)* For email delivery via COM automation |
+
+No `pip install` needed — the tool uses only Python standard library + GitHub Models API.
+
+## 🤝 Copilot CLI Skill
+
+This tool can also be invoked as a [GitHub Copilot CLI](https://githubnext.com/projects/copilot-cli) skill. See [skill/SKILL.md](skill/SKILL.md) for the skill definition.
+
+## 📄 License
+
+MIT

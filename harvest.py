@@ -124,6 +124,7 @@ def get_sessions_for_date(target_date: str) -> list:
         messages      = []
         session_start = None
         session_end   = None
+        git_ops_list  = []
 
         for e in events:
             ts = e.get("timestamp", "")
@@ -155,6 +156,13 @@ def get_sessions_for_date(target_date: str) -> list:
                     summary = tr.get("intentionSummary") or tr.get("name", "")
                     if summary and messages and messages[-1]["role"] == "user":
                         messages[-1]["tools_after"].append(summary)
+
+            elif etype == "tool.execution_complete":
+                tool_name = e.get("data", {}).get("toolName", "")
+                if "pull_request" in tool_name.lower() or "pr" in tool_name.lower():
+                    # Track PR-related tool calls
+                    if e.get("data", {}).get("success", False):
+                        git_ops_list.append("pr")
 
         # Pull shutdown metrics (tokens, code changes, premium requests)
         tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
@@ -203,7 +211,7 @@ def get_sessions_for_date(target_date: str) -> list:
             "session_start":     session_start,
             "session_end":       session_end,
             "git_repos":         git_repos,
-            "git_ops":           [],
+            "git_ops":           git_ops_list,
             "workspace_summary": workspace.get("summary", ""),
         })
 

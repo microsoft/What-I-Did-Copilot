@@ -73,12 +73,12 @@ Update these in `report.py → _cost()` if rates change.
 ## Leverage metric
 
 ```
-human_value    = total_human_hours × HOURLY_RATE   ($150/hr default)
-seat_cost/day  = seat_price_per_month × 12 / 260   (~$1.80/day enterprise)
-leverage       = human_value / seat_cost_per_day
+human_value    = total_human_hours × HOURLY_RATE   ($72/hr blended rate)
+seat_cost/mo   = $39/mo enterprise plan
+leverage       = human_value / seat_cost_per_month
 ```
 
-Example: 8h × $150 = $1,200 human value ÷ $1.80/day seat = **667×**
+Example: 29h × $72 = $2,088 human value ÷ $39/mo seat = **54×**
 
 This measures return on Copilot seat investment per day used.
 

@@ -72,6 +72,13 @@ def _build_transcript(sessions: list) -> str:
                 f"Code impact: +{cc.get('linesAdded', 0)} / -{cc.get('linesRemoved', 0)} lines"
                 + (f", {n_files} file(s)" if n_files else "")
             )
+        if s.get("premium_requests"):
+            lines.append(f"Premium requests: {s['premium_requests']}")
+        if s.get("tokens", {}).get("total"):
+            lines.append(f"Tokens consumed: {s['tokens']['total']:,}")
+        n_tools = sum(len(m.get("tools_after", [])) for m in s["messages"] if m["role"] == "user")
+        if n_tools:
+            lines.append(f"Tool invocations: {n_tools}")
 
         for msg in s["messages"]:
             if msg["role"] != "user":
@@ -135,6 +142,12 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False) -> dict
         return _attach_metrics(_fallback_analysis(target_date, sessions))
 
     transcript  = _build_transcript(sessions)
+
+    # Truncate transcript to stay within token limit (~4 chars per token, leave room for prompt)
+    MAX_TRANSCRIPT_CHARS = 12000  # ~3000 tokens, leaving ~5000 for prompt + response
+    if len(transcript) > MAX_TRANSCRIPT_CHARS:
+        transcript = transcript[:MAX_TRANSCRIPT_CHARS] + "\n\n[... transcript truncated for length ...]"
+
     domain_list = ", ".join(DOMAIN_SKILLS[:6]) + ", ..."
     tech_list   = ", ".join(TECH_SKILLS[:6])   + ", ..."
 
@@ -183,12 +196,35 @@ GOOD framing:
   ✓ "Delivered X that does Y" — value-focused
 
 ═══════════════════════════════════════════
-RULE 3 — EFFORT ESTIMATES
+RULE 3 — EFFORT ESTIMATES (calibrated)
 ═══════════════════════════════════════════
 
-human_hours = what a skilled senior professional would need starting from scratch.
-- Single number, nearest 0.5h. Conservative (lean high, not low).
-- goal.human_hours must exactly equal the sum of its task hours.
+human_hours = what a skilled professional would need WITHOUT Copilot assistance.
+BE CONSERVATIVE — underestimate rather than overestimate. Credibility matters more than impressive numbers.
+Use this calibration scale — match the task to the closest anchor:
+
+  0.25h  — Trivial: install a package, run a CLI command, toggle a config, copy files
+  0.5h   — Simple: minor code edit, format/style tweak, rename, small config change, run existing script
+  0.75h  — Light: write a helper function, fix a known bug, small template change
+  1.0-1.5h — Moderate: implement a small feature, debug an unknown issue, draft a short document
+  2-3h   — Substantial: design + implement a feature, write a detailed report, complex analysis
+  4-6h   — Major: architect a new system, build a complete tool from scratch, comprehensive research
+
+MOST TASKS SHOULD BE 0.25-1.0h. Only genuinely complex work exceeds 1.5h.
+
+USE THESE QUANTITATIVE SIGNALS to calibrate estimates:
+- Premium requests per session indicate complexity: 1-5 = trivial, 5-20 = moderate, 20-50 = substantial, 50+ = major
+- Tool invocations: 1-5 = simple task, 5-15 = moderate, 15+ = complex multi-step work
+- Code impact: <50 lines = minor, 50-200 = moderate, 200+ = substantial development
+- If a session used <10 premium requests total, ALL tasks in that session combined should be ≤1.5h
+- If total tokens < 50,000, the work was likely straightforward — cap at 2h total
+
+IMPORTANT RULES:
+- Mechanical execution (installing, deploying, running existing code, copying files) → 0.25-0.5h max
+- Only tasks involving THINKING, DESIGN, ANALYSIS, or NOVEL CODING deserve estimates above 1h
+- "Installing X from GitHub" is 15 minutes (0.25h), not hours — even with troubleshooting
+- Each number must be nearest 0.25h (not just 0.5h increments)
+- goal.human_hours must exactly equal the sum of its task hours
 
 ═══════════════════════════════════════════
 OUTPUT SCHEMA
@@ -214,7 +250,9 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
           "what_got_done": "One sentence, max 18 words. Outcome only — no tool names.",
           "domain_skills": ["1-2 from: {domain_list}"],
           "tech_skills": ["0-2 from: {tech_list} (omit if none)"],
-          "human_hours": <single conservative number, nearest 0.5h>
+          "task_type": "one of: Development | Bug Fix & Debug | Analysis & Research | Design & UX | Execution & Ops",
+          "professional_roles": ["1-2 from: Software Engineer, Frontend Developer, UX Designer, Visual Designer, Data Analyst, Data Engineer, DevOps Engineer, Technical Writer, Product Manager, Security Engineer, Solutions Architect, QA Engineer"],
+          "human_hours": <single calibrated number per the scale above, nearest 0.25h>
         }}
       ]
     }}
@@ -292,22 +330,81 @@ def _infer_skills(text: str, tools: list) -> tuple:
         tech.append("DevOps/CI-CD")
     if not domain:
         domain.append("Product Planning")
-    return domain[:2], tech[:2]
+
+    # Infer task_type
+    task_type = "Development"
+    if any(_word(w, t) for w in ("debug", "fix", "error", "bug", "crash", "broken")):
+        task_type = "Bug Fix & Debug"
+    elif any(_word(w, t) for w in ("analyze", "research", "investigate", "report", "metric", "data")):
+        task_type = "Analysis & Research"
+    elif any(_word(w, t) for w in ("design", "ui", "ux", "layout", "style", "css", "visual")):
+        task_type = "Design & UX"
+    elif any(_word(w, t) for w in ("deploy", "release", "pipeline", "ci", "cd", "ops", "config")):
+        task_type = "Execution & Ops"
+
+    # Infer professional_roles
+    roles = []
+    if task_type == "Bug Fix & Debug":
+        roles.append("QA Engineer")
+    if task_type == "Design & UX" or ".html" in ts or ".css" in ts:
+        roles.append("Frontend Developer")
+    if ".py" in ts or "python" in ts or task_type == "Development":
+        roles.append("Software Engineer")
+    if any(_word(w, t) for w in ("analyze", "report", "data", "metric")):
+        roles.append("Data Analyst")
+    if any(_word(w, t) for w in ("write", "draft", "document", "readme")):
+        roles.append("Technical Writer")
+    if any(_word(w, t) for w in ("deploy", "pipeline", "ci", "cd")):
+        roles.append("DevOps Engineer")
+    if any(_word(w, t) for w in ("design", "architect", "plan")):
+        roles.append("Solutions Architect")
+    if not roles:
+        roles.append("Software Engineer")
+
+    return domain[:2], tech[:2], task_type, roles[:2]
 
 
-def _conservative_hours(text: str, tools: list) -> float:
+def _conservative_hours(text: str, tools: list, premium_reqs: int = 0, tokens_total: int = 0) -> float:
+    """Calibrated effort estimate matching the AI prompt's anchor scale."""
     n, t = len(tools), text.lower()
-    if any(_word(w, t) for w in ("fix", "debug", "error", "bug")):
-        return 2.0 if n > 10 else 1.0
-    if any(_word(w, t) for w in ("implement", "build", "create", "write", "code")) and n > 15:
-        return 5.0
-    if any(_word(w, t) for w in ("implement", "build", "create", "write", "code")):
-        return 3.0
-    if any(_word(w, t) for w in ("plan", "design", "architect")):
-        return 2.0
-    if any(_word(w, t) for w in ("update", "change", "small", "quick")):
+    # Keyword checks first so trivial execution tasks aren't over-counted even with few tool calls
+    if any(_word(w, t) for w in ("install", "deploy", "push", "run", "config", "setup")):
+        return 0.25
+    if any(_word(w, t) for w in ("update", "change", "small", "quick", "rename", "tweak")):
         return 0.5
-    return 1.5
+    # If very few tools and no specific keyword matched above, treat as small change
+    if n <= 1:
+        return 0.25
+    if n <= 3:
+        return 0.5
+    # Bug fix scales with complexity
+    if any(_word(w, t) for w in ("fix", "debug", "error", "bug")):
+        return 1.5 if n > 10 else 1.0
+    # Substantial development
+    if any(_word(w, t) for w in ("implement", "build", "create", "write", "code")) and n > 15:
+        return 4.0
+    if any(_word(w, t) for w in ("implement", "build", "create", "write", "code")):
+        return 2.0
+    # Design / planning
+    if any(_word(w, t) for w in ("plan", "design", "architect")):
+        return 1.5
+    # Analysis
+    if any(_word(w, t) for w in ("analyze", "research", "investigate", "report")):
+        return 1.5
+    return 1.0
+
+
+def _summarize_message(text: str, tools: list) -> str:
+    """Generate a brief description from user message and tool calls."""
+    # Use the first line of the user message, cleaned up
+    first_line = text.split("\n")[0].strip()
+    # Truncate long messages
+    if len(first_line) > 80:
+        first_line = first_line[:77] + "..."
+    # If tools were used, mention the count
+    if tools:
+        return f"{first_line} ({len(tools)} tool calls)"
+    return first_line
 
 
 def _fallback_analysis(target_date: str, sessions: list) -> dict:
@@ -320,20 +417,22 @@ def _fallback_analysis(target_date: str, sessions: list) -> dict:
         tasks = []
         for msg in user_msgs:
             text, tools = msg["text"], msg.get("tools_after", [])
-            hours = _conservative_hours(text, tools)
-            domain, tech = _infer_skills(text, tools)
+            hours = _conservative_hours(text, tools, s.get("premium_requests", 0), s.get("tokens", {}).get("total", 0))
+            domain, tech, task_type, prof_roles = _infer_skills(text, tools)
             first = text.split("\n")[0].strip()
             title = (first if not first[0].isdigit() else text[:75])[:75]
             tasks.append({
-                "title":         title,
-                "what_got_done": "Run `gh auth login` for a plain-English description.",
-                "domain_skills": domain,
-                "tech_skills":   tech,
-                "human_hours":   hours,
+                "title":              title,
+                "what_got_done":      _summarize_message(text, tools),
+                "domain_skills":      domain,
+                "tech_skills":        tech,
+                "task_type":          task_type,
+                "professional_roles": prof_roles,
+                "human_hours":        hours,
             })
         goals.append({
             "title":       f"Worked on {proj}",
-            "summary":     "Run `gh auth login` for semantic goal analysis.",
+            "summary":     f"{len(tasks)} task{'s' if len(tasks) != 1 else ''} completed in {proj}.",
             "human_hours": sum(t["human_hours"] for t in tasks),
             "tasks":       tasks,
         })
