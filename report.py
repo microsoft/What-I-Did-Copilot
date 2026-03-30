@@ -2,6 +2,7 @@
 report.py — Daily digest HTML for GitHub Copilot sessions.
 Layout: Header → Narrative → Leverage Banner → KPI cards → Complexity → Skills → Goals summary → Pricing/Activity → Task accordion
 """
+from datetime import datetime
 from harvest import compute_elapsed_minutes
 
 C = {
@@ -64,6 +65,22 @@ HOURLY_RATE = 72  # $/hr — blended professional services rate (conservative)
 SEAT_COST_PER_MONTH = 39  # Enterprise Copilot seat $/month
 
 
+def _prorated_seat_cost(analysis: dict) -> "tuple[int, int]":
+    """Return (seat_cost, n_months) prorated over the distinct calendar months in active_dates."""
+    dates = analysis.get("active_dates", [])
+    if not dates:
+        return SEAT_COST_PER_MONTH, 1
+    months: set = set()
+    for d in dates:
+        try:
+            dt = datetime.strptime(str(d)[:10], "%Y-%m-%d")
+            months.add((dt.year, dt.month))
+        except ValueError:
+            pass
+    n_months = max(1, len(months))
+    return SEAT_COST_PER_MONTH * n_months, n_months
+
+
 def _kpi_card(value: str, label: str, sub: str = "") -> str:
     return f"""
     <td style="padding:6px;width:25%;vertical-align:top">
@@ -117,7 +134,8 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
     """Hero-style ROI banner: services equivalent, seat cost, API savings."""
     total_human_h = sum(g.get("human_hours", 0) for g in goals)
     human_value   = total_human_h * HOURLY_RATE
-    leverage      = round(human_value / SEAT_COST_PER_MONTH) if SEAT_COST_PER_MONTH > 0 else 0
+    seat_cost, n_months = _prorated_seat_cost(analysis)
+    leverage      = round(human_value / seat_cost) if seat_cost > 0 else 0
 
     # Market API cost
     tokens = analysis.get("tokens", {})
@@ -125,10 +143,13 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
                  + tokens.get("output", 0) * 15.00
                  + tokens.get("cache_read", 0) * 0.30
                  + tokens.get("cache_creation", 0) * 3.75) / 1_000_000
-    api_savings = market_cost - SEAT_COST_PER_MONTH
+    api_savings = max(0, market_cost - seat_cost)
 
     if leverage <= 0:
         return ""
+
+    seat_label = (f"${seat_cost}/mo" if n_months == 1
+                  else f"${seat_cost} ({n_months}mo)")
 
     return f"""
   <tr>
@@ -161,7 +182,7 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
                   <div style="font-size:10px;font-weight:700;text-transform:uppercase;
                               letter-spacing:0.8px;color:rgba(255,255,255,0.55)">Copilot Seat<br>Cost</div>
                   <div style="font-size:18px;font-weight:700;color:#fff;margin-top:4px">
-                    ${SEAT_COST_PER_MONTH}/mo</div>
+                    {seat_label}</div>
                   <div style="font-size:11px;color:rgba(255,255,255,0.7);margin-top:2px">
                     Enterprise plan</div>
                 </td>
@@ -357,10 +378,14 @@ def _activity_bar(analysis: dict) -> str:
     # Market rate: what Anthropic would charge at published API prices
     market_cost = (in_tok * 3.00 + out_tok * 15.00 + cr_tok * 0.30 + cc_tok * 3.75) / 1_000_000
 
-    # Fixed rate: Copilot seat cost (monthly)
-    seat_cost   = SEAT_COST_PER_MONTH
-    savings     = market_cost - seat_cost
+    # Fixed rate: Copilot seat cost, prorated over months in the report range
+    seat_cost, n_months = _prorated_seat_cost(analysis)
+    raw_savings = market_cost - seat_cost
+    savings     = max(0.0, raw_savings)
     savings_x   = round(market_cost / seat_cost) if seat_cost > 0 else 0
+
+    seat_label  = (f"${seat_cost}/mo" if n_months == 1
+                   else f"${seat_cost} ({n_months}mo)")
 
     tok_str      = f"{total_t / 1_000:.0f}K" if total_t < 1_000_000 else f"{total_t / 1_000_000:.1f}M"
     api_time_str = _fmt_ms(total_api_ms)
@@ -407,7 +432,7 @@ def _activity_bar(analysis: dict) -> str:
                         padding:14px 16px;text-align:center">
               <div style="font-size:10px;font-weight:700;text-transform:uppercase;
                           letter-spacing:0.8px;color:{C['green']};margin-bottom:6px">Copilot Fixed Seat</div>
-              <div style="font-size:26px;font-weight:700;color:{C['green']};letter-spacing:-0.5px">${SEAT_COST_PER_MONTH}/mo</div>
+              <div style="font-size:26px;font-weight:700;color:{C['green']};letter-spacing:-0.5px">{seat_label}</div>
               <div style="font-size:11px;color:{C['green']};margin-top:4px">Enterprise plan · fixed price</div>
             </div>
           </td>
