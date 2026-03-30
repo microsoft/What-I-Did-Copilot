@@ -125,7 +125,7 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
                  + tokens.get("output", 0) * 15.00
                  + tokens.get("cache_read", 0) * 0.30
                  + tokens.get("cache_creation", 0) * 3.75) / 1_000_000
-    api_savings = market_cost - SEAT_COST_PER_MONTH
+    api_savings = max(0, market_cost - SEAT_COST_PER_MONTH)
 
     if leverage <= 0:
         return ""
