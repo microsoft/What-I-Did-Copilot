@@ -367,15 +367,15 @@ def _infer_skills(text: str, tools: list) -> tuple:
 def _conservative_hours(text: str, tools: list, premium_reqs: int = 0, tokens_total: int = 0) -> float:
     """Calibrated effort estimate matching the AI prompt's anchor scale."""
     n, t = len(tools), text.lower()
-    # If very few tools, it's likely trivial regardless of text
-    if n <= 1:
-        return 0.25
-    if n <= 3:
-        return 0.5
-    # Trivial execution
+    # Keyword checks first so trivial execution tasks aren't over-counted even with few tool calls
     if any(_word(w, t) for w in ("install", "deploy", "push", "run", "config", "setup")):
         return 0.25
     if any(_word(w, t) for w in ("update", "change", "small", "quick", "rename", "tweak")):
+        return 0.5
+    # If very few tools and no specific keyword matched above, treat as small change
+    if n <= 1:
+        return 0.25
+    if n <= 3:
         return 0.5
     # Bug fix scales with complexity
     if any(_word(w, t) for w in ("fix", "debug", "error", "bug")):
