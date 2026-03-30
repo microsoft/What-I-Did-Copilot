@@ -44,13 +44,14 @@ cd mycopilotworks
 
 ### 2. Open in GitHub Copilot CLI or VS Code
    
-   ```bash
-   # Option A: Open in VS Code with Copilot
-   code mycopilotworks
+```bash
+# Option A: Open in VS Code with Copilot
+code mycopilotworks
    
-   # Option B: Use GitHub Copilot in the terminal
-   cd mycopilotworks
-   gh copilot
+# Option B: Use GitHub Copilot in the terminal
+cd mycopilotworks
+gh copilot
+```
 
 ### 3. Run your first report
 
