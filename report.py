@@ -1,6 +1,6 @@
 """
 report.py — Daily digest HTML for GitHub Copilot sessions.
-Layout: Header → Narrative → Goals summary → KPI cards → Activity bar → Token bar → Task accordion
+Layout: Header → Narrative → Leverage Banner → KPI cards → Complexity → Skills → Goals summary → Pricing/Activity → Task accordion
 """
 from harvest import compute_elapsed_minutes
 
@@ -60,66 +60,239 @@ def _cost(tokens: dict) -> str:
     return f"~${c:.2f}"
 
 
-HOURLY_RATE = 150  # $/hr for leverage calculation
-# Enterprise Copilot seat: ~$19–39/month. Use $39/month enterprise / 260 working days.
-SEAT_COST_PER_DAY = 39 * 12 / 260  # ≈ $1.80/day
+HOURLY_RATE = 72  # $/hr — blended professional services rate (conservative)
+SEAT_COST_PER_MONTH = 39  # Enterprise Copilot seat $/month
 
 
 def _kpi_card(value: str, label: str, sub: str = "") -> str:
     return f"""
-    <td style="padding:8px;width:25%;vertical-align:top">
+    <td style="padding:6px;width:25%;vertical-align:top">
       <div style="background:{C['card']};border:1px solid {C['border']};border-radius:10px;
-                  padding:20px 14px;text-align:center;
+                  padding:16px 10px;text-align:center;height:80px;
                   box-shadow:0 1px 4px rgba(0,0,0,0.06)">
-        <div style="font-size:32px;font-weight:700;color:{C['accent']};line-height:1;
-                    letter-spacing:-1px">{value}</div>
-        <div style="font-size:10px;font-weight:700;color:{C['muted']};text-transform:uppercase;
-                    letter-spacing:0.9px;margin-top:8px;line-height:1.3">{label}</div>
-        {f'<div style="font-size:11px;color:{C["muted"]};margin-top:4px;line-height:1.4">{sub}</div>' if sub else ""}
+        <div style="font-size:26px;font-weight:700;color:{C['accent']};line-height:1;
+                    letter-spacing:-0.5px">{value}</div>
+        <div style="font-size:9px;font-weight:700;color:{C['muted']};text-transform:uppercase;
+                    letter-spacing:0.8px;margin-top:6px;line-height:1.3">{label}</div>
+        {f'<div style="font-size:10px;color:{C["muted"]};margin-top:3px;line-height:1.3">{sub}</div>' if sub else ""}
       </div>
     </td>"""
 
 
-def _kpi_section(goals: list, analysis: dict, n_sessions: int) -> str:
+def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 0) -> str:
     total_human_h   = sum(g.get("human_hours", 0) for g in goals)
     n_goals         = len(goals)
     lines_added     = analysis.get("lines_added", 0)
     lines_removed   = analysis.get("lines_removed", 0)
-
-    # Leverage: use actual number of active days so multi-day ranges are fair
-    active_days = max(1, len(analysis.get("active_dates", ["x"])))
-    seat_cost   = SEAT_COST_PER_DAY * active_days
-    human_value = total_human_h * HOURLY_RATE
-    leverage    = round(human_value / seat_cost) if seat_cost > 0 else "—"
+    active_days     = max(1, len(analysis.get("active_dates", ["x"])))
 
     h_str = _fmt_h(total_human_h)
+    days_label = f"{active_days}"
 
-    # Code impact card
+    # Code impact
     if lines_added or lines_removed:
         code_val = f"+{lines_added:,}"
         code_sub = f"{lines_removed:,} removed"
     else:
         code_val = "—"
-        code_sub = "no code changes tracked"
-
-    days_label = f"{active_days} day{'s' if active_days != 1 else ''}"
-    lev_sub = (f"${human_value:,.0f} value / ${seat_cost:.2f} seat ({days_label})"
-               if isinstance(leverage, int) else "")
-
-    session_sub = f"{n_sessions} session{'s' if n_sessions != 1 else ''}"
+        code_sub = ""
 
     return f"""
   <tr>
-    <td style="background:{C['bg']};padding:16px 24px;
+    <td style="background:{C['bg']};padding:12px 24px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <table width="100%" cellpadding="0" cellspacing="0">
         <tr>
-          {_kpi_card(str(n_goals), "Goals<br>Assisted", session_sub)}
-          {_kpi_card(h_str, "Human Effort<br>Equivalent", f"{total_human_h:.0f}h × ${HOURLY_RATE}/hr")}
+          {_kpi_card(str(n_goals), "Projects<br>Assisted", f"{n_sessions} sessions")}
+          {_kpi_card(h_str, "Human Effort<br>Equivalent", f"@ ${HOURLY_RATE}/hr")}
           {_kpi_card(code_val, "Lines of Code<br>Added", code_sub)}
-          {_kpi_card(f"{leverage}×", "Human<br>Leverage", lev_sub)}
+          {_kpi_card(days_label, "Active Days", "")}
         </tr>
       </table>
+    </td>
+  </tr>"""
+
+
+def _leverage_banner(goals: list, analysis: dict) -> str:
+    """Hero-style ROI banner: services equivalent, seat cost, API savings."""
+    total_human_h = sum(g.get("human_hours", 0) for g in goals)
+    human_value   = total_human_h * HOURLY_RATE
+    leverage      = round(human_value / SEAT_COST_PER_MONTH) if SEAT_COST_PER_MONTH > 0 else 0
+
+    # Market API cost
+    tokens = analysis.get("tokens", {})
+    market_cost = (tokens.get("input", 0) * 3.00
+                 + tokens.get("output", 0) * 15.00
+                 + tokens.get("cache_read", 0) * 0.30
+                 + tokens.get("cache_creation", 0) * 3.75) / 1_000_000
+    api_savings = market_cost - SEAT_COST_PER_MONTH
+
+    if leverage <= 0:
+        return ""
+
+    return f"""
+  <tr>
+    <td style="padding:0;border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="background:linear-gradient(135deg,{C['green']},#15803d);border-collapse:collapse">
+        <tr>
+          <td style="padding:18px 24px 6px;text-align:center">
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;
+                        color:rgba(255,255,255,0.65);margin-bottom:6px">Return on Copilot Investment</div>
+            <div style="font-size:44px;font-weight:800;color:#ffffff;line-height:1;
+                        letter-spacing:-2px">{leverage:,}&times;</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:4px 24px 14px">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="width:33%;text-align:center;padding:8px 8px;
+                           border-right:1px solid rgba(255,255,255,0.2)">
+                  <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+                              letter-spacing:0.8px;color:rgba(255,255,255,0.55)">Professional Services<br>Equivalent</div>
+                  <div style="font-size:18px;font-weight:700;color:#fff;margin-top:4px">
+                    ${human_value:,.0f}</div>
+                  <div style="font-size:11px;color:rgba(255,255,255,0.7);margin-top:2px">
+                    {total_human_h:.0f}h @ ${HOURLY_RATE}/hr</div>
+                </td>
+                <td style="width:33%;text-align:center;padding:8px 8px;
+                           border-right:1px solid rgba(255,255,255,0.2)">
+                  <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+                              letter-spacing:0.8px;color:rgba(255,255,255,0.55)">Copilot Seat<br>Cost</div>
+                  <div style="font-size:18px;font-weight:700;color:#fff;margin-top:4px">
+                    ${SEAT_COST_PER_MONTH}/mo</div>
+                  <div style="font-size:11px;color:rgba(255,255,255,0.7);margin-top:2px">
+                    Enterprise plan</div>
+                </td>
+                <td style="width:33%;text-align:center;padding:8px 8px">
+                  <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+                              letter-spacing:0.8px;color:rgba(255,255,255,0.55)">API Token<br>Savings</div>
+                  <div style="font-size:18px;font-weight:700;color:#fff;margin-top:4px">
+                    ${api_savings:,.0f}</div>
+                  <div style="font-size:11px;color:rgba(255,255,255,0.7);margin-top:2px">
+                    vs. ${market_cost:,.0f} at market rate</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>"""
+
+
+
+def _complexity_breakdown(goals: list) -> str:
+    """Horizontal stacked bar showing hours by task_type."""
+    type_colors = {
+        "Development":        C["accent"],
+        "Bug Fix & Debug":    C["orange"],
+        "Analysis & Research": C["green"],
+        "Design & UX":        "#7b1fa2",
+        "Execution & Ops":    C["muted"],
+    }
+
+    # Aggregate hours by task_type
+    hours_by_type: dict = {}
+    for g in goals:
+        for t in g.get("tasks", []):
+            tt = t.get("task_type", "")
+            if tt:
+                hours_by_type[tt] = hours_by_type.get(tt, 0) + t.get("human_hours", 0)
+
+    if not hours_by_type:
+        return ""
+
+    total_h = sum(hours_by_type.values()) or 1
+
+    # Build stacked bar segments (table cells)
+    bar_cells = ""
+    for tt in type_colors:
+        h = hours_by_type.get(tt, 0)
+        if h <= 0:
+            continue
+        pct = h / total_h * 100
+        color = type_colors.get(tt, C["muted"])
+        bar_cells += (
+            f'<td style="width:{pct:.1f}%;background:{color};height:18px;'
+            f'font-size:0;line-height:0;padding:0"></td>'
+        )
+
+    # Build legend rows
+    legend_items = ""
+    for tt in type_colors:
+        h = hours_by_type.get(tt, 0)
+        if h <= 0:
+            continue
+        pct = h / total_h * 100
+        color = type_colors.get(tt, C["muted"])
+        legend_items += (
+            f'<td style="padding:4px 16px 4px 0;vertical-align:middle;white-space:nowrap">'
+            f'<span style="display:inline-block;width:10px;height:10px;background:{color};'
+            f'border-radius:2px;margin-right:6px;vertical-align:middle"></span>'
+            f'<span style="font-size:12px;font-weight:600;color:{C["text"]};'
+            f'vertical-align:middle">{tt}</span>'
+            f'<span style="font-size:11px;color:{C["muted"]};margin-left:6px;'
+            f'vertical-align:middle">{_fmt_h(h)} ({pct:.0f}%)</span>'
+            f'</td>'
+        )
+
+    return f"""
+  <tr>
+    <td style="background:{C['card']};padding:16px 24px 18px;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                  color:{C['muted']};margin-bottom:10px">Work Complexity Breakdown</div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-radius:9px;overflow:hidden;border:1px solid {C['border']}">
+        <tr>{bar_cells}</tr>
+      </table>
+      <table cellpadding="0" cellspacing="0" style="margin-top:10px">
+        <tr>{legend_items}</tr>
+      </table>
+    </td>
+  </tr>"""
+
+
+def _skills_mobilized(goals: list) -> str:
+    """Prominent pills showing professional roles (or fallback to domain+tech skills)."""
+    roles: set = set()
+    for g in goals:
+        for t in g.get("tasks", []):
+            for r in t.get("professional_roles", []):
+                roles.add(r)
+
+    # Fallback: aggregate domain_skills + tech_skills if no professional_roles
+    if not roles:
+        for g in goals:
+            for t in g.get("tasks", []):
+                for s in t.get("domain_skills", []):
+                    roles.add(s)
+                for s in t.get("tech_skills", []):
+                    roles.add(s)
+
+    if not roles:
+        return ""
+
+    pill_style = (
+        f"display:inline-block;padding:5px 14px;border-radius:16px;"
+        f"font-size:12px;font-weight:600;margin:3px 4px 3px 0;"
+        f"background:{C['accent_lt']};color:{C['accent']};white-space:nowrap;"
+        f"border:1px solid rgba(0,120,212,0.15)"
+    )
+
+    pills = "".join(f'<span style="{pill_style}">{r}</span>' for r in sorted(roles))
+
+    return f"""
+  <tr>
+    <td style="background:{C['card']};padding:14px 24px 18px;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                  color:{C['muted']};margin-bottom:4px">Skills Mobilized</div>
+      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
+        Professional roles Copilot substituted for</div>
+      <div>{pills}</div>
     </td>
   </tr>"""
 
@@ -184,9 +357,8 @@ def _activity_bar(analysis: dict) -> str:
     # Market rate: what Anthropic would charge at published API prices
     market_cost = (in_tok * 3.00 + out_tok * 15.00 + cr_tok * 0.30 + cc_tok * 3.75) / 1_000_000
 
-    # Fixed rate: Copilot seat cost for the active days
-    active_days = max(1, len(analysis.get("active_dates", ["x"])))
-    seat_cost   = SEAT_COST_PER_DAY * active_days
+    # Fixed rate: Copilot seat cost (monthly)
+    seat_cost   = SEAT_COST_PER_MONTH
     savings     = market_cost - seat_cost
     savings_x   = round(market_cost / seat_cost) if seat_cost > 0 else 0
 
@@ -209,6 +381,7 @@ def _activity_bar(analysis: dict) -> str:
             + "&nbsp;".join(parts)
         )
 
+    active_days = max(1, len(analysis.get("active_dates", ["x"])))
     days_label = f"{active_days} day{'s' if active_days != 1 else ''}"
 
     # Pricing comparison — 3-card layout
@@ -234,8 +407,8 @@ def _activity_bar(analysis: dict) -> str:
                         padding:14px 16px;text-align:center">
               <div style="font-size:10px;font-weight:700;text-transform:uppercase;
                           letter-spacing:0.8px;color:{C['green']};margin-bottom:6px">Copilot Fixed Seat</div>
-              <div style="font-size:26px;font-weight:700;color:{C['green']};letter-spacing:-0.5px">~${seat_cost:.2f}</div>
-              <div style="font-size:11px;color:{C['green']};margin-top:4px">{days_label} · ${SEAT_COST_PER_DAY:.2f}/day</div>
+              <div style="font-size:26px;font-weight:700;color:{C['green']};letter-spacing:-0.5px">${SEAT_COST_PER_MONTH}/mo</div>
+              <div style="font-size:11px;color:{C['green']};margin-top:4px">Enterprise plan · fixed price</div>
             </div>
           </td>
           <td style="width:33%;padding:0 0 12px 6px">
@@ -321,9 +494,12 @@ def _doc_refs_html(docs: list) -> str:
     return '<span style="margin-right:8px">' + '</span><span style="margin-right:8px">'.join(parts) + '</span>'
 
 
-def _goals_summary(goals: list) -> str:
+def _goals_summary(goals: list, session_lookup: dict = None) -> str:
+    if session_lookup is None:
+        session_lookup = {}
     rows = ""
     for i, g in enumerate(goals):
+        gid         = f"goal-{i}"
         n           = len(g.get("tasks", []))
         h           = _fmt_h(g.get("human_hours", 0))
         bg          = C["subtle"] if i % 2 == 0 else C["card"]
@@ -333,31 +509,56 @@ def _goals_summary(goals: list) -> str:
         docs        = g.get("docs_referenced", [])
         doc_html    = _doc_refs_html(docs)
         date_badge  = _date_badge(g.get("date", ""))
+        tasks       = g.get("tasks", [])
 
         rows += f"""
-        <tr style="background:{bg}">
-          <td style="padding:12px 16px;border-bottom:1px solid {C['border']};
-                     vertical-align:top;width:5%">
+        <tr id="{gid}-hdr" style="background:{bg};cursor:pointer"
+            onclick="toggleDetail('{gid}')">
+          <td style="padding:10px 10px;border-bottom:1px solid {C['border']};
+                     vertical-align:top;width:4%">
             <div style="width:22px;height:22px;background:{C['accent']};border-radius:50%;
                         color:#fff;font-size:11px;font-weight:700;text-align:center;
                         line-height:22px">{i+1}</div>
           </td>
-          <td style="padding:12px 16px;border-bottom:1px solid {C['border']};
-                     vertical-align:top;width:53%">
-            <div style="font-size:13px;font-weight:600;color:{C['text']};line-height:1.35">
+          <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
+                     vertical-align:top;width:42%">
+            <div style="font-size:12px;font-weight:600;color:{C['text']};line-height:1.35">
+              <span id="{gid}-arrow" style="font-size:10px;color:{C['accent']};
+                                            margin-right:5px">&#9654;</span>
               {date_badge}{g.get('title', '')}
             </div>
             {f'<div style="margin-top:5px">{doc_html}</div>' if doc_html else ''}
           </td>
-          <td style="padding:12px 16px;border-bottom:1px solid {C['border']};
-                     vertical-align:middle;width:28%">
+          <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
+                     vertical-align:middle;width:40%">
             <div>{skill_pills}</div>
             <div style="font-size:10px;color:{C['muted']};margin-top:5px">{task_sub}</div>
           </td>
-          <td style="padding:12px 16px;border-bottom:1px solid {C['border']};
+          <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
                      vertical-align:middle;text-align:right;width:14%">
             <div style="font-size:16px;font-weight:700;color:{C['accent']}">{h}</div>
             <div style="font-size:10px;color:{C['muted']};margin-top:1px">human est.</div>
+          </td>
+        </tr>
+        <tr id="{gid}-tasks" style="display:none">
+          <td colspan="4" style="padding:0 8px 12px;background:{C['bg']}">
+            {_goal_context_bar(g, session_lookup)}
+            <table width="100%" cellpadding="0" cellspacing="0"
+                   style="border:1px solid {C['border']};border-radius:6px;overflow:hidden">
+              <tr style="background:{C['accent_lt']}">
+                <td style="width:3px;padding:0"></td>
+                <th style="padding:6px 12px;text-align:left;font-size:10px;font-weight:700;
+                           color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                           border-bottom:1px solid {C['border']};width:35%">Task &amp; Skills</th>
+                <th style="padding:6px 12px;text-align:left;font-size:10px;font-weight:700;
+                           color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                           border-bottom:1px solid {C['border']};width:52%">What Got Done</th>
+                <th style="padding:6px 12px;text-align:center;font-size:10px;font-weight:700;
+                           color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                           border-bottom:1px solid {C['border']};width:13%">Time</th>
+              </tr>
+              {_task_rows(tasks)}
+            </table>
           </td>
         </tr>"""
     return rows
@@ -514,7 +715,7 @@ def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
           <td style="padding:10px 16px;border-top:2px solid {C['border']}"></td>
           <td style="padding:10px 16px;border-top:2px solid {C['border']};
                      font-size:12px;font-weight:700;color:{C['accent']}">
-            {len(goals)} goal{'s' if len(goals) != 1 else ''} &nbsp;·&nbsp; {total_tasks} tasks total
+            {len(goals)} project{'s' if len(goals) != 1 else ''} &nbsp;·&nbsp; {total_tasks} tasks total
           </td>
           <td style="padding:10px 16px;border-top:2px solid {C['border']}"></td>
           <td style="padding:10px 16px;border-top:2px solid {C['border']};
@@ -564,14 +765,13 @@ window.onload = function() {
 
   <!-- HEADER -->
   <tr>
-    <td style="background:{C['accent']};border-radius:9px 9px 0 0;padding:22px 24px">
+    <td style="background:linear-gradient(135deg,#24292f,#1b1f23);border-radius:9px 9px 0 0;padding:22px 24px">
       <div style="font-size:10px;color:rgba(255,255,255,0.6);letter-spacing:1.2px;
                   text-transform:uppercase;margin-bottom:4px">
-        {target_date} &nbsp;·&nbsp; GitHub Copilot Daily Digest
+        {target_date} &nbsp;·&nbsp; GitHub Copilot Impact Report
       </div>
-      <div style="font-size:20px;font-weight:700;color:#fff;line-height:1.3">{headline}</div>
-      {f'<div style="margin-top:6px;font-size:12px;color:rgba(255,255,255,0.8)">Focus: <strong>{focus}</strong></div>' if focus else ''}
-      {f'<div style="margin-top:8px">{project_pills}</div>' if projects else ''}
+      <div style="font-size:20px;font-weight:700;color:#fff;line-height:1.3"><svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" style="vertical-align:middle;margin-right:10px"><path fill="white" d="M23.922 16.992c-.861 1.495-5.859 5.023-11.922 5.023-6.063 0-11.061-3.528-11.922-5.023A.641.641 0 0 1 0 16.736v-2.869a.841.841 0 0 1 .053-.22c.372-.935 1.347-2.292 2.605-2.656.167-.429.414-1.055.644-1.517a10.195 10.195 0 0 1-.052-1.086c0-1.331.282-2.499 1.132-3.368.397-.406.89-.717 1.474-.952 1.399-1.136 3.392-2.093 6.122-2.093 2.731 0 4.767.957 6.166 2.093.584.235 1.077.546 1.474.952.85.869 1.132 2.037 1.132 3.368 0 .368-.014.733-.052 1.086.23.462.477 1.088.644 1.517 1.258.364 2.233 1.721 2.605 2.656a.832.832 0 0 1 .053.22v2.869a.641.641 0 0 1-.078.256ZM12.172 11h-.344a4.323 4.323 0 0 1-.355.508C10.703 12.455 9.555 13 7.965 13c-1.725 0-2.989-.359-3.782-1.259a2.005 2.005 0 0 1-.085-.104L4 11.741v6.585c1.435.779 4.514 2.179 8 2.179 3.486 0 6.565-1.4 8-2.179v-6.585l-.098-.104s-.033.045-.085.104c-.793.9-2.057 1.259-3.782 1.259-1.59 0-2.738-.545-3.508-1.492a4.323 4.323 0 0 1-.355-.508h-.016.016Zm.641-2.935c.136 1.057.403 1.913.878 2.497.442.544 1.134.938 2.344.938 1.573 0 2.292-.337 2.657-.751.384-.435.558-1.15.558-2.361 0-1.14-.243-1.847-.705-2.319-.477-.488-1.319-.862-2.824-1.025-1.487-.161-2.192.138-2.533.529-.269.307-.437.808-.438 1.578v.021c0 .265.021.562.063.893Zm-1.626 0c.042-.331.063-.628.063-.894v-.02c-.001-.77-.169-1.271-.438-1.578-.341-.391-1.046-.69-2.533-.529-1.505.163-2.347.537-2.824 1.025-.462.472-.705 1.179-.705 2.319 0 1.211.175 1.926.558 2.361.365.414 1.084.751 2.657.751 1.21 0 1.902-.394 2.344-.938.475-.584.742-1.44.878-2.497Z"/><path fill="white" d="M14.5 14.25a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-1Zm-5 0a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-1Z"/></svg>{headline}</div>
+      {f'<div style="margin-top:8px"><span style="font-size:9px;font-weight:700;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:1px;margin-right:8px">Projects</span>{project_pills}</div>' if projects else ''}
     </td>
   </tr>
 
@@ -583,7 +783,13 @@ window.onload = function() {
     </td>
   </tr>
 
-  {_kpi_section(goals, analysis, n_sessions)}
+  {_leverage_banner(goals, analysis)}
+
+  {_kpi_section(goals, analysis, n_sessions, sum(s.get("git_ops", []).count("pr") for s in sessions))}
+
+  {_complexity_breakdown(goals)}
+
+  {_skills_mobilized(goals)}
 
   <!-- GOALS SUMMARY TABLE -->
   <tr>
@@ -593,33 +799,98 @@ window.onload = function() {
                   color:{C['muted']};padding:0 0 8px 0">What got accomplished</div>
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
-        {_goals_summary(goals)}
+        {_goals_summary(goals, session_lookup)}
         {totals_row}
       </table>
       <div id="expand-hint" style="display:none;font-size:11px;color:{C['muted']};
                                     text-align:right;margin-top:6px">
-        Click any row to expand task breakdown
+        Click a project to see task details &#9656;
       </div>
     </td>
   </tr>
 
   {_activity_bar(analysis)}
 
-  <!-- TASK DETAIL ACCORDION -->
+  <!-- METHODOLOGY -->
   <tr>
-    <td style="background:{C['bg']};padding:16px 24px 4px;
+    <td style="background:{C['card']};padding:16px 24px 18px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']}">Task breakdown</div>
-    </td>
-  </tr>
-
-  <tr>
-    <td style="padding:0;background:{C['bg']};
-               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <table width="100%" cellpadding="0" cellspacing="0">
-        {_goal_detail_headers(goals, session_lookup)}
+                  color:{C['muted']};margin-bottom:10px">How estimates are calculated</div>
+      <div style="font-size:11px;color:{C['muted']};line-height:1.65">
+        Human effort estimates reflect what a professional would need to complete the same work
+        without AI assistance, using a conservative blended rate of <strong style="color:{C['text']}">${HOURLY_RATE}/hr</strong>.
+        Each task is calibrated against a standardised scale:
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;margin-bottom:6px">
+        <tr style="background:{C['subtle']}">
+          <td style="padding:5px 10px;font-size:10px;font-weight:700;color:{C['accent']};
+                     border-bottom:1px solid {C['border']};width:20%">Category</td>
+          <td style="padding:5px 10px;font-size:10px;font-weight:700;color:{C['accent']};
+                     border-bottom:1px solid {C['border']};width:50%">Examples</td>
+          <td style="padding:5px 10px;font-size:10px;font-weight:700;color:{C['accent']};
+                     border-bottom:1px solid {C['border']};width:15%;text-align:center">Estimate</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
+            <strong>Execution</strong></td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
+            Install package, run CLI command, push to repo, deploy</td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
+                     text-align:center;font-weight:600">0.25h</td>
+        </tr>
+        <tr style="background:{C['subtle']}">
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
+            <strong>Simple edit</strong></td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
+            Config change, format/style tweak, rename, run existing script</td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
+                     text-align:center;font-weight:600">0.5h</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
+            <strong>Research</strong></td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
+            Investigate a technology, competitive analysis, find best approach</td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
+                     text-align:center;font-weight:600">0.5–1h</td>
+        </tr>
+        <tr style="background:{C['subtle']}">
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
+            <strong>Analysis</strong></td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
+            Data analysis, metric compilation, impact assessment, report drafting</td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
+                     text-align:center;font-weight:600">1–2h</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
+            <strong>Development</strong></td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
+            Implement feature, write function, fix unknown bug, build template</td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
+                     text-align:center;font-weight:600">1–2h</td>
+        </tr>
+        <tr style="background:{C['subtle']}">
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
+            <strong>Design &amp; UX</strong></td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
+            Report layout, visual design, information architecture, presentation design</td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
+                     text-align:center;font-weight:600">1–3h</td>
+        </tr>
+        <tr>
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']}">
+            <strong>Document writing</strong></td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['muted']}">
+            Detailed report, executive brief, comprehensive documentation</td>
+          <td style="padding:4px 10px;font-size:10px;color:{C['text']};text-align:center;font-weight:600">2–4h</td>
+        </tr>
       </table>
+      <div style="font-size:10px;color:{C['muted']};line-height:1.55;margin-top:6px">
+        Estimates are calibrated using session signals (tool invocations, premium requests, code impact)
+        and verified by AI analysis. The intent is conservative — credibility over impressiveness.
+      </div>
     </td>
   </tr>
 
