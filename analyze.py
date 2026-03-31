@@ -13,8 +13,8 @@ from pathlib import Path
 from harvest import compute_active_minutes, compute_elapsed_minutes
 
 # GitHub Models API — OpenAI-compatible endpoint, authenticated with GitHub token
-API_URL = "https://models.inference.ai.azure.com/chat/completions"
-MODEL   = "gpt-4o-mini"
+API_URL = "https://models.github.ai/inference/chat/completions"
+MODEL   = "openai/gpt-4o-mini"
 
 DOMAIN_SKILLS = (
     "System Architecture", "Product Planning", "Requirements Analysis",
