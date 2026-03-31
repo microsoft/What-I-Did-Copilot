@@ -458,6 +458,95 @@ def _deliverables_produced(sessions: list) -> str:
   </tr>"""
 
 
+def _daily_activity_detail(sessions: list) -> str:
+    """Per-day hourly activity bars — 24 columns per day, height = message intensity."""
+    from datetime import datetime as _dt
+    from collections import defaultdict
+
+    # Collect messages per day per hour
+    day_hours: dict = defaultdict(lambda: [0] * 24)
+    for s in sessions:
+        for msg in s.get("messages", []):
+            ts = msg.get("timestamp", "")
+            if not ts:
+                continue
+            try:
+                dt = _dt.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
+                day_key = dt.strftime("%Y-%m-%d")
+                day_hours[day_key][dt.hour] += 1
+            except (ValueError, TypeError):
+                pass
+
+    if not day_hours:
+        return ""
+
+    # Find global max for consistent scaling
+    global_max = max(max(hours) for hours in day_hours.values()) or 1
+
+    rows = ""
+    for day in sorted(day_hours.keys()):
+        hours = day_hours[day]
+        total_msgs = sum(hours)
+        peak_hour = hours.index(max(hours))
+
+        # Date label
+        try:
+            d = _dt.strptime(day, "%Y-%m-%d")
+            day_label = d.strftime("%b %d")
+            weekday = d.strftime("%a")
+        except ValueError:
+            day_label = day[5:]
+            weekday = ""
+
+        # Build 24 hour columns
+        bar_cells = ""
+        for h in range(24):
+            count = hours[h]
+            bar_h = int(count / global_max * 32) if count else 0
+            is_peak = h == peak_hour and count > 0
+            color = C["accent"] if not is_peak else C["green"]
+            bar_cells += (
+                f'<td style="padding:0 0 0 1px;vertical-align:bottom;width:{100/24:.1f}%">'
+                f'<div style="background:{color};border-radius:2px 2px 0 0;'
+                f'height:{bar_h}px;min-height:{1 if count else 0}px"></div>'
+                f'</td>'
+            )
+
+        # Hour labels (show every 6 hours)
+        hour_labels = ""
+        for h in range(24):
+            label = ""
+            if h % 6 == 0:
+                label = f"{h}:00"
+            hour_labels += (
+                f'<td style="padding:0;font-size:8px;color:{C["muted"]};'
+                f'text-align:center;vertical-align:top">{label}</td>'
+            )
+
+        rows += f"""
+          <div style="margin-bottom:12px">
+            <div style="display:inline-block;width:70px;vertical-align:top;padding-top:12px">
+              <div style="font-size:11px;font-weight:700;color:{C['text']}">{day_label}</div>
+              <div style="font-size:9px;color:{C['muted']}">{weekday} &middot; {total_msgs} msgs</div>
+            </div>
+            <div style="display:inline-block;width:calc(100% - 80px);vertical-align:top">
+              <table width="100%" cellpadding="0" cellspacing="0" style="height:34px">
+                <tr>{bar_cells}</tr>
+              </table>
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>{hour_labels}</tr>
+              </table>
+            </div>
+          </div>"""
+
+    return f"""
+        <div style="font-size:9px;color:{C['muted']};margin-bottom:8px">
+          Each bar = messages per hour. <span style="color:{C['green']}">&#9632;</span> = peak hour.
+          Taller bars indicate more intensive Copilot interaction.
+        </div>
+        {rows}"""
+
+
 def _work_pattern(sessions: list) -> str:
     """Horizontal bar chart of message counts by time-of-day bucket."""
     from datetime import datetime as _dt
@@ -541,6 +630,16 @@ def _work_pattern(sessions: list) -> str:
       <table width="100%" cellpadding="0" cellspacing="0">
         {rows}
       </table>
+      <div id="daily-detail-hdr" style="cursor:pointer;padding:8px 0 0;margin-top:8px;
+                                         border-top:1px solid {C['border']}"
+           onclick="toggleDetail('daily-detail')">
+        <span id="daily-detail-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
+        <span style="font-size:10px;font-weight:700;color:{C['muted']};text-transform:uppercase;
+                     letter-spacing:0.8px">Daily breakdown &mdash; click to expand</span>
+      </div>
+      <div id="daily-detail-tasks" style="display:none;margin-top:8px">
+        {_daily_activity_detail(sessions)}
+      </div>
     </td>
   </tr>"""
 
