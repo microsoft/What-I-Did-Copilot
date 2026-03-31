@@ -171,10 +171,35 @@ def main():
         report_label = target
 
     from harvest import get_sessions_for_date
-    from analyze import analyze_day
+    from analyze import analyze_day, check_api_health
 
     print(f"\nwhatididghcp -- {report_label}")
     print("-" * 40)
+
+    # Pre-flight: check if AI analysis API is reachable
+    import time
+    MAX_RETRIES = 3
+    RETRY_WAIT  = 180  # 3 minutes
+    api_ok = False
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"  Checking AI analysis API... ", end="", flush=True)
+        ok, msg = check_api_health()
+        if ok:
+            print("✓ connected.")
+            api_ok = True
+            break
+        print(f"✗ {msg}")
+        if attempt < MAX_RETRIES:
+            print(f"\n  API is unreachable. Retry {attempt}/{MAX_RETRIES} in {RETRY_WAIT // 60} minutes...")
+            print(f"  (Press Ctrl+C to skip and use heuristic fallback)\n")
+            try:
+                time.sleep(RETRY_WAIT)
+            except KeyboardInterrupt:
+                print("\n  Skipped. Proceeding with heuristic fallback.")
+                break
+        else:
+            print(f"\n  ⚠ API unreachable after {MAX_RETRIES} attempts.")
+            print(f"  Proceeding with heuristic fallback — estimates will be approximate.\n")
 
     day_analyses = []
     all_sessions = []

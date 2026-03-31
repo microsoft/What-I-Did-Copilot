@@ -48,6 +48,38 @@ def _get_github_token() -> str:
     return ""
 
 
+def check_api_health() -> tuple:
+    """Quick connectivity check to the GitHub Models API.
+
+    Returns (ok: bool, message: str).
+    """
+    token = _get_github_token()
+    if not token:
+        return False, "No GitHub token found. Run `gh auth login`."
+
+    # Minimal request — cheap and fast
+    payload = json.dumps({
+        "model": MODEL, "max_tokens": 5, "temperature": 0,
+        "messages": [{"role": "user", "content": "ping"}],
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        API_URL, data=payload,
+        headers={"Authorization": f"Bearer {token}", "content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15):
+            return True, "API reachable."
+    except urllib.error.HTTPError as e:
+        return False, f"API returned HTTP {e.code}."
+    except urllib.error.URLError as e:
+        reason = getattr(e, 'reason', e)
+        return False, f"API unreachable ({reason})."
+    except Exception as e:
+        return False, f"API check failed ({e})."
+
+
 def _build_transcript(sessions: list) -> str:
     lines = []
     for s in sessions:
