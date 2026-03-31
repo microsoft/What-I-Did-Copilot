@@ -160,9 +160,23 @@ def get_sessions_for_date(target_date: str) -> list:
             elif etype == "tool.execution_complete":
                 tool_name = e.get("data", {}).get("toolName", "")
                 if "pull_request" in tool_name.lower() or "pr" in tool_name.lower():
-                    # Track PR-related tool calls
                     if e.get("data", {}).get("success", False):
                         git_ops_list.append("pr")
+
+        # Detect PRs and commits from user messages and tool summaries
+        _pr_keywords = {"create the pr", "create a pr", "create pr", "gh pr create",
+                        "pull request", "open a pr", "open pr", "submit pr"}
+        _commit_keywords = {"commit", "git commit", "push to remote", "push to origin",
+                            "push it", "commit and push"}
+        for m in messages:
+            txt = m["text"].lower().strip()
+            tools_text = " ".join(m.get("tools_after", [])).lower()
+            if any(k in txt for k in _pr_keywords) or "create pr" in tools_text:
+                if "pr" not in git_ops_list[-1:]:  # Avoid consecutive dupes
+                    git_ops_list.append("pr")
+            if any(k in txt for k in _commit_keywords) or "commit" in tools_text:
+                if "commit" not in git_ops_list[-1:]:
+                    git_ops_list.append("commit")
 
         # Pull shutdown metrics (tokens, code changes, premium requests)
         tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}

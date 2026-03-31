@@ -83,7 +83,7 @@ def _prorated_seat_cost(analysis: dict) -> "tuple[int, int]":
 
 def _kpi_card(value: str, label: str, sub: str = "") -> str:
     return f"""
-    <td style="padding:6px;width:25%;vertical-align:top">
+    <td style="padding:6px;width:20%;vertical-align:top">
       <div style="background:{C['card']};border:1px solid {C['border']};border-radius:10px;
                   padding:16px 10px;text-align:center;height:80px;
                   box-shadow:0 1px 4px rgba(0,0,0,0.06)">
@@ -96,7 +96,7 @@ def _kpi_card(value: str, label: str, sub: str = "") -> str:
     </td>"""
 
 
-def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 0) -> str:
+def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 0, total_commits: int = 0) -> str:
     total_human_h   = sum(g.get("human_hours", 0) for g in goals)
     n_goals         = len(goals)
     lines_added     = analysis.get("lines_added", 0)
@@ -114,6 +114,10 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
         code_val = "—"
         code_sub = ""
 
+    # PRs & Commits
+    pr_commit_val = f"{total_prs}"
+    pr_commit_sub = f"{total_commits} commit{'s' if total_commits != 1 else ''}"
+
     return f"""
   <tr>
     <td style="background:{C['bg']};padding:12px 24px;
@@ -123,6 +127,7 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
           {_kpi_card(str(n_goals), "Projects<br>Assisted", f"{n_sessions} sessions")}
           {_kpi_card(h_str, "Human Effort<br>Equivalent", f"@ ${HOURLY_RATE}/hr")}
           {_kpi_card(code_val, "Lines of Code<br>Added", code_sub)}
+          {_kpi_card(pr_commit_val, "PRs<br>Merged", pr_commit_sub)}
           {_kpi_card(days_label, "Active Days", "")}
         </tr>
       </table>
@@ -271,6 +276,245 @@ def _complexity_breakdown(goals: list) -> str:
       </table>
       <table cellpadding="0" cellspacing="0" style="margin-top:10px">
         <tr>{legend_items}</tr>
+      </table>
+    </td>
+  </tr>"""
+
+
+def _intent_breakdown(goals: list) -> str:
+    """Horizontal stacked bar showing Research vs Build vs Debug hours."""
+    import re
+
+    research_kw = re.compile(
+        r"\b(what|why|how|explain|investigate|find|understand|evaluate|compare|assess|look\s*up)\b",
+        re.IGNORECASE,
+    )
+    build_kw = re.compile(
+        r"\b(build|create|implement|write|add|design|generate|ship|develop|code|make)\b",
+        re.IGNORECASE,
+    )
+    debug_kw = re.compile(
+        r"\b(fix|debug|error|bug|broken|wrong|doesn't work|still|why doesn't|what's wrong)\b",
+        re.IGNORECASE,
+    )
+
+    buckets = {"Research": 0.0, "Build": 0.0, "Debug": 0.0}
+    for g in goals:
+        for t in g.get("tasks", []):
+            h = t.get("human_hours", 0)
+            tt = t.get("task_type", "")
+            text = f"{t.get('title', '')} {t.get('what_got_done', '')}"
+
+            if "Research" in tt or research_kw.search(text):
+                buckets["Research"] += h
+            elif "Bug Fix" in tt or debug_kw.search(text):
+                buckets["Debug"] += h
+            elif "Development" in tt or "Design" in tt or build_kw.search(text):
+                buckets["Build"] += h
+            else:
+                buckets["Build"] += h  # default to Build
+
+    total_h = sum(buckets.values())
+    if total_h <= 0:
+        return ""
+
+    intent_colors = {
+        "Research": "#7b1fa2",
+        "Build":    C["accent"],
+        "Debug":    C["orange"],
+    }
+
+    bar_cells = ""
+    for label in ("Research", "Build", "Debug"):
+        h = buckets[label]
+        if h <= 0:
+            continue
+        pct = h / total_h * 100
+        color = intent_colors[label]
+        bar_cells += (
+            f'<td style="width:{pct:.1f}%;background:{color};height:18px;'
+            f'font-size:0;line-height:0;padding:0"></td>'
+        )
+
+    legend_items = ""
+    for label in ("Research", "Build", "Debug"):
+        h = buckets[label]
+        if h <= 0:
+            continue
+        pct = h / total_h * 100
+        color = intent_colors[label]
+        legend_items += (
+            f'<td style="padding:4px 16px 4px 0;vertical-align:middle;white-space:nowrap">'
+            f'<span style="display:inline-block;width:10px;height:10px;background:{color};'
+            f'border-radius:2px;margin-right:6px;vertical-align:middle"></span>'
+            f'<span style="font-size:12px;font-weight:600;color:{C["text"]};'
+            f'vertical-align:middle">{label}</span>'
+            f'<span style="font-size:11px;color:{C["muted"]};margin-left:6px;'
+            f'vertical-align:middle">{_fmt_h(h)} ({pct:.0f}%)</span>'
+            f'</td>'
+        )
+
+    return f"""
+  <tr>
+    <td style="background:{C['card']};padding:16px 24px 18px;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                  color:{C['muted']};margin-bottom:2px">Research &middot; Build &middot; Debug</div>
+      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
+        How Copilot time was distributed across work types</div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-radius:9px;overflow:hidden;border:1px solid {C['border']}">
+        <tr>{bar_cells}</tr>
+      </table>
+      <table cellpadding="0" cellspacing="0" style="margin-top:10px">
+        <tr>{legend_items}</tr>
+      </table>
+    </td>
+  </tr>"""
+
+
+def _deliverables_produced(sessions: list) -> str:
+    """Count tangible deliverables across all sessions."""
+    import re
+
+    categories = {
+        "Reports":        {"icon": "&#128202;", "pattern": re.compile(r"\b(report|generate report|frontier firm report)\b", re.I)},
+        "Presentations":  {"icon": "&#128209;", "pattern": re.compile(r"\b(deck|presentation|exec deck|slides)\b", re.I)},
+        "Repositories":   {"icon": "&#128230;", "pattern": re.compile(r"\b(repo|github|checkin|git init)\b", re.I)},
+        "Documents":      {"icon": "&#128196;", "pattern": re.compile(r"create.*\.(md|py|html|json|yaml|txt)\b", re.I)},
+        "Configurations": {"icon": "&#9881;",   "pattern": re.compile(r"\b(config|gitignore|setup|install)\b", re.I)},
+    }
+
+    counts: dict = {k: set() for k in categories}
+
+    for s in sessions:
+        for msg in s.get("messages", []):
+            if msg.get("role") != "user":
+                continue
+            text = msg.get("text", "")
+            for cat, info in categories.items():
+                for m in info["pattern"].finditer(text):
+                    counts[cat].add(m.group().lower())
+            for summary in msg.get("tools_after", []):
+                for cat, info in categories.items():
+                    for m in info["pattern"].finditer(summary):
+                        counts[cat].add(m.group().lower())
+
+    final_counts = {k: max(1, len(v)) if v else 0 for k, v in counts.items()}
+
+    if sum(final_counts.values()) == 0:
+        return ""
+
+    cells = ""
+    for cat, info in categories.items():
+        c = final_counts[cat]
+        if c <= 0:
+            continue
+        cells += (
+            f'<td style="padding:8px 12px;text-align:center;vertical-align:top">'
+            f'<div style="font-size:24px;font-weight:700;color:{C["accent"]};line-height:1">{c}</div>'
+            f'<div style="font-size:10px;font-weight:600;color:{C["muted"]};margin-top:4px;'
+            f'text-transform:uppercase;letter-spacing:0.5px">{info["icon"]} {cat}</div>'
+            f'</td>'
+        )
+
+    return f"""
+  <tr>
+    <td style="background:{C['card']};padding:16px 24px 18px;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                  color:{C['muted']};margin-bottom:2px">Deliverables Produced</div>
+      <div style="font-size:11px;color:{C['muted']};margin-bottom:12px">
+        Tangible outputs created with Copilot assistance</div>
+      <table cellpadding="0" cellspacing="0">
+        <tr>{cells}</tr>
+      </table>
+    </td>
+  </tr>"""
+
+
+def _work_pattern(sessions: list) -> str:
+    """Horizontal bar chart of message counts by time-of-day bucket."""
+    from datetime import datetime as _dt
+
+    buckets = {
+        "Early Morning (5–9am)":  0,
+        "Morning (9am–12pm)":     0,
+        "Afternoon (12–5pm)":     0,
+        "Evening (5–9pm)":        0,
+        "Night (9pm–5am)":        0,
+    }
+
+    def _bucket_for_hour(h: int) -> str:
+        if 5 <= h < 9:   return "Early Morning (5–9am)"
+        if 9 <= h < 12:  return "Morning (9am–12pm)"
+        if 12 <= h < 17: return "Afternoon (12–5pm)"
+        if 17 <= h < 21: return "Evening (5–9pm)"
+        return "Night (9pm–5am)"
+
+    for s in sessions:
+        for msg in s.get("messages", []):
+            ts = msg.get("timestamp", "")
+            if not ts:
+                continue
+            try:
+                dt = _dt.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
+                buckets[_bucket_for_hour(dt.hour)] += 1
+            except (ValueError, TypeError):
+                pass
+
+    total = sum(buckets.values())
+    if total == 0:
+        return ""
+
+    max_count = max(buckets.values())
+    peak_bucket = max(buckets, key=buckets.get)
+
+    rows = ""
+    for label, count in buckets.items():
+        if count == 0 and label != peak_bucket:
+            bar_width = 0
+        else:
+            bar_width = int(count / max_count * 100) if max_count else 0
+
+        is_peak = label == peak_bucket
+        label_style = (
+            f"font-size:11px;font-weight:{'700' if is_peak else '400'};"
+            f"color:{C['text'] if is_peak else C['muted']};white-space:nowrap"
+        )
+        count_style = (
+            f"font-size:11px;font-weight:{'700' if is_peak else '400'};"
+            f"color:{C['text'] if is_peak else C['muted']};white-space:nowrap"
+        )
+        peak_tag = (
+            f' <span style="font-size:9px;color:{C["accent"]};font-weight:700">&larr; Peak</span>'
+            if is_peak else ""
+        )
+
+        rows += f"""
+          <tr>
+            <td style="padding:3px 12px 3px 0;{label_style};width:160px">{label}</td>
+            <td style="padding:3px 0;width:auto">
+              <div style="background:{C['accent_lt']};border-radius:4px;height:16px;width:100%">
+                <div style="background:{C['accent']};border-radius:4px;height:16px;width:{bar_width}%;
+                            min-width:{2 if count else 0}px"></div>
+              </div>
+            </td>
+            <td style="padding:3px 0 3px 10px;{count_style};width:100px">
+              {count} msg{'s' if count != 1 else ''}{peak_tag}
+            </td>
+          </tr>"""
+
+    return f"""
+  <tr>
+    <td style="background:{C['card']};padding:16px 24px 18px;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                  color:{C['muted']};margin-bottom:2px">Work Pattern</div>
+      <div style="font-size:11px;color:{C['muted']};margin-bottom:12px">
+        When Copilot-assisted work happened</div>
+      <table width="100%" cellpadding="0" cellspacing="0">
+        {rows}
       </table>
     </td>
   </tr>"""
@@ -1275,11 +1519,19 @@ window.onload = function() {
 
   {_leverage_banner(goals, analysis)}
 
-  {_kpi_section(goals, analysis, n_sessions, sum(s.get("git_ops", []).count("pr") for s in sessions))}
+  {_kpi_section(goals, analysis, n_sessions,
+              sum(s.get("git_ops", []).count("pr") for s in sessions),
+              sum(s.get("git_ops", []).count("commit") for s in sessions))}
 
   {_complexity_breakdown(goals)}
 
+  {_intent_breakdown(goals)}
+
   {_skills_mobilized(goals)}
+
+  {_deliverables_produced(sessions)}
+
+  {_work_pattern(sessions)}
 
   <!-- GOALS SUMMARY TABLE -->
   <tr>
