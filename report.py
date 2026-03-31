@@ -475,18 +475,14 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
               rowspan="2">
             <div style="font-size:11px;font-weight:600;color:{C['text']};line-height:1.3">{title}</div>
           </td>
-          <td style="padding:4px 6px;font-size:9px;color:{C['muted']};text-align:center;
-                     font-weight:700;text-transform:uppercase;letter-spacing:0.3px;width:13%">
-            {tools}<br><span style="font-weight:400;font-size:8px">tools</span></td>
-          <td style="padding:4px 6px;font-size:9px;color:{C['muted']};text-align:center;
-                     font-weight:700;text-transform:uppercase;letter-spacing:0.3px;width:13%">
-            {reqs}<br><span style="font-weight:400;font-size:8px">requests</span></td>
-          <td style="padding:4px 6px;font-size:9px;color:{C['muted']};text-align:center;
-                     font-weight:700;text-transform:uppercase;letter-spacing:0.3px;width:13%">
-            {active_str}<br><span style="font-weight:400;font-size:8px">active</span></td>
-          <td style="padding:4px 6px;font-size:9px;color:{C['muted']};text-align:center;
-                     font-weight:700;text-transform:uppercase;letter-spacing:0.3px;width:13%">
-            +{la}<br><span style="font-weight:400;font-size:8px">lines</span></td>
+          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600;width:13%">{tools}</td>
+          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600;width:13%">{reqs}</td>
+          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600;width:13%">{active_str}</td>
+          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600;width:13%">+{la}</td>
           <td style="padding:4px 6px;text-align:center;width:13%;vertical-align:middle" rowspan="2">
             <div style="font-size:14px;font-weight:700;color:{C['accent']}">{formula_h}</div>
             <div style="font-size:8px;color:{C['muted']};text-transform:uppercase;margin-top:1px">formula</div>
@@ -527,9 +523,10 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         <code style="font-size:10px;background:{C['subtle']};padding:2px 6px;border-radius:3px;
                      color:{C['accent']}">max(tools, requests, active) + lines</code>
         &mdash; the highest correlated signal drives the base; lines of code add independently.
-        <span style="color:{C['accent']}">Blue</span> = formula result,
+        Top row = raw values, bottom row = multipliers.
+        <strong style="color:{C['accent']}">Bold multiplier</strong> = max signal (base driver).
+        <span style="color:{C['accent']}">Blue</span> = formula,
         <span style="color:{C['green']}">green</span> = AI estimate.
-        Bold multiplier = max signal (base driver).
       </div>
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
@@ -1248,126 +1245,6 @@ window.onload = function() {
   </tr>
 
   {_activity_bar(analysis)}
-
-  <!-- METHODOLOGY -->
-  <tr>
-    <td style="background:{C['card']};padding:16px 24px 18px;
-               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:10px">How estimates are calculated</div>
-      <div style="font-size:11px;color:{C['muted']};line-height:1.65">
-        Human effort estimates reflect what a professional would need to complete the same work
-        without AI assistance, using a conservative blended rate of <strong style="color:{C['text']}">${HOURLY_RATE}/hr</strong>.
-        Each task is calibrated against a standardised scale:
-      </div>
-      <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;margin-bottom:6px">
-        <tr style="background:{C['subtle']}">
-          <td style="padding:5px 10px;font-size:10px;font-weight:700;color:{C['accent']};
-                     border-bottom:1px solid {C['border']};width:20%">Category</td>
-          <td style="padding:5px 10px;font-size:10px;font-weight:700;color:{C['accent']};
-                     border-bottom:1px solid {C['border']};width:50%">Examples</td>
-          <td style="padding:5px 10px;font-size:10px;font-weight:700;color:{C['accent']};
-                     border-bottom:1px solid {C['border']};width:15%;text-align:center">Estimate</td>
-        </tr>
-        <tr>
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
-            <strong>Execution</strong></td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
-            Install package, run CLI command, push to repo, deploy</td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
-                     text-align:center;font-weight:600">0.25h</td>
-        </tr>
-        <tr style="background:{C['subtle']}">
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
-            <strong>Simple edit</strong></td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
-            Config change, format/style tweak, rename, run existing script</td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
-                     text-align:center;font-weight:600">0.5h</td>
-        </tr>
-        <tr>
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
-            <strong>Research</strong></td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
-            Investigate a technology, competitive analysis, find best approach</td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
-                     text-align:center;font-weight:600">0.5–1h</td>
-        </tr>
-        <tr style="background:{C['subtle']}">
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
-            <strong>Analysis</strong></td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
-            Data analysis, metric compilation, impact assessment, report drafting</td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
-                     text-align:center;font-weight:600">1–2h</td>
-        </tr>
-        <tr>
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
-            <strong>Development</strong></td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
-            Implement feature, write function, fix unknown bug, build template</td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
-                     text-align:center;font-weight:600">1–2h</td>
-        </tr>
-        <tr style="background:{C['subtle']}">
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
-            <strong>Design &amp; UX</strong></td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
-            Report layout, visual design, information architecture, presentation design</td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']};
-                     text-align:center;font-weight:600">1–3h</td>
-        </tr>
-        <tr>
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']}">
-            <strong>Document writing</strong></td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['muted']}">
-            Detailed report, executive brief, comprehensive documentation</td>
-          <td style="padding:4px 10px;font-size:10px;color:{C['text']};text-align:center;font-weight:600">2–4h</td>
-        </tr>
-      </table>
-      <div style="font-size:10px;color:{C['muted']};line-height:1.55;margin-top:6px">
-        Estimates are produced by AI analysis (GPT-4o-mini) which reads the full session transcript
-        and assigns effort using the calibration scale above. Raw session signals — token count, tool
-        invocations, premium requests, code impact, and active engagement time — serve as guardrails:
-      </div>
-      <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;margin-bottom:6px">
-        <tr style="background:{C['subtle']}">
-          <td style="padding:4px 10px;font-size:10px;font-weight:700;color:{C['accent']};
-                     border-bottom:1px solid {C['border']};width:35%">Signal</td>
-          <td style="padding:4px 10px;font-size:10px;font-weight:700;color:{C['accent']};
-                     border-bottom:1px solid {C['border']};width:65%">Guardrail Rule</td>
-        </tr>
-        <tr>
-          <td style="padding:3px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
-            Premium requests &lt; 10</td>
-          <td style="padding:3px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
-            All tasks in session capped at &le; 1.5h</td>
-        </tr>
-        <tr style="background:{C['subtle']}">
-          <td style="padding:3px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
-            Total tokens &lt; 50K</td>
-          <td style="padding:3px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
-            Entire session capped at 2h</td>
-        </tr>
-        <tr>
-          <td style="padding:3px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
-            Tool invocations 1–5 / 5–15 / 15+</td>
-          <td style="padding:3px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
-            Simple / moderate / complex multi-step work</td>
-        </tr>
-        <tr style="background:{C['subtle']}">
-          <td style="padding:3px 10px;font-size:10px;color:{C['text']}">
-            Code impact &lt; 50 / 50–200 / 200+ lines</td>
-          <td style="padding:3px 10px;font-size:10px;color:{C['muted']}">
-            Minor / moderate / substantial development</td>
-        </tr>
-      </table>
-      <div style="font-size:10px;color:{C['muted']};line-height:1.55">
-        The intent is conservative — credibility over impressiveness. No deterministic formula is
-        applied; the AI weighs all signals holistically against the calibration anchors.
-      </div>
-    </td>
-  </tr>
 
   <!-- ESTIMATION EVIDENCE (collapsible) -->
   <tr>
