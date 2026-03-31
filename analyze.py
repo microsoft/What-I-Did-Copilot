@@ -134,7 +134,7 @@ def _cache_path(target_date: str) -> Path:
     return _CACHE_DIR / f"{target_date}.json"
 
 
-def analyze_day(target_date: str, sessions: list, refresh: bool = False) -> dict:
+def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api: bool = True) -> dict:
     # Aggregate metrics across all sessions
     total_tokens = {
         "input":          sum(s["tokens"]["input"]          for s in sessions),
@@ -215,6 +215,9 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False) -> dict
             return _attach_metrics(cached)
         except Exception:
             pass
+
+    if not use_api:
+        return _attach_metrics(_fallback_analysis(target_date, sessions))
 
     token = _get_github_token()
     if not token:

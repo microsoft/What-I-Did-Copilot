@@ -380,7 +380,7 @@ def main():
             continue
         premium = sum(s.get("premium_requests", 0) for s in sessions)
         print(f"  {d}: {len(sessions)} session(s), {premium} premium requests")
-        analysis = analyze_day(d, sessions, refresh=args.refresh)
+        analysis = analyze_day(d, sessions, refresh=args.refresh, use_api=api_ok)
         day_analyses.append((d, analysis, sessions))
         all_sessions.extend(sessions)
 
