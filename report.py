@@ -362,8 +362,8 @@ def _fmt_tok(tok: int) -> str:
     return f"{tok / 1_000_000:.1f}M"
 
 
-def _estimation_waterfall(goals: list, analysis: dict) -> str:
-    """Evidence table mapping raw session signals to effort estimates."""
+def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
+    """Evidence table content (without outer tr/td wrapper) for collapsible section."""
     session_metrics = analysis.get("session_metrics", {})
     if not goals:
         return ""
@@ -427,15 +427,8 @@ def _estimation_waterfall(goals: list, analysis: dict) -> str:
         </tr>"""
 
     return f"""
-  <tr>
-    <td style="background:{C['card']};padding:16px 24px 18px;
-               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:4px">Estimation Evidence</div>
-      <div style="font-size:11px;color:{C['muted']};margin-bottom:12px">
-        How session activity maps to human effort estimates</div>
       <table width="100%" cellpadding="0" cellspacing="0"
-             style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
+             style="border:1px solid {C['border']};border-radius:7px;overflow:hidden;margin-top:6px">
         <tr style="background:{C['accent_lt']}">
           <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:700;
                      color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
@@ -462,9 +455,7 @@ def _estimation_waterfall(goals: list, analysis: dict) -> str:
                      border-bottom:1px solid {C['border']};width:15%">Estimate</th>
         </tr>
         {rows}
-      </table>
-    </td>
-  </tr>"""
+      </table>"""
 
 
 def _evidence_strip(goal: dict, session_metrics: dict) -> str:
@@ -1014,8 +1005,6 @@ window.onload = function() {
 
   {_skills_mobilized(goals)}
 
-  {_estimation_waterfall(goals, analysis)}
-
   <!-- GOALS SUMMARY TABLE -->
   <tr>
     <td style="background:{C['card']};padding:0 24px 16px;
@@ -1113,8 +1102,61 @@ window.onload = function() {
         </tr>
       </table>
       <div style="font-size:10px;color:{C['muted']};line-height:1.55;margin-top:6px">
-        Estimates are calibrated using session signals (tool invocations, premium requests, code impact)
-        and verified by AI analysis. The intent is conservative — credibility over impressiveness.
+        Estimates are produced by AI analysis (GPT-4o-mini) which reads the full session transcript
+        and assigns effort using the calibration scale above. Raw session signals — token count, tool
+        invocations, premium requests, code impact, and active engagement time — serve as guardrails:
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;margin-bottom:6px">
+        <tr style="background:{C['subtle']}">
+          <td style="padding:4px 10px;font-size:10px;font-weight:700;color:{C['accent']};
+                     border-bottom:1px solid {C['border']};width:35%">Signal</td>
+          <td style="padding:4px 10px;font-size:10px;font-weight:700;color:{C['accent']};
+                     border-bottom:1px solid {C['border']};width:65%">Guardrail Rule</td>
+        </tr>
+        <tr>
+          <td style="padding:3px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
+            Premium requests &lt; 10</td>
+          <td style="padding:3px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
+            All tasks in session capped at &le; 1.5h</td>
+        </tr>
+        <tr style="background:{C['subtle']}">
+          <td style="padding:3px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
+            Total tokens &lt; 50K</td>
+          <td style="padding:3px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
+            Entire session capped at 2h</td>
+        </tr>
+        <tr>
+          <td style="padding:3px 10px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}">
+            Tool invocations 1–5 / 5–15 / 15+</td>
+          <td style="padding:3px 10px;font-size:10px;color:{C['muted']};border-bottom:1px solid {C['border']}">
+            Simple / moderate / complex multi-step work</td>
+        </tr>
+        <tr style="background:{C['subtle']}">
+          <td style="padding:3px 10px;font-size:10px;color:{C['text']}">
+            Code impact &lt; 50 / 50–200 / 200+ lines</td>
+          <td style="padding:3px 10px;font-size:10px;color:{C['muted']}">
+            Minor / moderate / substantial development</td>
+        </tr>
+      </table>
+      <div style="font-size:10px;color:{C['muted']};line-height:1.55">
+        The intent is conservative — credibility over impressiveness. No deterministic formula is
+        applied; the AI weighs all signals holistically against the calibration anchors.
+      </div>
+    </td>
+  </tr>
+
+  <!-- ESTIMATION EVIDENCE (collapsible) -->
+  <tr>
+    <td style="background:{C['card']};padding:0 24px 12px;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div id="evidence-hdr" style="cursor:pointer;padding:10px 0 6px"
+           onclick="toggleDetail('evidence')">
+        <span id="evidence-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
+        <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                     color:{C['muted']}">Estimation Evidence &mdash; per-project session signals</span>
+      </div>
+      <div id="evidence-tasks" style="display:none">
+        {_estimation_waterfall_inner(goals, analysis)}
       </div>
     </td>
   </tr>
