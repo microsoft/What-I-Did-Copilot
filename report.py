@@ -374,47 +374,72 @@ def _intent_breakdown(goals: list) -> str:
 
 
 def _deliverables_produced(sessions: list) -> str:
-    """Count tangible deliverables across all sessions."""
+    """Count tangible deliverables from files modified and tool operations."""
     import re
 
-    categories = {
-        "Reports":        {"icon": "&#128202;", "pattern": re.compile(r"\b(report|generate report|frontier firm report)\b", re.I)},
-        "Presentations":  {"icon": "&#128209;", "pattern": re.compile(r"\b(deck|presentation|exec deck|slides)\b", re.I)},
-        "Repositories":   {"icon": "&#128230;", "pattern": re.compile(r"\b(repo|github|checkin|git init)\b", re.I)},
-        "Documents":      {"icon": "&#128196;", "pattern": re.compile(r"create.*\.(md|py|html|json|yaml|txt)\b", re.I)},
-        "Configurations": {"icon": "&#9881;",   "pattern": re.compile(r"\b(config|gitignore|setup|install)\b", re.I)},
+    # Categorize files by extension/name
+    file_categories = {
+        "Scripts":        {"icon": "&#128187;", "extensions": {".py", ".js", ".ts", ".sh", ".ps1"}},
+        "Reports":        {"icon": "&#128202;", "extensions": {".html"}},
+        "Documents":      {"icon": "&#128196;", "extensions": {".md", ".txt", ".docx", ".pdf"}},
+        "Data & Config":  {"icon": "&#9881;",   "extensions": {".json", ".yaml", ".yml", ".toml", ".env", ".gitignore", ".cfg"}},
+        "Presentations":  {"icon": "&#128209;", "extensions": {".pptx", ".ppt"}},
     }
 
-    counts: dict = {k: set() for k in categories}
+    # Collect unique files from all sources
+    all_files: set = set()
 
     for s in sessions:
+        # Source 1: filesModified from session shutdown
+        for f in s.get("code_changes", {}).get("filesModified", []):
+            all_files.add(f.replace("\\", "/").split("/")[-1])
+
+        # Source 2: tool summaries mentioning create/edit with file paths
         for msg in s.get("messages", []):
-            if msg.get("role") != "user":
-                continue
-            text = msg.get("text", "")
-            for cat, info in categories.items():
-                for m in info["pattern"].finditer(text):
-                    counts[cat].add(m.group().lower())
-            for summary in msg.get("tools_after", []):
-                for cat, info in categories.items():
-                    for m in info["pattern"].finditer(summary):
-                        counts[cat].add(m.group().lower())
+            for tool in msg.get("tools_after", []):
+                # Extract filename from tool summaries like "create a new file at C:\...\report.py"
+                m = re.search(r'(?:create|edit)[^/\\]*[\\/]([^\\/]+\.\w+)', tool, re.I)
+                if m:
+                    all_files.add(m.group(1))
 
-    final_counts = {k: max(1, len(v)) if v else 0 for k, v in counts.items()}
-
-    if sum(final_counts.values()) == 0:
+    if not all_files:
         return ""
 
+    # Categorize files
+    counts: dict = {k: [] for k in file_categories}
+    uncategorized = []
+    for fname in sorted(all_files):
+        ext = "." + fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+        # Special case: .gitignore has no real extension
+        if fname.lower() == ".gitignore":
+            ext = ".gitignore"
+        placed = False
+        for cat, info in file_categories.items():
+            if ext in info["extensions"]:
+                counts[cat].append(fname)
+                placed = True
+                break
+        if not placed and ext:
+            uncategorized.append(fname)
+
+    total_files = len(all_files)
+
     cells = ""
-    for cat, info in categories.items():
-        c = final_counts[cat]
+    for cat, info in file_categories.items():
+        c = len(counts[cat])
         if c <= 0:
             continue
+        # Show up to 3 file names as subtitle
+        file_preview = ", ".join(counts[cat][:3])
+        if len(counts[cat]) > 3:
+            file_preview += f" +{len(counts[cat]) - 3}"
         cells += (
             f'<td style="padding:8px 12px;text-align:center;vertical-align:top">'
             f'<div style="font-size:24px;font-weight:700;color:{C["accent"]};line-height:1">{c}</div>'
             f'<div style="font-size:10px;font-weight:600;color:{C["muted"]};margin-top:4px;'
             f'text-transform:uppercase;letter-spacing:0.5px">{info["icon"]} {cat}</div>'
+            f'<div style="font-size:9px;color:{C["muted"]};margin-top:3px;'
+            f'font-style:italic;max-width:140px;overflow:hidden">{file_preview}</div>'
             f'</td>'
         )
 
@@ -425,7 +450,7 @@ def _deliverables_produced(sessions: list) -> str:
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
                   color:{C['muted']};margin-bottom:2px">Deliverables Produced</div>
       <div style="font-size:11px;color:{C['muted']};margin-bottom:12px">
-        Tangible outputs created with Copilot assistance</div>
+        <strong style="color:{C['text']}">{total_files} files</strong> created or modified with Copilot assistance</div>
       <table cellpadding="0" cellspacing="0">
         <tr>{cells}</tr>
       </table>
