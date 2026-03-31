@@ -123,10 +123,11 @@ def _merge_related_goals(goals: list) -> list:
                 "_dates": {g.get("date", "")},
             }
 
-    # Finalize: set date field to earliest date, add date range to title if multi-day
+    # Finalize: set date field to earliest date, add date range info
     result = []
     for merged in groups.values():
         dates = sorted(merged.pop("_dates", set()))
+        merged["_all_dates"] = dates  # Keep all dates for metrics aggregation
         if len(dates) > 1:
             merged["date"] = dates[0]
             d0 = dates[0][5:]   # MM-DD
@@ -176,12 +177,37 @@ def _merge_analyses(day_analyses: list) -> dict:
         for proj, metrics in analysis.get("session_metrics", {}).items():
             dated_key = target_date + "|" + proj
             merged_session_metrics[dated_key] = dict(metrics)
+            # Also store under normalized key for cross-day matching
+            norm_key = target_date + "|" + _normalize_project(proj)
+            merged_session_metrics.setdefault(norm_key, dict(metrics))
 
     active_dates = sorted({d for d, _, _ in day_analyses})
 
     # Merge goals from the same project across days into single entries
     if len(active_dates) > 1:
         all_goals = _merge_related_goals(all_goals)
+
+        # Create aggregated session_metrics for merged goals that span multiple days
+        for g in all_goals:
+            all_dates = g.get("_all_dates", [g.get("date", "")])
+            if len(all_dates) <= 1:
+                continue
+            proj = g.get("project", "")
+            norm = _normalize_project(proj)
+            # Sum metrics across all dates for this project
+            agg = {"tokens": 0, "tool_invocations": 0, "premium_requests": 0,
+                   "lines_added": 0, "lines_removed": 0, "active_minutes": 0,
+                   "wall_clock_minutes": 0, "sessions": 0}
+            for d in all_dates:
+                for try_key in [d + "|" + proj, d + "|" + norm]:
+                    m = merged_session_metrics.get(try_key, {})
+                    if m:
+                        for k in agg:
+                            agg[k] += m.get(k, 0)
+                        break
+            # Store aggregated metrics under the earliest date key
+            merged_session_metrics[all_dates[0] + "|" + proj] = agg
+            merged_session_metrics[all_dates[0] + "|" + norm] = agg
 
     if len(active_dates) == 1:
         headline  = day_analyses[0][1].get("headline", f"Activity on {active_dates[0]}")

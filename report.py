@@ -523,7 +523,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         Each row shows a project's raw session data (top) and the hour multiplier each signal
         maps to (bottom). The <strong style="color:{C['accent']}">highest multiplier</strong>
         among tools, requests, and active time becomes the base estimate.
-        Lines of code are added on top. Result is capped at 6h.
+        Lines of code are added on top.
       </div>
       <div style="font-size:10px;color:{C['muted']};margin-bottom:10px;padding:8px 12px;
                   background:{C['subtle']};border-radius:6px;border:1px solid {C['border']}">
