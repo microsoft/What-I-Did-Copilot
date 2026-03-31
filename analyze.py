@@ -250,15 +250,21 @@ DEFAULT RULE: When in doubt, MERGE. Too few goals is better than too many.
 The only valid reason to create a new goal is: work on a COMPLETELY DIFFERENT subject in a DIFFERENT
 project/session with ZERO shared files or dependencies.
 
-GOOD GOAL TITLES (business outcome, verb-first):
+GOOD GOAL TITLES (business outcome, verb-first, based on the MOST SUBSTANTIAL work done):
+  "Built a daily Copilot activity analytics tool with branded HTML reports"
   "Shipped a daily work digest tool from concept to working system"
   "Provided strategic rewrite recommendations for the presentation"
   "Diagnosed and resolved checkout regression in production"
 
-BAD GOAL TITLES (too granular):
+BAD GOAL TITLES (too granular, based on first message instead of overall outcome):
   "Set up authentication"        ← part of a larger goal
   "Built report generator"       ← a task within a goal
-  "Fixed encoding bug"           ← a task within a goal
+  "Initialized git repository"   ← setup step, not the goal itself
+  "Prepared directory for checkin" ← describes first action, not the outcome
+
+TITLE RULE: The goal title must describe the PRIMARY DELIVERABLE, not the first thing done.
+If a session starts with "prepare for github" but spends 80% of time building a report tool,
+the title should be about the report tool, not the git setup.
 
 ═══════════════════════════════════════════
 RULE 2 — LANGUAGE

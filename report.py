@@ -281,26 +281,28 @@ def _what_i_work_on(goals: list, sessions: list) -> str:
         "Presentations":  {"icon": "&#128209;", "extensions": {".pptx", ".ppt"}},
     }
 
-    all_files: set = set()
+    all_files: dict = {}  # filename -> project
     for s in sessions:
+        proj = s.get("project", "")
         for f in s.get("code_changes", {}).get("filesModified", []):
-            all_files.add(f.replace("\\", "/").split("/")[-1])
+            fname = f.replace("\\", "/").split("/")[-1]
+            all_files.setdefault(fname, proj)
         for msg in s.get("messages", []):
             for tool in msg.get("tools_after", []):
                 m = re.search(r'(?:create|edit)[^/\\]*[\\/]([^\\/]+\.\w+)', tool, re.I)
                 if m:
-                    all_files.add(m.group(1))
+                    all_files.setdefault(m.group(1), proj)
 
     deliverables_html = ""
     if all_files:
         counts: dict = {k: [] for k in file_categories}
-        for fname in sorted(all_files):
+        for fname in sorted(all_files.keys()):
             ext = "." + fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
             if fname.lower() == ".gitignore":
                 ext = ".gitignore"
             for cat, info in file_categories.items():
                 if ext in info["extensions"]:
-                    counts[cat].append(fname)
+                    counts[cat].append((fname, all_files[fname]))
                     break
 
         total_files = len(all_files)
@@ -310,7 +312,7 @@ def _what_i_work_on(goals: list, sessions: list) -> str:
             c = len(counts[cat])
             if c <= 0:
                 continue
-            file_preview = ", ".join(counts[cat][:3])
+            file_preview = ", ".join(f[0] for f in counts[cat][:3])
             if len(counts[cat]) > 3:
                 file_preview += f" +{len(counts[cat]) - 3}"
             cells += (
@@ -321,13 +323,16 @@ def _what_i_work_on(goals: list, sessions: list) -> str:
                 f'</td>'
             )
 
-        # Build expandable file list
+        # Build expandable file list with project context
         file_list_rows = ""
         for cat, info in file_categories.items():
             if not counts[cat]:
                 continue
-            fnames = ", ".join(f'<span style="font-size:10px;color:{C["text"]}">{fn}</span>'
-                               for fn in counts[cat])
+            fnames = ", ".join(
+                f'<span style="font-size:10px;color:{C["accent"]};font-weight:500">{proj}</span>'
+                f'<span style="font-size:10px;color:{C["muted"]}">/{fn}</span>'
+                for fn, proj in counts[cat]
+            )
             file_list_rows += (
                 f'<tr><td style="padding:4px 0;font-size:10px;font-weight:600;'
                 f'color:{C["muted"]};white-space:nowrap;vertical-align:top;width:100px">'
