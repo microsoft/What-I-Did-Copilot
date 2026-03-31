@@ -2,9 +2,9 @@
 
 # 🤖 What I Did — GitHub Copilot Impact Report
 
-**See exactly what GitHub Copilot accomplished for you — in dollars, hours, and more importantly skills substituted.**
+**Turn invisible AI collaboration into a visible story of impact.**
 
-*Automatically harvests your Copilot session data, uses AI to categorize every task, and produces a polished impact report you can share with your team or manager. Fearlessly answer any questions around those tokens consumed*
+*One command. Every session harvested. Every task classified. A polished report that shows what you accomplished, how you collaborated, and what it would have cost without Copilot.*
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://python.org)
 [![GitHub Copilot](https://img.shields.io/badge/GitHub%20Copilot-powered-green)](https://github.com/features/copilot)
@@ -15,14 +15,31 @@
 
 > **"In March, Copilot delivered $4,380 worth of professional services for a $39/mo seat — a 112× return on investment."**
 
-That's a real output from this tool. It reads your local Copilot session logs, classifies every task with AI, estimates what a human professional would charge, and renders a report with:
+That's a real output from this tool. It reads your local Copilot session logs, classifies every task with AI, and renders a report that tells the complete story of your AI-assisted work:
 
-- 🎯 **Projects & tasks** — what you actually accomplished, grouped by business outcome
-- ⏱️ **Professional services equivalent** — what it might cost you to get the same done by a professional
-- 💰 **ROI multiplier** — your $39/mo seat vs. the value delivered
-- 📊 **Fixed vs. market pricing** — what the same tokens would cost at public API rates
-- 🛠️ **Skills mobilized** — the professional roles Copilot substituted for (engineer, designer, analyst…)
-- 📈 **Code impact** — lines added/removed, PRs created, active days
+### 📊 Return on Copilot Investment
+A hero banner showing your **ROI multiplier** — professional services equivalent vs. your $39/mo seat cost. See exactly what those tokens translated into in dollar value.
+
+### ✅ What Got Accomplished
+Every project broken down into tasks with effort estimates. Expandable detail shows the what, how, and skills involved in each deliverable. This is the evidence trail.
+
+### 📦 What Got Produced
+Tangible artifacts — **scripts, reports, documents, presentations, config files** — categorized and counted. See exactly what Copilot helped you create or modify.
+
+### 🧠 Skills Augmented
+The professional roles Copilot substituted for — Software Engineer, Data Analyst, UX Designer, Technical Writer — with task counts showing how your capabilities were multiplied.
+
+### 🎯 How I Collaborated
+A **donut chart** breaking down every interaction by intent — Building, Investigating, Designing, Researching, Iterating, Shipping. See your collaboration signature: were you mostly building, or debugging? Designing, or researching? Per-project breakdowns reveal how your approach varied across workstreams.
+
+### ⏰ When I Worked
+Time-of-day activity patterns with an expandable **daily heatmap** — see whether you're an early-morning builder or a late-night debugger, with intensity shading across every time slot.
+
+### 🔢 By the Numbers
+The raw metrics: Copilot seat cost vs. market API rates, premium request consumption, token breakdown (input, output, cache hits), and AI processing time.
+
+### 📐 Estimation Evidence
+Collapsible detail showing exactly how effort estimates were calculated — tool invocations, premium requests, active engagement time, and the deterministic formula behind each number.
 
 ## 📸 Sample Report
 
@@ -59,14 +76,20 @@ gh copilot
 # Today's report
 python whatidid.py
 
+# Last 7 days
+python whatidid.py --date 7D
+
+# Last 30 days
+python whatidid.py --date 30D
+
 # Specific date
 python whatidid.py --date 2026-03-19
 
 # Date range (e.g., all of March)
-python whatidid.py --from 2026-03-01 --to 2026-03-30
+python whatidid.py --from 2026-03-01 --to 2026-03-31
 
 # Save HTML without emailing
-python whatidid.py --from 2026-03-01 --to 2026-03-30 --html
+python whatidid.py --date 7D --html
 
 # Send report via Outlook
 python whatidid.py --email you@company.com
@@ -85,7 +108,7 @@ function whatidid { python "C:/path/to/mycopilotworks/whatidid.py" @args }
 
 Then:
 ```bash
-whatidid --from 2026-03-01 --to 2026-03-30 --html
+whatidid --date 7D --html
 ```
 
 ## 🏗️ How It Works
@@ -94,13 +117,13 @@ whatidid --from 2026-03-01 --to 2026-03-30 --html
 ~/.copilot/session-state/<uuid>/events.jsonl
                 │
                 ▼
-           harvest.py    → scan sessions, extract instructions, tools, metrics
+           harvest.py    → scan sessions, extract messages, tools, files, intents
                 │
                 ▼
            analyze.py    → AI categorization via GitHub Models API (gpt-4o-mini)
                 │         → calibrated effort estimation with quantitative signals
                 ▼
-           report.py     → Outlook-compatible HTML with ROI, skills, goal breakdown
+           report.py     → HTML report: story arc, donut charts, heatmaps, ROI
                 │
                 ▼
          email_send.py   → send via Outlook COM automation (optional)
