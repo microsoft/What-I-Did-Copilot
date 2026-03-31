@@ -1706,9 +1706,10 @@ function toggleDetail(id) {
   var arrow = document.getElementById(id + '-arrow');
   var hdr   = document.getElementById(id + '-hdr');
   if (!tasks) return;
-  var open = tasks.style.display === 'table-row';
-  tasks.style.display  = open ? 'none'    : 'table-row';
-  hdr.style.background = open ? ''        : '#e8f2fb';
+  var openDisplay = tasks.tagName.toLowerCase() === 'tr' ? 'table-row' : 'block';
+  var open = tasks.style.display === openDisplay;
+  tasks.style.display  = open ? 'none'      : openDisplay;
+  hdr.style.background = open ? ''          : '#e8f2fb';
   if (arrow) arrow.innerHTML = open ? '&#9654;' : '&#9660;';
 }
 window.onload = function() {
