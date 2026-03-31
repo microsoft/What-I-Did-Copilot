@@ -7,13 +7,19 @@ Usage:
   python whatidid.py --date 2026-03-30                   # Specific date
   python whatidid.py --from 2026-03-09 --to 2026-03-30   # Date range
   python whatidid.py --from 2026-03-09                   # From date to today
+  python whatidid.py --date 7D                           # Last 7 days
+  python whatidid.py --date 30D                          # Last 30 days
   python whatidid.py --email you@company.com             # Send email
   python whatidid.py --html                              # Save HTML only
   python whatidid.py --refresh                           # Force re-analysis
 
+Date formats accepted: YYYY-MM-DD, MM-DD-YYYY, MM/DD/YYYY, DD-Mon-YYYY
+Lookback shortcuts: 7D, 14D, 30D, 60D, 90D (days back from today)
+
 Triggered as a Copilot skill via /whatididghcp
 """
 import argparse
+import re as _re
 import subprocess
 import sys
 from datetime import date, timedelta
@@ -23,11 +29,55 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 DEFAULT_EMAIL = "shahegde@microsoft.com"
 
+# Lookback pattern: e.g. 7D, 30d, 14D
+_LOOKBACK_RE = _re.compile(r'^(\d+)[dD]$')
+
+
+def _parse_date(s: str) -> str:
+    """Parse flexible date formats into YYYY-MM-DD.
+
+    Accepts: YYYY-MM-DD, MM-DD-YYYY, MM/DD/YYYY, DD-Mon-YYYY, 'today'
+    """
+    if not s or s.lower() == "today":
+        return date.today().isoformat()
+
+    # Lookback shortcut (7D, 30D, etc.)
+    m = _LOOKBACK_RE.match(s.strip())
+    if m:
+        days = int(m.group(1))
+        return (date.today() - timedelta(days=days)).isoformat()
+
+    cleaned = s.strip().replace("/", "-")
+
+    # Already YYYY-MM-DD
+    if _re.match(r'^\d{4}-\d{1,2}-\d{1,2}$', cleaned):
+        parts = cleaned.split("-")
+        return f"{parts[0]}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+
+    # MM-DD-YYYY
+    if _re.match(r'^\d{1,2}-\d{1,2}-\d{4}$', cleaned):
+        parts = cleaned.split("-")
+        return f"{parts[2]}-{int(parts[0]):02d}-{int(parts[1]):02d}"
+
+    # DD-Mon-YYYY (e.g., 15-Mar-2026)
+    m = _re.match(r'^(\d{1,2})-([A-Za-z]{3})-(\d{4})$', cleaned)
+    if m:
+        from datetime import datetime
+        dt = datetime.strptime(cleaned, "%d-%b-%Y")
+        return dt.strftime("%Y-%m-%d")
+
+    # Last resort — try fromisoformat
+    try:
+        return date.fromisoformat(cleaned).isoformat()
+    except ValueError:
+        print(f"  ⚠ Could not parse date '{s}'. Expected YYYY-MM-DD, MM-DD-YYYY, MM/DD/YYYY, or 7D/30D.")
+        sys.exit(1)
+
 
 def _date_range(from_str: str, to_str: str) -> list:
     """Return list of YYYY-MM-DD strings for every day in [from, to]."""
-    d0 = date.fromisoformat(from_str)
-    d1 = date.fromisoformat(to_str)
+    d0 = date.fromisoformat(_parse_date(from_str))
+    d1 = date.fromisoformat(_parse_date(to_str))
     days, cur = [], d0
     while cur <= d1:
         days.append(cur.isoformat())
@@ -147,11 +197,11 @@ def main():
         description="Generate a digest of what GitHub Copilot helped you accomplish."
     )
     parser.add_argument("--date",    default="today",
-                        help="Single date: YYYY-MM-DD or 'today' (default)")
+                        help="Single date or lookback: YYYY-MM-DD, MM-DD-YYYY, 7D, 30D, 'today'")
     parser.add_argument("--from",    dest="date_from", default=None,
-                        help="Start of date range: YYYY-MM-DD")
+                        help="Start of date range (any format)")
     parser.add_argument("--to",      dest="date_to",   default=None,
-                        help="End of date range: YYYY-MM-DD (default: today)")
+                        help="End of date range (any format, default: today)")
     parser.add_argument("--email",   nargs="?", const=DEFAULT_EMAIL, default=None,
                         help=f"Send to this address (default: {DEFAULT_EMAIL})")
     parser.add_argument("--html",    action="store_true",
@@ -163,10 +213,17 @@ def main():
     today = date.today().isoformat()
 
     if args.date_from:
-        dates        = _date_range(args.date_from, args.date_to or today)
-        report_label = f"{args.date_from}_to_{args.date_to or today}"
+        from_date = _parse_date(args.date_from)
+        to_date   = _parse_date(args.date_to) if args.date_to else today
+        dates        = _date_range(from_date, to_date)
+        report_label = f"{from_date}_to_{to_date}"
+    elif _LOOKBACK_RE.match(args.date.strip()):
+        # Lookback shortcut: 7D, 30D, etc. → date range
+        from_date    = _parse_date(args.date)
+        dates        = _date_range(from_date, today)
+        report_label = f"{from_date}_to_{today}"
     else:
-        target       = today if args.date in ("today", "") else args.date
+        target       = _parse_date(args.date)
         dates        = [target]
         report_label = target
 
@@ -279,7 +336,11 @@ def main():
             if not output_path:
                 output_path = _save_and_open(html, report_label)
 
-    print("\nDone.\n")
+    print("\nDone.")
+    if today in [d for d in dates]:
+        print("  ℹ Note: Active sessions (still open) may show incomplete metrics.")
+        print("    Close your Copilot session and re-run for full code/token data.")
+    print()
 
 
 if __name__ == "__main__":
