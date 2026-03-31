@@ -345,10 +345,11 @@ def _skills_mobilized(goals: list) -> str:
     <td style="background:{C['card']};padding:14px 24px 18px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:4px">Specialist Skills Substituted</div>
+                  color:{C['muted']};margin-bottom:4px">Specialist Skills Augmented</div>
       <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
-        Copilot replaced the need for <strong style="color:{C['text']}">{n_roles} specialist roles</strong>
-        across {total_tasks} tasks &mdash; skills that would otherwise require hiring or consulting.</div>
+        Copilot augmented <strong style="color:{C['text']}">{n_roles} specialist skill sets</strong>
+        across {total_tasks} tasks &mdash; enabling work that would otherwise require
+        additional expertise or consulting.</div>
       <table width="100%" cellpadding="0" cellspacing="0">
         <tr>{cards}</tr>
       </table>
@@ -430,14 +431,10 @@ def _tier_lines(n: int) -> float:
 
 
 def _tier_active(m: float) -> float:
-    """Active engagement multiplier — reflects that a human without AI
-    would need roughly 4× the collaboration time to achieve the same result,
-    accounting for specialist skills Copilot substitutes for."""
-    if m < 2:    return 1.0
-    if m < 10:   return 2.0
-    if m < 30:   return 4.0
-    if m < 60:   return 8.0
-    return 12.0
+    """Active engagement multiplier — a human without AI would need roughly
+    4× the active collaboration time, accounting for the specialist skills
+    Copilot augments."""
+    return round(m * 4 / 60, 1)  # 4× active minutes, converted to hours
 
 
 def compute_formula_estimate(metrics: dict) -> dict:
@@ -745,14 +742,16 @@ def _signal_guide() -> str:
     active = _signal_tier_table(
         "Active Engagement Time", "&#9201;",
         "Time you were actively engaged with Copilot, excluding idle gaps longer than 5 minutes. "
-        "Multiplier reflects that a human without AI would need ~4&times; longer to achieve the "
-        "same result, accounting for the specialist skills Copilot substitutes for.",
+        "Multiplier is <strong>4&times; active time</strong> &mdash; reflecting that a human "
+        "without AI would need roughly four times longer to achieve the same result.",
         [
-            ("&lt; 2m", "1h",   "Single question &mdash; quick lookup or one-shot edit"),
-            ("2–10m",   "2h",   "Focused task &mdash; fix a bug, write a function, short iteration"),
-            ("10–30m",  "4h",   "Working session &mdash; implement and test a feature with feedback"),
-            ("30–60m",  "8h",   "Deep work &mdash; multi-step design, implementation, and refinement"),
-            ("60m+",    "12h",  "Full focus block &mdash; comprehensive system work across many files"),
+            ("&lt; 5m",    "0.3h",  "Quick task &mdash; one-shot edit, single question"),
+            ("5–15m",      "1h",    "Focused task &mdash; fix a bug, write a function"),
+            ("15–45m",     "2–3h",  "Working session &mdash; implement and test a feature"),
+            ("45m–2h",     "3–8h",  "Deep work &mdash; multi-step design, implementation, and refinement"),
+            ("2–6h",       "8–24h", "Extended session &mdash; full feature build across multiple iterations"),
+            ("6–12h",      "24–48h","Multi-day collaboration &mdash; system-level design and delivery"),
+            ("12h+",       "48h+",  "Marathon project &mdash; comprehensive system build over many days"),
         ]
     )
     return f"""
