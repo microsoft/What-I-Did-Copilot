@@ -219,69 +219,9 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
 
 
 def _what_i_work_on(goals: list, sessions: list) -> str:
-    """Section 1: 'What I Work On' — complexity stacked bar + deliverables."""
+    """Section: 'What Got Produced' — deliverables files categorized."""
     import re
 
-    # ── Complexity stacked bar ──
-    type_colors = {
-        "Development":        C["accent"],
-        "Bug Fix & Debug":    C["orange"],
-        "Analysis & Research": C["green"],
-        "Design & UX":        "#7b1fa2",
-        "Execution & Ops":    C["muted"],
-    }
-
-    hours_by_type: dict = {}
-    for g in goals:
-        for t in g.get("tasks", []):
-            tt = t.get("task_type", "")
-            if tt:
-                hours_by_type[tt] = hours_by_type.get(tt, 0) + t.get("human_hours", 0)
-
-    complexity_html = ""
-    if hours_by_type:
-        total_h = sum(hours_by_type.values()) or 1
-
-        bar_cells = ""
-        for tt in type_colors:
-            h = hours_by_type.get(tt, 0)
-            if h <= 0:
-                continue
-            pct = h / total_h * 100
-            color = type_colors.get(tt, C["muted"])
-            bar_cells += (
-                f'<td style="width:{pct:.1f}%;background:{color};height:18px;'
-                f'font-size:0;line-height:0;padding:0"></td>'
-            )
-
-        legend_items = ""
-        for tt in type_colors:
-            h = hours_by_type.get(tt, 0)
-            if h <= 0:
-                continue
-            pct = h / total_h * 100
-            color = type_colors.get(tt, C["muted"])
-            legend_items += (
-                f'<td style="padding:4px 16px 4px 0;vertical-align:middle;white-space:nowrap">'
-                f'<span style="display:inline-block;width:10px;height:10px;background:{color};'
-                f'border-radius:2px;margin-right:6px;vertical-align:middle"></span>'
-                f'<span style="font-size:12px;font-weight:600;color:{C["text"]};'
-                f'vertical-align:middle">{tt}</span>'
-                f'<span style="font-size:11px;color:{C["muted"]};margin-left:6px;'
-                f'vertical-align:middle">{_fmt_h(h)} ({pct:.0f}%)</span>'
-                f'</td>'
-            )
-
-        complexity_html = f"""
-        <table width="100%" cellpadding="0" cellspacing="0"
-               style="border-radius:9px;overflow:hidden;border:1px solid {C['border']}">
-          <tr>{bar_cells}</tr>
-        </table>
-        <table cellpadding="0" cellspacing="0" style="margin-top:10px">
-          <tr>{legend_items}</tr>
-        </table>"""
-
-    # ── Deliverables produced ──
     file_categories = {
         "Scripts":        {"icon": "&#128187;", "extensions": {".py", ".js", ".ts", ".sh", ".ps1"}},
         "Reports":        {"icon": "&#128202;", "extensions": {".html"}},
@@ -290,92 +230,64 @@ def _what_i_work_on(goals: list, sessions: list) -> str:
         "Presentations":  {"icon": "&#128209;", "extensions": {".pptx", ".ppt"}},
     }
 
-    all_files: dict = {}  # filename -> project
+    all_files: dict = {}
     for s in sessions:
         proj = s.get("project", "")
-        # Source 1: filesModified from shutdown data (+ tool-event merge)
         for f in s.get("code_changes", {}).get("filesModified", []):
             fname = f.replace("\\", "/").split("/")[-1]
             all_files.setdefault(fname, proj)
-        # Source 2: files_touched extracted from edit/create tool events
         for f in s.get("files_touched", []):
             fname = f.replace("\\", "/").split("/")[-1]
             all_files.setdefault(fname, proj)
-        # Source 3: regex fallback on tool summaries (handles varied formats)
         for msg in s.get("messages", []):
             for tool in msg.get("tools_after", []):
                 m = re.search(r'(?:create|edit).+[\\/]([^\\/]+\.\w{1,8})', tool, re.I)
                 if m:
                     all_files.setdefault(m.group(1).rstrip('.'), proj)
 
-    deliverables_html = ""
-    if all_files:
-        counts: dict = {k: [] for k in file_categories}
-        for fname in sorted(all_files.keys()):
-            ext = "." + fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-            if fname.lower() == ".gitignore":
-                ext = ".gitignore"
-            for cat, info in file_categories.items():
-                if ext in info["extensions"]:
-                    counts[cat].append((fname, all_files[fname]))
-                    break
-
-        total_files = len(all_files)
-
-        cells = ""
-        for cat, info in file_categories.items():
-            c = len(counts[cat])
-            if c <= 0:
-                continue
-            file_preview = ", ".join(f[0] for f in counts[cat][:3])
-            if len(counts[cat]) > 3:
-                file_preview += f" +{len(counts[cat]) - 3}"
-            cells += (
-                f'<td style="padding:8px 12px;text-align:center;vertical-align:top">'
-                f'<div style="font-size:24px;font-weight:700;color:{C["accent"]};line-height:1">{c}</div>'
-                f'<div style="font-size:10px;font-weight:600;color:{C["muted"]};margin-top:4px;'
-                f'text-transform:uppercase;letter-spacing:0.5px">{info["icon"]} {cat}</div>'
-                f'</td>'
-            )
-
-        # Build expandable file list with project context
-        file_list_rows = ""
-        for cat, info in file_categories.items():
-            if not counts[cat]:
-                continue
-            fnames = ", ".join(
-                f'<span style="font-size:10px;color:{C["accent"]};font-weight:500">{proj}</span>'
-                f'<span style="font-size:10px;color:{C["muted"]}">/{fn}</span>'
-                for fn, proj in counts[cat]
-            )
-            file_list_rows += (
-                f'<tr><td style="padding:4px 0;font-size:10px;font-weight:600;'
-                f'color:{C["muted"]};white-space:nowrap;vertical-align:top;width:100px">'
-                f'{info["icon"]} {cat}</td>'
-                f'<td style="padding:4px 8px;font-size:10px;color:{C["text"]}">{fnames}</td></tr>'
-            )
-
-        deliverables_html = f"""
-        <div style="border-top:1px solid {C['border']};margin-top:14px;padding-top:12px">
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                      color:{C['muted']};margin-bottom:2px">Deliverables Produced</div>
-          <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
-            <strong style="color:{C['text']}">{total_files} files</strong> created or modified</div>
-          <table cellpadding="0" cellspacing="0">
-            <tr>{cells}</tr>
-          </table>
-          <div id="deliverables-detail-hdr" style="cursor:pointer;padding:6px 0 0;margin-top:6px"
-               onclick="toggleDetail('deliverables-detail')">
-            <span id="deliverables-detail-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
-            <span style="font-size:10px;font-weight:600;color:{C['accent']}">Show file names</span>
-          </div>
-          <div id="deliverables-detail-tasks" style="display:none;margin-top:6px">
-            <table cellpadding="0" cellspacing="0" width="100%">{file_list_rows}</table>
-          </div>
-        </div>"""
-
-    if not complexity_html and not deliverables_html:
+    if not all_files:
         return ""
+
+    counts: dict = {k: [] for k in file_categories}
+    for fname in sorted(all_files.keys()):
+        ext = "." + fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+        if fname.lower() == ".gitignore":
+            ext = ".gitignore"
+        for cat, info in file_categories.items():
+            if ext in info["extensions"]:
+                counts[cat].append((fname, all_files[fname]))
+                break
+
+    total_files = len(all_files)
+
+    cells = ""
+    for cat, info in file_categories.items():
+        c = len(counts[cat])
+        if c <= 0:
+            continue
+        cells += (
+            f'<td style="padding:8px 12px;text-align:center;vertical-align:top">'
+            f'<div style="font-size:24px;font-weight:700;color:{C["accent"]};line-height:1">{c}</div>'
+            f'<div style="font-size:10px;font-weight:600;color:{C["muted"]};margin-top:4px;'
+            f'text-transform:uppercase;letter-spacing:0.5px">{info["icon"]} {cat}</div>'
+            f'</td>'
+        )
+
+    file_list_rows = ""
+    for cat, info in file_categories.items():
+        if not counts[cat]:
+            continue
+        fnames = ", ".join(
+            f'<span style="font-size:10px;color:{C["accent"]};font-weight:500">{proj}</span>'
+            f'<span style="font-size:10px;color:{C["muted"]}">/{fn}</span>'
+            for fn, proj in counts[cat]
+        )
+        file_list_rows += (
+            f'<tr><td style="padding:4px 0;font-size:10px;font-weight:600;'
+            f'color:{C["muted"]};white-space:nowrap;vertical-align:top;width:100px">'
+            f'{info["icon"]} {cat}</td>'
+            f'<td style="padding:4px 8px;font-size:10px;color:{C["text"]}">{fnames}</td></tr>'
+        )
 
     return f"""
   <tr>
@@ -383,13 +295,24 @@ def _what_i_work_on(goals: list, sessions: list) -> str:
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
-                    color:rgba(255,255,255,0.7)">What Got Built</div>
+                    color:rgba(255,255,255,0.7)">What Got Produced</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-          Distribution of effort and deliverables produced</div>
+          Artifacts created and skills augmented to produce them</div>
       </div>
       <div style="padding:14px 24px 18px">
-      {complexity_html}
-      {deliverables_html}
+        <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
+          <strong style="color:{C['text']}">{total_files} files</strong> created or modified</div>
+        <table cellpadding="0" cellspacing="0">
+          <tr>{cells}</tr>
+        </table>
+        <div id="deliverables-detail-hdr" style="cursor:pointer;padding:6px 0 0;margin-top:6px"
+             onclick="toggleDetail('deliverables-detail')">
+          <span id="deliverables-detail-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
+          <span style="font-size:10px;font-weight:600;color:{C['accent']}">Show file names</span>
+        </div>
+        <div id="deliverables-detail-tasks" style="display:none;margin-top:6px">
+          <table cellpadding="0" cellspacing="0" width="100%">{file_list_rows}</table>
+        </div>
       </div>
     </td>
   </tr>"""
@@ -627,12 +550,11 @@ def _work_pattern(sessions: list) -> str:
 
 
 def _collaboration_intent(sessions: list, goals: list) -> str:
-    """Section: 'How I Collaborated' — intent classification with stacked bar + timeline."""
+    """Section: 'How I Collaborated' — intent donut chart with per-project breakdowns."""
     from harvest import aggregate_intents, _INTENT_COLORS, _INTENT_ICONS
 
     intent_data = aggregate_intents(sessions)
     counts = intent_data["counts"]
-    timeline = intent_data["timeline"]
     by_project = intent_data["by_project"]
     total = intent_data["total"]
 
@@ -648,35 +570,33 @@ def _collaboration_intent(sessions: list, goals: list) -> str:
     else:
         top = sorted_cats
 
-    # Stacked bar
-    bar_cells = ""
+    # Build conic-gradient stops for donut chart
+    gradient_stops = []
+    cumulative = 0
     for cat, n in top:
         pct = n / total * 100
-        if pct < 2:
-            continue
         color = _INTENT_COLORS.get(cat, C["muted"])
-        bar_cells += (
-            f'<td style="width:{pct:.1f}%;background:{color};height:22px;'
-            f'font-size:0;line-height:0;padding:0"></td>'
-        )
+        gradient_stops.append(f"{color} {cumulative:.1f}% {cumulative + pct:.1f}%")
+        cumulative += pct
+    gradient = ", ".join(gradient_stops)
 
-    # Legend
-    legend_items = ""
+    # Legend items — vertical list beside the donut
+    legend_rows = ""
     for cat, n in top:
         pct = n / total * 100
         if n == 0:
             continue
         color = _INTENT_COLORS.get(cat, C["muted"])
         icon = _INTENT_ICONS.get(cat, "&#128161;")
-        legend_items += (
-            f'<td style="padding:4px 14px 4px 0;vertical-align:middle;white-space:nowrap">'
+        legend_rows += (
+            f'<div style="display:flex;align-items:center;margin-bottom:6px">'
             f'<span style="display:inline-block;width:10px;height:10px;background:{color};'
-            f'border-radius:2px;margin-right:5px;vertical-align:middle"></span>'
+            f'border-radius:2px;margin-right:8px;flex-shrink:0"></span>'
             f'<span style="font-size:11px;font-weight:600;color:{C["text"]};'
-            f'vertical-align:middle">{icon} {cat}</span>'
-            f'<span style="font-size:10px;color:{C["muted"]};margin-left:5px;'
-            f'vertical-align:middle">{n} ({pct:.0f}%)</span>'
-            f'</td>'
+            f'margin-right:6px;white-space:nowrap">{icon} {cat}</span>'
+            f'<span style="font-size:10px;color:{C["muted"]};white-space:nowrap">'
+            f'{n} ({pct:.0f}%)</span>'
+            f'</div>'
         )
 
     # Top intent insight line
@@ -688,46 +608,6 @@ def _collaboration_intent(sessions: list, goals: list) -> str:
         f'Primary mode: <strong style="color:{_INTENT_COLORS.get(top_cat, C["accent"])}">'
         f'{top_cat}</strong> ({top_pct}% of interactions)'
     )
-
-    # Timeline strip (expandable)
-    timeline_html = ""
-    if timeline:
-        # Convert timestamps to local time and build colored segments
-        segments = ""
-        for ts, cat in timeline:
-            color = _INTENT_COLORS.get(cat, C["muted"])
-            try:
-                local_dt = _utc_to_local(ts)
-                tip = f"{local_dt.strftime('%I:%M%p').lstrip('0')} {cat}"
-            except Exception:
-                tip = cat
-            segments += (
-                f'<td style="background:{color};height:14px;padding:0;'
-                f'font-size:0;line-height:0" title="{tip}"></td>'
-            )
-
-        # Time labels
-        try:
-            first_local = _utc_to_local(timeline[0][0])
-            last_local = _utc_to_local(timeline[-1][0])
-            t_start = first_local.strftime("%I:%M%p").lstrip("0")
-            t_end = last_local.strftime("%I:%M%p").lstrip("0")
-        except Exception:
-            t_start = ""
-            t_end = ""
-
-        timeline_html = f"""
-          <div style="margin-top:8px">
-            <div style="display:flex;justify-content:space-between;margin-bottom:3px">
-              <span style="font-size:9px;color:{C['muted']}">{t_start}</span>
-              <span style="font-size:9px;color:{C['muted']}">Collaboration journey through the day</span>
-              <span style="font-size:9px;color:{C['muted']}">{t_end}</span>
-            </div>
-            <table width="100%" cellpadding="0" cellspacing="1"
-                   style="border-radius:6px;overflow:hidden;table-layout:fixed">
-              <tr>{segments}</tr>
-            </table>
-          </div>"""
 
     # Per-project mini-bars (only if multiple projects)
     project_bars_html = ""
@@ -748,7 +628,6 @@ def _collaboration_intent(sessions: list, goals: list) -> str:
                     f'<td style="width:{pct:.1f}%;background:{color};height:12px;'
                     f'font-size:0;padding:0"></td>'
                 )
-            # Top 2 labels
             top2 = [f'{c} {round(n/ptotal*100)}%' for c, n in proj_sorted[:2] if n > 0]
             proj_rows += (
                 f'<tr>'
@@ -764,7 +643,7 @@ def _collaboration_intent(sessions: list, goals: list) -> str:
 
         if proj_rows:
             project_bars_html = f"""
-            <div style="border-top:1px solid {C['border']};margin-top:12px;padding-top:10px">
+            <div style="border-top:1px solid {C['border']};margin-top:14px;padding-top:10px">
               <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
                           color:{C['muted']};margin-bottom:6px">By Project</div>
               <table width="100%" cellpadding="0" cellspacing="0">{proj_rows}</table>
@@ -781,25 +660,30 @@ def _collaboration_intent(sessions: list, goals: list) -> str:
           Intent behind every interaction &mdash; from research to shipping</div>
       </div>
       <div style="padding:14px 24px 16px">
-        <div style="font-size:11px;color:{C['muted']};margin-bottom:10px;line-height:1.5">
+        <div style="font-size:11px;color:{C['muted']};margin-bottom:14px;line-height:1.5">
           {insight}
         </div>
-        <table width="100%" cellpadding="0" cellspacing="0"
-               style="border-radius:9px;overflow:hidden;border:1px solid {C['border']}">
-          <tr>{bar_cells}</tr>
+        <table cellpadding="0" cellspacing="0" width="100%">
+          <tr>
+            <td style="width:140px;vertical-align:middle;text-align:center;padding-right:20px">
+              <div style="width:130px;height:130px;border-radius:50%;
+                          background:conic-gradient({gradient});
+                          display:inline-block;position:relative">
+                <div style="position:absolute;top:25px;left:25px;width:80px;height:80px;
+                            border-radius:50%;background:{C['card']}">
+                  <div style="text-align:center;padding-top:22px">
+                    <div style="font-size:22px;font-weight:800;color:{C['accent']};line-height:1">{total}</div>
+                    <div style="font-size:8px;font-weight:600;color:{C['muted']};text-transform:uppercase;
+                                letter-spacing:0.5px;margin-top:2px">interactions</div>
+                  </div>
+                </div>
+              </div>
+            </td>
+            <td style="vertical-align:middle;padding-left:10px">
+              {legend_rows}
+            </td>
+          </tr>
         </table>
-        <table cellpadding="0" cellspacing="0" style="margin-top:8px">
-          <tr>{legend_items}</tr>
-        </table>
-        <div id="intent-timeline-hdr" style="cursor:pointer;padding:6px 0 0;margin-top:6px"
-             onclick="toggleDetail('intent-timeline')">
-          <span id="intent-timeline-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
-          <span style="font-size:10px;font-weight:600;color:{C['accent']}">See collaboration journey</span>
-          <span style="font-size:10px;color:{C['muted']};margin-left:8px">How intent shifted through the day</span>
-        </div>
-        <div id="intent-timeline-tasks" style="display:none">
-          {timeline_html}
-        </div>
         {project_bars_html}
       </div>
     </td>
@@ -1393,6 +1277,17 @@ def _activity_bar(analysis: dict) -> str:
     # Pricing — compact inline row (not the main story)
     pricing_row = f"""
   <tr>
+    <td style="background:{C['card']};padding:0;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">By the Numbers</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          Cost, tokens, and Copilot usage metrics</div>
+      </div>
+    </td>
+  </tr>
+  <tr>
     <td style="background:{C['subtle']};padding:9px 24px;
                border:1px solid {C['border']}">
       <span style="font-size:10px;font-weight:700;text-transform:uppercase;
@@ -1809,17 +1704,7 @@ window.onload = function() {
 
   {_leverage_banner(goals, analysis)}
 
-  <!-- ACT 2: THE JOURNEY -->
-  {_collaboration_intent(sessions, goals)}
-
-  {_what_i_work_on(goals, sessions)}
-
-  {_skills_mobilized(goals)}
-
-  {_work_pattern(sessions)}
-
-  <!-- ACT 3: THE EVIDENCE -->
-  <!-- GOALS SUMMARY TABLE -->
+  <!-- 1. WHAT GOT ACCOMPLISHED -->
   <tr>
     <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
@@ -1843,9 +1728,21 @@ window.onload = function() {
     </td>
   </tr>
 
+  <!-- 2. WHAT GOT PRODUCED (deliverables + skills) -->
+  {_what_i_work_on(goals, sessions)}
+
+  {_skills_mobilized(goals)}
+
+  <!-- 3. HOW I WORKED WITH COPILOT (intent) -->
+  {_collaboration_intent(sessions, goals)}
+
+  <!-- 4. WHEN I WORKED WITH COPILOT -->
+  {_work_pattern(sessions)}
+
+  <!-- 5. BY THE NUMBERS -->
   {_activity_bar(analysis)}
 
-  <!-- ESTIMATION EVIDENCE (collapsible) -->
+  <!-- 6. ESTIMATION EVIDENCE (collapsible) -->
   <tr>
     <td style="background:{C['card']};padding:0 24px 12px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
