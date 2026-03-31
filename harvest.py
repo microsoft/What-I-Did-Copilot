@@ -213,6 +213,7 @@ def get_sessions_for_date(target_date: str) -> list:
             "git_repos":         git_repos,
             "git_ops":           git_ops_list,
             "workspace_summary": workspace.get("summary", ""),
+            "tool_invocations":  sum(len(m.get("tools_after", [])) for m in messages if m["role"] == "user"),
         })
 
     return sessions
@@ -229,3 +230,37 @@ def compute_elapsed_minutes(session_start: str, session_end: str) -> float:
         return max(0, (t1 - t0).total_seconds() / 60)
     except Exception:
         return 0
+
+
+def compute_active_minutes(messages: list) -> float:
+    """Estimate active engagement time from message timestamps.
+
+    Sums intervals between consecutive messages where the gap is under
+    5 minutes.  Longer gaps represent idle time (user away or thinking)
+    and are excluded from the active total.
+    """
+    timestamps = []
+    for m in messages:
+        ts = m.get("timestamp", "")
+        if ts:
+            try:
+                timestamps.append(datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))
+            except ValueError:
+                pass
+
+    if not timestamps:
+        return 0.0
+    if len(timestamps) == 1:
+        return 1.0  # Single message ≈ 1 min engagement
+
+    timestamps.sort()
+    ACTIVE_THRESHOLD = 300  # 5 minutes in seconds
+    active_s = 0.0
+
+    for i in range(1, len(timestamps)):
+        gap = (timestamps[i] - timestamps[i - 1]).total_seconds()
+        if gap <= ACTIVE_THRESHOLD:
+            active_s += gap
+
+    active_s += 30  # buffer for final message processing
+    return round(active_s / 60, 1)

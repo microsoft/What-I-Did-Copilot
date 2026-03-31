@@ -318,6 +318,190 @@ def _skills_mobilized(goals: list) -> str:
   </tr>"""
 
 
+CALIBRATION_RANGES = {
+    "Execution & Ops":     "0.25h",
+    "Development":         "1–2h",
+    "Bug Fix & Debug":     "1–2h",
+    "Analysis & Research": "0.5–2h",
+    "Design & UX":         "1–3h",
+}
+
+
+def _dominant_task_type(goal: dict) -> str:
+    type_hours: dict = {}
+    for t in goal.get("tasks", []):
+        tt = t.get("task_type", "Development")
+        type_hours[tt] = type_hours.get(tt, 0) + t.get("human_hours", 0)
+    return max(type_hours, key=type_hours.get) if type_hours else "Development"
+
+
+def _resolve_metrics(project: str, session_metrics: dict) -> dict:
+    metrics = session_metrics.get(project, {})
+    if not metrics:
+        last = project.replace("\\", "/").split("/")[-1]
+        metrics = session_metrics.get(last, {})
+    return metrics
+
+
+def _fmt_tok(tok: int) -> str:
+    if tok < 1_000:
+        return str(tok)
+    if tok < 1_000_000:
+        return f"{tok / 1_000:.0f}K"
+    return f"{tok / 1_000_000:.1f}M"
+
+
+def _estimation_waterfall(goals: list, analysis: dict) -> str:
+    """Evidence table mapping raw session signals to effort estimates."""
+    session_metrics = analysis.get("session_metrics", {})
+    if not goals:
+        return ""
+
+    total_h = sum(g.get("human_hours", 0) for g in goals)
+
+    rows = ""
+    for i, g in enumerate(goals):
+        bg = C["subtle"] if i % 2 == 0 else C["card"]
+        project = g.get("project", "")
+        metrics = _resolve_metrics(project, session_metrics)
+
+        dom_type  = _dominant_task_type(g)
+        cal_range = CALIBRATION_RANGES.get(dom_type, "1–2h")
+
+        tok_str    = _fmt_tok(metrics.get("tokens", 0))
+        tools      = metrics.get("tool_invocations", 0)
+        la, lr     = metrics.get("lines_added", 0), metrics.get("lines_removed", 0)
+        code_str   = f"+{la}/&minus;{lr}" if (la or lr) else "&mdash;"
+        reqs       = metrics.get("premium_requests", 0)
+        active     = metrics.get("active_minutes", 0)
+        active_str = f"{active:.0f}m" if active else "&mdash;"
+        h          = _fmt_h(g.get("human_hours", 0))
+
+        title = g.get("title", "")
+        if len(title) > 45:
+            title = title[:42] + "..."
+
+        rows += f"""
+        <tr style="background:{bg}">
+          <td style="padding:8px 10px;border-bottom:1px solid {C['border']};vertical-align:top;width:28%">
+            <div style="font-size:11px;font-weight:600;color:{C['text']};line-height:1.3">{title}</div>
+            <div style="font-size:9px;color:{C['muted']};margin-top:2px">{dom_type} &middot; {cal_range} range</div>
+          </td>
+          <td style="padding:8px 6px;border-bottom:1px solid {C['border']};text-align:center;
+                     font-size:11px;color:{C['text']};width:10%">{tok_str}</td>
+          <td style="padding:8px 6px;border-bottom:1px solid {C['border']};text-align:center;
+                     font-size:11px;color:{C['text']};width:8%">{tools}</td>
+          <td style="padding:8px 6px;border-bottom:1px solid {C['border']};text-align:center;
+                     font-size:11px;color:{C['text']};width:14%">{code_str}</td>
+          <td style="padding:8px 6px;border-bottom:1px solid {C['border']};text-align:center;
+                     font-size:11px;color:{C['text']};width:10%">{reqs}</td>
+          <td style="padding:8px 6px;border-bottom:1px solid {C['border']};text-align:center;
+                     font-size:11px;color:{C['text']};width:10%">{active_str}</td>
+          <td style="padding:8px 6px;border-bottom:1px solid {C['border']};text-align:center;
+                     font-size:11px;color:{C['muted']};width:5%">&rarr;</td>
+          <td style="padding:8px 6px;border-bottom:1px solid {C['border']};text-align:center;width:15%">
+            <div style="font-size:14px;font-weight:700;color:{C['accent']}">{h}</div>
+          </td>
+        </tr>"""
+
+    rows += f"""
+        <tr style="background:{C['accent_lt']}">
+          <td colspan="6" style="padding:8px 10px;border-top:2px solid {C['border']};
+                     font-size:11px;font-weight:700;color:{C['accent']};text-align:right">Total</td>
+          <td style="padding:8px 6px;border-top:2px solid {C['border']};text-align:center;
+                     font-size:11px;color:{C['muted']}">&rarr;</td>
+          <td style="padding:8px 6px;border-top:2px solid {C['border']};text-align:center">
+            <div style="font-size:16px;font-weight:700;color:{C['accent']}">{_fmt_h(total_h)}</div>
+          </td>
+        </tr>"""
+
+    return f"""
+  <tr>
+    <td style="background:{C['card']};padding:16px 24px 18px;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                  color:{C['muted']};margin-bottom:4px">Estimation Evidence</div>
+      <div style="font-size:11px;color:{C['muted']};margin-bottom:12px">
+        How session activity maps to human effort estimates</div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
+        <tr style="background:{C['accent_lt']}">
+          <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:28%">Project</th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:10%">Tokens</th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:8%">Tools</th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:14%">Code</th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:10%">Requests</th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:10%">Active</th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;
+                     border-bottom:1px solid {C['border']};width:5%"></th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:15%">Estimate</th>
+        </tr>
+        {rows}
+      </table>
+    </td>
+  </tr>"""
+
+
+def _evidence_strip(goal: dict, session_metrics: dict) -> str:
+    """Compact metrics bar showing evidence behind a goal's estimate."""
+    project = goal.get("project", "")
+    metrics = _resolve_metrics(project, session_metrics)
+    if not metrics:
+        return ""
+
+    dom_type  = _dominant_task_type(goal)
+    cal_range = CALIBRATION_RANGES.get(dom_type, "1–2h")
+
+    parts = []
+    reqs = metrics.get("premium_requests", 0)
+    if reqs:
+        parts.append(f"<strong>{reqs}</strong> premium reqs")
+    tok = metrics.get("tokens", 0)
+    if tok:
+        parts.append(f"<strong>{_fmt_tok(tok)}</strong> tokens")
+    tools = metrics.get("tool_invocations", 0)
+    if tools:
+        parts.append(f"<strong>{tools}</strong> tool calls")
+    la = metrics.get("lines_added", 0)
+    lr = metrics.get("lines_removed", 0)
+    if la or lr:
+        parts.append(f"<strong>+{la}/&minus;{lr}</strong> lines")
+    active = metrics.get("active_minutes", 0)
+    if active:
+        parts.append(f"<strong>{active:.0f}m</strong> active")
+
+    if not parts:
+        return ""
+
+    h = _fmt_h(goal.get("human_hours", 0))
+
+    return f"""
+            <div style="padding:8px 24px;background:{C['subtle']};border-bottom:1px solid {C['border']}">
+              <div style="font-size:10px;color:{C['muted']};line-height:1.5">
+                <span style="font-weight:700;color:{C['accent']};margin-right:4px">&#128202;</span>
+                {' &middot; '.join(parts)}
+              </div>
+              <div style="font-size:10px;color:{C['muted']};margin-top:2px">
+                Calibration: <strong style="color:{C['text']}">{dom_type}</strong>
+                ({cal_range} range) &rarr; Estimated <strong style="color:{C['accent']}">{h}</strong>
+              </div>
+            </div>"""
+
+
 def _date_badge(iso_date: str) -> str:
     if not iso_date:
         return ""
@@ -519,9 +703,11 @@ def _doc_refs_html(docs: list) -> str:
     return '<span style="margin-right:8px">' + '</span><span style="margin-right:8px">'.join(parts) + '</span>'
 
 
-def _goals_summary(goals: list, session_lookup: dict = None) -> str:
+def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: dict = None) -> str:
     if session_lookup is None:
         session_lookup = {}
+    if session_metrics is None:
+        session_metrics = {}
     rows = ""
     for i, g in enumerate(goals):
         gid         = f"goal-{i}"
@@ -568,6 +754,7 @@ def _goals_summary(goals: list, session_lookup: dict = None) -> str:
         <tr id="{gid}-tasks" style="display:none">
           <td colspan="4" style="padding:0 8px 12px;background:{C['bg']}">
             {_goal_context_bar(g, session_lookup)}
+            {_evidence_strip(g, session_metrics)}
             <table width="100%" cellpadding="0" cellspacing="0"
                    style="border:1px solid {C['border']};border-radius:6px;overflow:hidden">
               <tr style="background:{C['accent_lt']}">
@@ -816,6 +1003,8 @@ window.onload = function() {
 
   {_skills_mobilized(goals)}
 
+  {_estimation_waterfall(goals, analysis)}
+
   <!-- GOALS SUMMARY TABLE -->
   <tr>
     <td style="background:{C['card']};padding:0 24px 16px;
@@ -824,7 +1013,7 @@ window.onload = function() {
                   color:{C['muted']};padding:0 0 8px 0">What got accomplished</div>
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
-        {_goals_summary(goals, session_lookup)}
+        {_goals_summary(goals, session_lookup, analysis.get("session_metrics", {}))}
         {totals_row}
       </table>
       <div id="expand-hint" style="display:none;font-size:11px;color:{C['muted']};

@@ -10,6 +10,7 @@ import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
+from harvest import compute_active_minutes, compute_elapsed_minutes
 
 # GitHub Models API — OpenAI-compatible endpoint, authenticated with GitHub token
 API_URL = "https://models.inference.ai.azure.com/chat/completions"
@@ -117,6 +118,44 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False) -> dict
         all_files.extend(s.get("code_changes", {}).get("filesModified", []))
     all_files = list(dict.fromkeys(all_files))  # deduplicate, preserve order
 
+    # Build per-project session metrics for evidence display
+    _session_metrics: dict = {}
+    for s in sessions:
+        proj = s["project"]
+        n_tools = s.get("tool_invocations", 0) or sum(
+            len(m.get("tools_after", [])) for m in s["messages"] if m["role"] == "user"
+        )
+        cc = s.get("code_changes", {})
+        active_min = compute_active_minutes(s["messages"])
+        wall_min = compute_elapsed_minutes(s.get("session_start", ""), s.get("session_end", ""))
+
+        if proj in _session_metrics:
+            m = _session_metrics[proj]
+            m["tokens"]           += s["tokens"]["total"]
+            m["tool_invocations"] += n_tools
+            m["premium_requests"] += s.get("premium_requests", 0)
+            m["lines_added"]      += cc.get("linesAdded", 0)
+            m["lines_removed"]    += cc.get("linesRemoved", 0)
+            m["active_minutes"]   += active_min
+            m["wall_clock_minutes"] += wall_min
+            m["sessions"]         += 1
+        else:
+            _session_metrics[proj] = {
+                "tokens":            s["tokens"]["total"],
+                "tool_invocations":  n_tools,
+                "premium_requests":  s.get("premium_requests", 0),
+                "lines_added":       cc.get("linesAdded", 0),
+                "lines_removed":     cc.get("linesRemoved", 0),
+                "active_minutes":    active_min,
+                "wall_clock_minutes": wall_min,
+                "sessions":          1,
+            }
+
+    # Also index by last path component for flexible goal→project matching
+    for proj in list(_session_metrics.keys()):
+        last = proj.replace("\\", "/").split("/")[-1]
+        _session_metrics.setdefault(last, _session_metrics[proj])
+
     def _attach_metrics(result: dict) -> dict:
         result["tokens"]           = total_tokens
         result["premium_requests"] = total_premium
@@ -124,6 +163,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False) -> dict
         result["lines_added"]      = total_lines_added
         result["lines_removed"]    = total_lines_removed
         result["files_modified"]   = all_files
+        result["session_metrics"]  = _session_metrics
         return result
 
     # Return cached result if available
