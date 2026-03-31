@@ -266,17 +266,23 @@ def _complexity_breakdown(goals: list) -> str:
 
     return f"""
   <tr>
-    <td style="background:{C['card']};padding:16px 24px 18px;
+    <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:10px">Work Complexity Breakdown</div>
-      <table width="100%" cellpadding="0" cellspacing="0"
-             style="border-radius:9px;overflow:hidden;border:1px solid {C['border']}">
-        <tr>{bar_cells}</tr>
-      </table>
-      <table cellpadding="0" cellspacing="0" style="margin-top:10px">
-        <tr>{legend_items}</tr>
-      </table>
+      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">Work Complexity</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          Distribution of effort by task category</div>
+      </div>
+      <div style="padding:14px 24px 18px">
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-radius:9px;overflow:hidden;border:1px solid {C['border']}">
+          <tr>{bar_cells}</tr>
+        </table>
+        <table cellpadding="0" cellspacing="0" style="margin-top:10px">
+          <tr>{legend_items}</tr>
+        </table>
+      </div>
     </td>
   </tr>"""
 
@@ -356,19 +362,23 @@ def _intent_breakdown(goals: list) -> str:
 
     return f"""
   <tr>
-    <td style="background:{C['card']};padding:16px 24px 18px;
+    <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:2px">Research &middot; Build &middot; Debug</div>
-      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
-        How Copilot time was distributed across work types</div>
-      <table width="100%" cellpadding="0" cellspacing="0"
-             style="border-radius:9px;overflow:hidden;border:1px solid {C['border']}">
-        <tr>{bar_cells}</tr>
-      </table>
-      <table cellpadding="0" cellspacing="0" style="margin-top:10px">
-        <tr>{legend_items}</tr>
-      </table>
+      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">How I Work</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          Research &middot; Build &middot; Debug &mdash; how Copilot time was distributed</div>
+      </div>
+      <div style="padding:14px 24px 18px">
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-radius:9px;overflow:hidden;border:1px solid {C['border']}">
+          <tr>{bar_cells}</tr>
+        </table>
+        <table cellpadding="0" cellspacing="0" style="margin-top:10px">
+          <tr>{legend_items}</tr>
+        </table>
+      </div>
     </td>
   </tr>"""
 
@@ -750,17 +760,21 @@ def _skills_mobilized(goals: list) -> str:
 
     return f"""
   <tr>
-    <td style="background:{C['card']};padding:14px 24px 18px;
+    <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:4px">Specialist Skills Augmented</div>
-      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
-        Copilot augmented <strong style="color:{C['text']}">{n_roles} specialist skill sets</strong>
-        across {total_tasks} tasks &mdash; enabling work that would otherwise require
-        additional expertise or consulting.</div>
-      <table width="100%" cellpadding="0" cellspacing="0">
-        <tr>{cards}</tr>
-      </table>
+      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">Specialist Skills Augmented</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          Copilot augmented <strong style="color:rgba(255,255,255,0.8)">{n_roles} skill sets</strong>
+          across {total_tasks} tasks &mdash; enabling work that would otherwise require
+          additional expertise</div>
+      </div>
+      <div style="padding:14px 24px 18px">
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>{cards}</tr>
+        </table>
+      </div>
     </td>
   </tr>"""
 
