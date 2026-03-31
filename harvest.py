@@ -297,3 +297,163 @@ def compute_active_minutes(messages: list) -> float:
 
     active_s += 30  # buffer for final message processing
     return round(active_s / 60, 1)
+
+
+# ── Intent Classification ────────────────────────────────────────────────────
+
+_INTENT_CATEGORIES = {
+    "Building":      _re.compile(r"\b(create|add|generate|implement|write|make|build|produce|include|set up|initialize|scaffold|install|open it|rerun|run)\b", _re.I),
+    "Investigating": _re.compile(r"\b(examine|why does|why is|what.s going on|debug|diagnose|analyze what|look at this|can you examine|what.s wrong|trace|root cause|broken|fails|failing|error|identical.+different)\b", _re.I),
+    "Designing":     _re.compile(r"\b(redesign|prominent|visual|layout|style|look like|look more|distinction|spacing|story|compelling|section|appearance|prototype|mockup|wireframe|branding|banner)\b", _re.I),
+    "Researching":   _re.compile(r"\b(what.s the|how does|how do|are there|can i do|do they|what can|what would|how come|cost|limit|explain|compare|difference|option)\b", _re.I),
+    "Iterating":     _re.compile(r"\b(adjust|simplify|change the|not impressed|didn.t like|better|improve|also like|refine|tweak|move this|swap|resize|reorder|reduce|remove the)\b", _re.I),
+    "Shipping":      _re.compile(r"\b(commit|push|pr\b|pull request|merge|deploy|ship|tag|release|check.?in)\b", _re.I),
+    "Planning":      _re.compile(r"\b(plan|propose|approach|strategy|stages|phases|priority|before that|options|go ahead|wait for)\b", _re.I),
+    "Testing":       _re.compile(r"\b(test|verify|validate|check if|smoke|does it work|try it|confirm)\b", _re.I),
+    "Configuring":   _re.compile(r"\b(config|setup|auth|login|permission|access|credential|settings|env|alias|profile)\b", _re.I),
+    "Navigating":    _re.compile(r"\b(find|search|where is|show me|list|fetch|locate|get the latest|look for)\b", _re.I),
+}
+
+_INTENT_ICONS = {
+    "Building":      "&#128679;",  # 🏗
+    "Investigating": "&#128300;",  # 🔬
+    "Designing":     "&#127912;",  # 🎨
+    "Researching":   "&#128202;",  # 📊
+    "Iterating":     "&#128260;",  # 🔄
+    "Shipping":      "&#128640;",  # 🚀
+    "Planning":      "&#128203;",  # 📋
+    "Testing":       "&#9989;",    # ✅
+    "Configuring":   "&#9881;",    # ⚙
+    "Navigating":    "&#129517;",  # 🧭
+}
+
+_INTENT_COLORS = {
+    "Building":      "#0078d4",
+    "Investigating": "#e65100",
+    "Designing":     "#7b1fa2",
+    "Researching":   "#1a7f37",
+    "Iterating":     "#0969da",
+    "Shipping":      "#cf222e",
+    "Planning":      "#8250df",
+    "Testing":       "#1a7f37",
+    "Configuring":   "#6a737d",
+    "Navigating":    "#bf8700",
+}
+
+
+def classify_message_intent(text: str) -> list[str]:
+    """Classify a single user message into one or more intent categories."""
+    matched = []
+    for cat, rx in _INTENT_CATEGORIES.items():
+        if rx.search(text[:300]):
+            matched.append(cat)
+    return matched or ["Building"]
+
+
+def classify_session_intents(session: dict) -> dict:
+    """Classify all user messages in a session and return aggregated intent data.
+
+    Returns dict with:
+      - counts: {category: int} — message count per intent
+      - timeline: [(timestamp, category), ...] — ordered intent sequence
+      - total: int — total classified messages
+    """
+    counts: dict = {k: 0 for k in _INTENT_CATEGORIES}
+    timeline: list = []
+
+    for m in session.get("messages", []):
+        if m.get("role") != "user":
+            continue
+        intents = classify_message_intent(m.get("text", ""))
+        ts = m.get("timestamp", "")
+        for cat in intents:
+            counts[cat] += 1
+        if ts and intents:
+            timeline.append((ts, intents[0]))  # primary intent for timeline
+
+    # Auto-collapse: categories < 5% merge into nearest semantic parent
+    total = sum(counts.values()) or 1
+    _MERGE_MAP = {
+        "Navigating":  "Researching",
+        "Configuring": "Building",
+        "Testing":     "Building",
+        "Planning":    "Researching",
+    }
+    collapsed = dict(counts)
+    for small_cat, parent in _MERGE_MAP.items():
+        if counts[small_cat] / total < 0.05 and counts[small_cat] > 0:
+            collapsed[parent] += collapsed[small_cat]
+            collapsed[small_cat] = 0
+
+    # Remove zero-count categories
+    collapsed = {k: v for k, v in collapsed.items() if v > 0}
+
+    return {
+        "counts": collapsed,
+        "counts_raw": {k: v for k, v in counts.items() if v > 0},
+        "timeline": timeline,
+        "total": sum(counts.values()),
+    }
+
+
+def aggregate_intents(sessions: list) -> dict:
+    """Aggregate intent data across multiple sessions.
+
+    Returns dict with:
+      - counts: {category: int} — total counts (with auto-collapse)
+      - by_project: {project: {category: int}} — per-project breakdown
+      - timeline: [(timestamp, category), ...] — merged timeline
+      - total: int
+    """
+    totals: dict = {k: 0 for k in _INTENT_CATEGORIES}
+    by_project: dict = {}
+    timeline: list = []
+
+    for s in sessions:
+        proj = s.get("project", "unknown")
+        si = classify_session_intents(s)
+
+        for cat, n in si["counts_raw"].items():
+            totals[cat] = totals.get(cat, 0) + n
+
+        if proj not in by_project:
+            by_project[proj] = {k: 0 for k in _INTENT_CATEGORIES}
+        for cat, n in si["counts_raw"].items():
+            by_project[proj][cat] = by_project[proj].get(cat, 0) + n
+
+        timeline.extend(si["timeline"])
+
+    # Auto-collapse at aggregate level
+    total = sum(totals.values()) or 1
+    _MERGE_MAP = {
+        "Navigating":  "Researching",
+        "Configuring": "Building",
+        "Testing":     "Building",
+        "Planning":    "Researching",
+    }
+    collapsed = dict(totals)
+    for small_cat, parent in _MERGE_MAP.items():
+        if totals[small_cat] / total < 0.05 and totals[small_cat] > 0:
+            collapsed[parent] += collapsed[small_cat]
+            collapsed[small_cat] = 0
+    collapsed = {k: v for k, v in collapsed.items() if v > 0}
+
+    # Collapse per-project too
+    collapsed_by_project = {}
+    for proj, pcounts in by_project.items():
+        ptotal = sum(pcounts.values()) or 1
+        pc = dict(pcounts)
+        for small_cat, parent in _MERGE_MAP.items():
+            if pcounts[small_cat] / ptotal < 0.05 and pcounts[small_cat] > 0:
+                pc[parent] += pc[small_cat]
+                pc[small_cat] = 0
+        collapsed_by_project[proj] = {k: v for k, v in pc.items() if v > 0}
+
+    timeline.sort(key=lambda x: x[0])
+
+    return {
+        "counts": collapsed,
+        "by_project": collapsed_by_project,
+        "timeline": timeline,
+        "total": sum(totals.values()),
+    }

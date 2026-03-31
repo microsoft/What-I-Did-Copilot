@@ -1,6 +1,9 @@
 """
 report.py — Daily digest HTML for GitHub Copilot sessions.
-Layout: Header → Narrative → Leverage Banner → KPI cards → What I Work On → Skills I Augment → How I Work → Goals summary → Pricing/Activity → Task accordion
+Layout: Act 1 (Story) → Act 2 (Journey) → Act 3 (Evidence)
+  Act 1: Header → Narrative → KPIs → ROI
+  Act 2: How I Collaborated → What Got Built → Skills Augmented → When I Worked
+  Act 3: What Got Accomplished → Pricing → Estimation Evidence
 """
 from datetime import datetime, timezone
 from harvest import compute_elapsed_minutes
@@ -376,14 +379,18 @@ def _what_i_work_on(goals: list, sessions: list) -> str:
 
     return f"""
   <tr>
-    <td style="background:{C['card']};padding:16px 24px 18px;
+    <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:4px">WHAT I WORK ON</div>
-      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
-        Distribution of effort and deliverables</div>
+      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">What Got Built</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          Distribution of effort and deliverables produced</div>
+      </div>
+      <div style="padding:14px 24px 18px">
       {complexity_html}
       {deliverables_html}
+      </div>
     </td>
   </tr>"""
 
@@ -592,12 +599,15 @@ def _work_pattern(sessions: list) -> str:
 
     return f"""
   <tr>
-    <td style="background:{C['card']};padding:16px 24px 18px;
+    <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:4px">HOW I WORK</div>
-      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
-        When Copilot-assisted work happened</div>
+      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">When I Worked</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          When Copilot-assisted work happened during the day</div>
+      </div>
+      <div style="padding:14px 24px 18px">
       <table width="100%" cellpadding="0" cellspacing="0">
         {rows}
       </table>
@@ -610,6 +620,187 @@ def _work_pattern(sessions: list) -> str:
       </div>
       <div id="daily-detail-tasks" style="display:none;margin-top:8px">
         {_daily_activity_detail(sessions)}
+      </div>
+      </div>
+    </td>
+  </tr>"""
+
+
+def _collaboration_intent(sessions: list, goals: list) -> str:
+    """Section: 'How I Collaborated' — intent classification with stacked bar + timeline."""
+    from harvest import aggregate_intents, _INTENT_COLORS, _INTENT_ICONS
+
+    intent_data = aggregate_intents(sessions)
+    counts = intent_data["counts"]
+    timeline = intent_data["timeline"]
+    by_project = intent_data["by_project"]
+    total = intent_data["total"]
+
+    if total == 0:
+        return ""
+
+    # Sort categories by count descending, take top 6
+    sorted_cats = sorted(counts.items(), key=lambda x: -x[1])
+    if len(sorted_cats) > 6:
+        top = sorted_cats[:5]
+        other_count = sum(v for _, v in sorted_cats[5:])
+        top.append(("Other", other_count))
+    else:
+        top = sorted_cats
+
+    # Stacked bar
+    bar_cells = ""
+    for cat, n in top:
+        pct = n / total * 100
+        if pct < 2:
+            continue
+        color = _INTENT_COLORS.get(cat, C["muted"])
+        bar_cells += (
+            f'<td style="width:{pct:.1f}%;background:{color};height:22px;'
+            f'font-size:0;line-height:0;padding:0"></td>'
+        )
+
+    # Legend
+    legend_items = ""
+    for cat, n in top:
+        pct = n / total * 100
+        if n == 0:
+            continue
+        color = _INTENT_COLORS.get(cat, C["muted"])
+        icon = _INTENT_ICONS.get(cat, "&#128161;")
+        legend_items += (
+            f'<td style="padding:4px 14px 4px 0;vertical-align:middle;white-space:nowrap">'
+            f'<span style="display:inline-block;width:10px;height:10px;background:{color};'
+            f'border-radius:2px;margin-right:5px;vertical-align:middle"></span>'
+            f'<span style="font-size:11px;font-weight:600;color:{C["text"]};'
+            f'vertical-align:middle">{icon} {cat}</span>'
+            f'<span style="font-size:10px;color:{C["muted"]};margin-left:5px;'
+            f'vertical-align:middle">{n} ({pct:.0f}%)</span>'
+            f'</td>'
+        )
+
+    # Top intent insight line
+    top_cat, top_n = top[0]
+    top_pct = round(top_n / total * 100)
+    n_modes = len([c for c, n in top if n > 0])
+    insight = (
+        f'Worked across <strong style="color:{C["text"]}">{n_modes} collaboration modes</strong>. '
+        f'Primary mode: <strong style="color:{_INTENT_COLORS.get(top_cat, C["accent"])}">'
+        f'{top_cat}</strong> ({top_pct}% of interactions)'
+    )
+
+    # Timeline strip (expandable)
+    timeline_html = ""
+    if timeline:
+        # Convert timestamps to local time and build colored segments
+        segments = ""
+        for ts, cat in timeline:
+            color = _INTENT_COLORS.get(cat, C["muted"])
+            try:
+                local_dt = _utc_to_local(ts)
+                tip = f"{local_dt.strftime('%I:%M%p').lstrip('0')} {cat}"
+            except Exception:
+                tip = cat
+            segments += (
+                f'<td style="background:{color};height:14px;padding:0;'
+                f'font-size:0;line-height:0" title="{tip}"></td>'
+            )
+
+        # Time labels
+        try:
+            first_local = _utc_to_local(timeline[0][0])
+            last_local = _utc_to_local(timeline[-1][0])
+            t_start = first_local.strftime("%I:%M%p").lstrip("0")
+            t_end = last_local.strftime("%I:%M%p").lstrip("0")
+        except Exception:
+            t_start = ""
+            t_end = ""
+
+        timeline_html = f"""
+          <div style="margin-top:8px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+              <span style="font-size:9px;color:{C['muted']}">{t_start}</span>
+              <span style="font-size:9px;color:{C['muted']}">Collaboration journey through the day</span>
+              <span style="font-size:9px;color:{C['muted']}">{t_end}</span>
+            </div>
+            <table width="100%" cellpadding="0" cellspacing="1"
+                   style="border-radius:6px;overflow:hidden;table-layout:fixed">
+              <tr>{segments}</tr>
+            </table>
+          </div>"""
+
+    # Per-project mini-bars (only if multiple projects)
+    project_bars_html = ""
+    if len(by_project) > 1:
+        proj_rows = ""
+        for proj, pcounts in sorted(by_project.items(), key=lambda x: -sum(x[1].values())):
+            ptotal = sum(pcounts.values())
+            if ptotal == 0:
+                continue
+            proj_sorted = sorted(pcounts.items(), key=lambda x: -x[1])
+            proj_bar = ""
+            for cat, n in proj_sorted:
+                pct = n / ptotal * 100
+                if pct < 3:
+                    continue
+                color = _INTENT_COLORS.get(cat, C["muted"])
+                proj_bar += (
+                    f'<td style="width:{pct:.1f}%;background:{color};height:12px;'
+                    f'font-size:0;padding:0"></td>'
+                )
+            # Top 2 labels
+            top2 = [f'{c} {round(n/ptotal*100)}%' for c, n in proj_sorted[:2] if n > 0]
+            proj_rows += (
+                f'<tr>'
+                f'<td style="padding:4px 10px 4px 0;font-size:10px;font-weight:600;'
+                f'color:{C["text"]};white-space:nowrap;width:120px;vertical-align:middle">{proj}</td>'
+                f'<td style="padding:4px 0;vertical-align:middle">'
+                f'<table width="100%" cellpadding="0" cellspacing="0" '
+                f'style="border-radius:4px;overflow:hidden"><tr>{proj_bar}</tr></table></td>'
+                f'<td style="padding:4px 0 4px 10px;font-size:9px;color:{C["muted"]};'
+                f'white-space:nowrap;width:140px;vertical-align:middle">{" · ".join(top2)}</td>'
+                f'</tr>'
+            )
+
+        if proj_rows:
+            project_bars_html = f"""
+            <div style="border-top:1px solid {C['border']};margin-top:12px;padding-top:10px">
+              <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
+                          color:{C['muted']};margin-bottom:6px">By Project</div>
+              <table width="100%" cellpadding="0" cellspacing="0">{proj_rows}</table>
+            </div>"""
+
+    return f"""
+  <tr>
+    <td style="background:{C['card']};padding:0;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">How I Collaborated</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          Intent behind every interaction &mdash; from research to shipping</div>
+      </div>
+      <div style="padding:14px 24px 16px">
+        <div style="font-size:11px;color:{C['muted']};margin-bottom:10px;line-height:1.5">
+          {insight}
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-radius:9px;overflow:hidden;border:1px solid {C['border']}">
+          <tr>{bar_cells}</tr>
+        </table>
+        <table cellpadding="0" cellspacing="0" style="margin-top:8px">
+          <tr>{legend_items}</tr>
+        </table>
+        <div id="intent-timeline-hdr" style="cursor:pointer;padding:6px 0 0;margin-top:6px"
+             onclick="toggleDetail('intent-timeline')">
+          <span id="intent-timeline-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
+          <span style="font-size:10px;font-weight:600;color:{C['accent']}">See collaboration journey</span>
+          <span style="font-size:10px;color:{C['muted']};margin-left:8px">How intent shifted through the day</span>
+        </div>
+        <div id="intent-timeline-tasks" style="display:none">
+          {timeline_html}
+        </div>
+        {project_bars_html}
       </div>
     </td>
   </tr>"""
@@ -684,7 +875,7 @@ def _skills_mobilized(goals: list) -> str:
     <td style="background:{C['card']};padding:16px 24px 18px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:4px">SKILLS I AUGMENT</div>
+                  color:{C['muted']};margin-bottom:4px">SKILLS AUGMENTED</div>
       <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
         Copilot augmented <strong style="color:{C['text']}">{n_roles} skill sets</strong>
         across {total_tasks} tasks</div>
@@ -1099,33 +1290,57 @@ def _date_badge(iso_date: str) -> str:
 
 
 def _narrative_block(goals: list, fallback: str) -> str:
-    """McKinsey-style summary: intro line + numbered bold-label list."""
+    """Story-style narrative: flowing prose with bold project labels, not a dry numbered list."""
     n = len(goals)
     if not goals:
         return f'<div style="font-size:13px;line-height:1.65;color:{C["text"]}">{fallback}</div>'
 
-    count_word = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}.get(n, str(n))
-    plural = "pieces of work" if n != 1 else "piece of work"
-    intro = (f'<div style="font-size:13px;color:{C["text"]};margin-bottom:10px;line-height:1.5">'
-             f'Completed {count_word} distinct {plural}:</div>')
+    total_h = sum(g.get("human_hours", 0) for g in goals)
+    total_tasks = sum(len(g.get("tasks", [])) for g in goals)
 
-    items = ""
-    for i, g in enumerate(goals):
-        label      = g.get("label") or g.get("title", f"Goal {i+1}")
-        summary    = g.get("summary", "")
+    # Opening sentence — frame the impact
+    if n == 1:
+        g = goals[0]
+        label = g.get("label") or g.get("title", "")
+        summary = g.get("summary", "")
         date_badge = _date_badge(g.get("date", ""))
-        items += (
-            f'<div style="display:flex;align-items:baseline;margin-bottom:7px;'
-            f'font-size:13px;line-height:1.55">'
-            f'<span style="color:{C["accent"]};font-weight:700;min-width:18px;'
-            f'margin-right:6px">{i+1}.</span>'
-            f'<span>{date_badge}'
-            f'<span style="font-weight:700;color:{C["text"]}">{label}:</span>'
-            f'&nbsp;<span style="color:{C["muted"]}">{summary}</span></span>'
+        opening = (
+            f'<div style="font-size:14px;color:{C["text"]};line-height:1.6;margin-bottom:6px">'
+            f'{date_badge}'
+            f'<strong style="color:{C["accent"]}">{label}</strong>'
+            f'</div>'
+            f'<div style="font-size:12px;color:{C["muted"]};line-height:1.6">'
+            f'{summary}'
             f'</div>'
         )
+    else:
+        # Multi-goal: opening paragraph + compact project list
+        count_word = {2: "two", 3: "three", 4: "four", 5: "five"}.get(n, str(n))
+        opening = (
+            f'<div style="font-size:13px;color:{C["text"]};line-height:1.6;margin-bottom:10px">'
+            f'Drove <strong>{count_word} projects</strong> forward, '
+            f'spanning {total_tasks} distinct tasks and an estimated '
+            f'<strong style="color:{C["accent"]}">{_fmt_h(total_h)}</strong> '
+            f'of professional effort:</div>'
+        )
+        items = ""
+        for i, g in enumerate(goals):
+            label = g.get("label") or g.get("title", f"Goal {i+1}")
+            summary = g.get("summary", "")
+            date_badge = _date_badge(g.get("date", ""))
+            items += (
+                f'<div style="display:flex;align-items:baseline;margin-bottom:7px;'
+                f'font-size:13px;line-height:1.55">'
+                f'<span style="color:{C["accent"]};font-weight:700;min-width:18px;'
+                f'margin-right:6px">{i+1}.</span>'
+                f'<span>{date_badge}'
+                f'<span style="font-weight:700;color:{C["text"]}">{label}:</span>'
+                f'&nbsp;<span style="color:{C["muted"]}">{summary}</span></span>'
+                f'</div>'
+            )
+        opening += items
 
-    return intro + items
+    return opening
 
 
 def _activity_bar(analysis: dict) -> str:
@@ -1579,6 +1794,7 @@ window.onload = function() {
 
   {heuristic_banner}
 
+  <!-- ACT 1: THE STORY -->
   <!-- NARRATIVE -->
   <tr>
     <td style="background:{C['card']};padding:16px 24px 18px;
@@ -1587,11 +1803,14 @@ window.onload = function() {
     </td>
   </tr>
 
-  {_leverage_banner(goals, analysis)}
-
   {_kpi_section(goals, analysis, n_sessions,
               sum(s.get("git_ops", []).count("pr") for s in sessions),
               sum(s.get("git_ops", []).count("commit") for s in sessions))}
+
+  {_leverage_banner(goals, analysis)}
+
+  <!-- ACT 2: THE JOURNEY -->
+  {_collaboration_intent(sessions, goals)}
 
   {_what_i_work_on(goals, sessions)}
 
@@ -1599,12 +1818,18 @@ window.onload = function() {
 
   {_work_pattern(sessions)}
 
+  <!-- ACT 3: THE EVIDENCE -->
   <!-- GOALS SUMMARY TABLE -->
   <tr>
-    <td style="background:{C['card']};padding:0 24px 16px;
+    <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};padding:0 0 8px 0">What got accomplished</div>
+      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">What Got Accomplished</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          Detailed project breakdown with task-level evidence</div>
+      </div>
+      <div style="padding:14px 24px 16px">
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
         {_goals_summary(goals, session_lookup, analysis.get("session_metrics", {}))}
@@ -1613,6 +1838,7 @@ window.onload = function() {
       <div id="expand-hint" style="display:none;font-size:11px;color:{C['muted']};
                                     text-align:right;margin-top:6px">
         Click a project to see task details &#9656;
+      </div>
       </div>
     </td>
   </tr>
