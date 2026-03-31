@@ -70,7 +70,7 @@ def _parse_date(s: str) -> str:
     try:
         return date.fromisoformat(cleaned).isoformat()
     except ValueError:
-        print(f"  ⚠ Could not parse date '{s}'. Expected YYYY-MM-DD, MM-DD-YYYY, MM/DD/YYYY, or 7D/30D.")
+        print(f"  WARNING: Could not parse date '{s}'. Expected YYYY-MM-DD, MM-DD-YYYY, MM/DD/YYYY, or 7D/30D.")
         sys.exit(1)
 
 
@@ -238,18 +238,18 @@ def main():
     MAX_RETRIES = 5
     RETRY_WAIT  = 60  # 1 minute
     api_ok = False
-    print(f"  Checking AI analysis API... ", end="", flush=True)
+    print("  Checking AI analysis API... ", end="", flush=True)
     status, msg = check_api_health()
     if status == "ok":
-        print("✓ connected.")
+        print("[OK] connected.")
         api_ok = True
     elif status == "auth":
-        print(f"✗ {msg}")
-        print(f"\n  ⚠ This is an authentication issue — retrying won't help.")
+        print(f"[FAIL] {msg}")
+        print(f"\n  WARNING: This is an authentication issue -- retrying won't help.")
         print(f"  Fix: run `gh auth login` in your terminal, then re-run.\n")
         print(f"  Proceeding with heuristic fallback.\n")
     else:
-        print(f"✗ {msg}\n")
+        print(f"[FAIL] {msg}\n")
         print(f"  The AI analysis API is currently unreachable.")
         print(f"  Without it, estimates will use a less accurate heuristic approach.\n")
         print(f"  Options:")
@@ -272,17 +272,17 @@ def main():
                     break
                 status, msg = check_api_health()
                 if status == "ok":
-                    print("✓ connected!")
+                    print("[OK] connected!")
                     api_ok = True
                     break
                 elif status == "auth":
-                    print(f"✗ {msg}")
+                    print(f"[FAIL] {msg}")
                     print(f"  Authentication issue detected. Run `gh auth login` to fix.\n")
                     break
                 else:
-                    print(f"✗ {msg}")
+                    print(f"[FAIL] {msg}")
             else:
-                print(f"\n  ⚠ API unreachable after {MAX_RETRIES} attempts.")
+                print(f"\n  WARNING: API unreachable after {MAX_RETRIES} attempts.")
                 print(f"  Proceeding with heuristic fallback.\n")
 
     day_analyses = []
@@ -311,7 +311,7 @@ def main():
     if heuristic_dates:
         n = len(heuristic_dates)
         total = len(analysis.get("active_dates", []))
-        print(f"\n  ⚠ WARNING: {n}/{total} day(s) used heuristic fallback (API unavailable).")
+        print(f"\n  WARNING: {n}/{total} day(s) used heuristic fallback (API unavailable).")
         print(f"  Estimates for those days are approximate and likely inflated.")
         print(f"  Re-run with --refresh when the GitHub Models API is available for accurate results.")
 
@@ -338,7 +338,7 @@ def main():
 
     print("\nDone.")
     if today in [d for d in dates]:
-        print("  ℹ Note: Active sessions (still open) may show incomplete metrics.")
+        print("  Note: Active sessions (still open) may show incomplete metrics.")
         print("    Close your Copilot session and re-run for full code/token data.")
     print()
 

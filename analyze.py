@@ -209,7 +209,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False) -> dict
             cached = json.loads(cache_file.read_text(encoding="utf-8"))
             method = cached.get("analysis_method", "ai")
             if method == "heuristic":
-                print("  ⚠ Using cached HEURISTIC analysis — estimates are approximate. Pass --refresh to re-analyse with AI.")
+                print("  WARNING: Using cached HEURISTIC analysis -- estimates are approximate. Pass --refresh to re-analyse with AI.")
             else:
                 print("  (Using cached analysis — pass --refresh to re-analyse.)")
             return _attach_metrics(cached)
@@ -376,10 +376,10 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
 
     except urllib.error.HTTPError as e:
         body = e.read().decode()[:300]
-        print(f"  ⚠ API error {e.code}: {body}")
-        print("  ⚠ Using heuristic fallback — estimates will be approximate. Re-run with --refresh when API is available.")
+        print(f"  WARNING: API error {e.code}: {body}")
+        print("  Using heuristic fallback -- estimates will be approximate. Re-run with --refresh when API is available.")
     except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
-        print(f"  ⚠ API unavailable ({type(e).__name__}). Using heuristic fallback — estimates will be approximate.")
+        print(f"  WARNING: API unavailable ({type(e).__name__}). Using heuristic fallback -- estimates will be approximate.")
 
     return _attach_metrics(_fallback_analysis(target_date, sessions))
 

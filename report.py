@@ -518,15 +518,20 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         </tr>"""
 
     return f"""
-      <div style="font-size:10px;color:{C['muted']};margin-bottom:8px;line-height:1.5">
-        <strong style="color:{C['text']}">Formula:</strong>
-        <code style="font-size:10px;background:{C['subtle']};padding:2px 6px;border-radius:3px;
-                     color:{C['accent']}">max(tools, requests, active) + lines</code>
-        &mdash; the highest correlated signal drives the base; lines of code add independently.
-        Top row = raw values, bottom row = multipliers.
-        <strong style="color:{C['accent']}">Bold multiplier</strong> = max signal (base driver).
-        <span style="color:{C['accent']}">Blue</span> = formula,
-        <span style="color:{C['green']}">green</span> = AI estimate.
+      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px;line-height:1.6">
+        <strong style="color:{C['text']}">How to read this table:</strong>
+        Each row shows a project's raw session data (top) and the hour multiplier each signal
+        maps to (bottom). The <strong style="color:{C['accent']}">highest multiplier</strong>
+        among tools, requests, and active time becomes the base estimate.
+        Lines of code are added on top. Result is capped at 6h.
+      </div>
+      <div style="font-size:10px;color:{C['muted']};margin-bottom:10px;padding:8px 12px;
+                  background:{C['subtle']};border-radius:6px;border:1px solid {C['border']}">
+        <code style="font-size:10px;color:{C['accent']}">estimate = max(tools, requests, active) + lines</code>
+        &nbsp;&nbsp;
+        <span style="color:{C['accent']}">&#9632;</span> Formula &nbsp;
+        <span style="color:{C['green']}">&#9632;</span> AI estimate &nbsp;
+        <strong style="color:{C['accent']}">Bold</strong> = highest signal
       </div>
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
@@ -816,44 +821,26 @@ def _activity_bar(analysis: dict) -> str:
     active_days = max(1, len(analysis.get("active_dates", ["x"])))
     days_label = f"{active_days} day{'s' if active_days != 1 else ''}"
 
-    # Pricing comparison — 3-card layout
+    # Pricing — compact inline row (not the main story)
     pricing_row = f"""
   <tr>
-    <td style="background:{C['bg']};padding:8px 24px 0;
-               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};padding-bottom:6px">Fixed vs. Market Pricing</div>
-      <table width="100%" cellpadding="0" cellspacing="0">
-        <tr>
-          <td style="width:33%;padding:0 6px 12px 0">
-            <div style="background:{C['card']};border:1px solid {C['border']};border-radius:8px;
-                        padding:14px 16px;text-align:center">
-              <div style="font-size:10px;font-weight:700;text-transform:uppercase;
-                          letter-spacing:0.8px;color:{C['muted']};margin-bottom:6px">Market API Rate</div>
-              <div style="font-size:26px;font-weight:700;color:{C['text']};letter-spacing:-0.5px">~${market_cost:.2f}</div>
-              <div style="font-size:11px;color:{C['muted']};margin-top:4px">{tok_str} tokens · Anthropic list price</div>
-            </div>
-          </td>
-          <td style="width:33%;padding:0 3px 12px 3px">
-            <div style="background:{C['green_lt']};border:1px solid #b7ddb0;border-radius:8px;
-                        padding:14px 16px;text-align:center">
-              <div style="font-size:10px;font-weight:700;text-transform:uppercase;
-                          letter-spacing:0.8px;color:{C['green']};margin-bottom:6px">Copilot Fixed Seat</div>
-              <div style="font-size:26px;font-weight:700;color:{C['green']};letter-spacing:-0.5px">{seat_label}</div>
-              <div style="font-size:11px;color:{C['green']};margin-top:4px">Enterprise plan · fixed price</div>
-            </div>
-          </td>
-          <td style="width:33%;padding:0 0 12px 6px">
-            <div style="background:{C['green']};border-radius:8px;
-                        padding:14px 16px;text-align:center">
-              <div style="font-size:10px;font-weight:700;text-transform:uppercase;
-                          letter-spacing:0.8px;color:rgba(255,255,255,0.7);margin-bottom:6px">You Saved</div>
-              <div style="font-size:26px;font-weight:700;color:#fff;letter-spacing:-0.5px">~${savings:.2f}</div>
-              <div style="font-size:11px;color:rgba(255,255,255,0.8);margin-top:4px">{savings_x}x cheaper than pay-per-token</div>
-            </div>
-          </td>
-        </tr>
-      </table>
+    <td style="background:{C['subtle']};padding:9px 24px;
+               border:1px solid {C['border']}">
+      <span style="font-size:10px;font-weight:700;text-transform:uppercase;
+                   letter-spacing:0.7px;color:{C['muted']};margin-right:10px">Cost</span>
+      <span style="font-size:11px;color:{C['text']}">
+        <span style="color:{C['muted']}">Copilot seat</span> <strong>{seat_label}</strong>
+        <span style="font-size:10px;color:{C['muted']}">(Enterprise, fixed)</span>
+      </span>
+      &nbsp;&nbsp;·&nbsp;&nbsp;
+      <span style="font-size:11px;color:{C['text']}">
+        <span style="color:{C['muted']}">Market API rate</span> <strong>~${market_cost:.2f}</strong>
+        <span style="font-size:10px;color:{C['muted']}">({tok_str} tokens)</span>
+      </span>
+      &nbsp;&nbsp;·&nbsp;&nbsp;
+      <span style="font-size:11px;color:{C['green']}">
+        Saved <strong>~${savings:.2f}</strong>
+      </span>
     </td>
   </tr>"""
 
