@@ -51,11 +51,14 @@ def _get_github_token() -> str:
 def check_api_health() -> tuple:
     """Quick connectivity check to the GitHub Models API.
 
-    Returns (ok: bool, message: str).
+    Returns (status: str, message: str) where status is one of:
+      "ok"        — API reachable and authenticated
+      "auth"      — reachable but authentication failed (don't retry)
+      "down"      — unreachable or server error (retry may help)
     """
     token = _get_github_token()
     if not token:
-        return False, "No GitHub token found. Run `gh auth login`."
+        return "auth", "No GitHub token found. Run `gh auth login`."
 
     # Minimal request — cheap and fast
     payload = json.dumps({
@@ -70,14 +73,15 @@ def check_api_health() -> tuple:
     )
     try:
         with urllib.request.urlopen(req, timeout=15):
-            return True, "API reachable."
+            return "ok", "API reachable."
     except urllib.error.HTTPError as e:
-        return False, f"API returned HTTP {e.code}."
-    except urllib.error.URLError as e:
-        reason = getattr(e, 'reason', e)
-        return False, f"API unreachable ({reason})."
+        if e.code in (401, 403):
+            return "auth", f"Authentication failed (HTTP {e.code}). Run `gh auth login` to refresh your token."
+        return "down", f"API returned HTTP {e.code}."
+    except urllib.error.URLError:
+        return "down", "API unreachable (timed out)."
     except Exception as e:
-        return False, f"API check failed ({e})."
+        return "down", f"API check failed ({e})."
 
 
 def _build_transcript(sessions: list) -> str:

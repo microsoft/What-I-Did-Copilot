@@ -178,28 +178,55 @@ def main():
 
     # Pre-flight: check if AI analysis API is reachable
     import time
-    MAX_RETRIES = 3
-    RETRY_WAIT  = 180  # 3 minutes
+    MAX_RETRIES = 5
+    RETRY_WAIT  = 60  # 1 minute
     api_ok = False
-    for attempt in range(1, MAX_RETRIES + 1):
-        print(f"  Checking AI analysis API... ", end="", flush=True)
-        ok, msg = check_api_health()
-        if ok:
-            print("✓ connected.")
-            api_ok = True
-            break
+    print(f"  Checking AI analysis API... ", end="", flush=True)
+    status, msg = check_api_health()
+    if status == "ok":
+        print("✓ connected.")
+        api_ok = True
+    elif status == "auth":
         print(f"✗ {msg}")
-        if attempt < MAX_RETRIES:
-            print(f"\n  API is unreachable. Retry {attempt}/{MAX_RETRIES} in {RETRY_WAIT // 60} minutes...")
-            print(f"  (Press Ctrl+C to skip and use heuristic fallback)\n")
-            try:
-                time.sleep(RETRY_WAIT)
-            except KeyboardInterrupt:
-                print("\n  Skipped. Proceeding with heuristic fallback.")
-                break
+        print(f"\n  ⚠ This is an authentication issue — retrying won't help.")
+        print(f"  Fix: run `gh auth login` in your terminal, then re-run.\n")
+        print(f"  Proceeding with heuristic fallback.\n")
+    else:
+        print(f"✗ {msg}\n")
+        print(f"  The AI analysis API is currently unreachable.")
+        print(f"  Without it, estimates will use a less accurate heuristic approach.\n")
+        print(f"  Options:")
+        print(f"    1. Retry automatically (up to {MAX_RETRIES}× at 1-min intervals)")
+        print(f"    2. Continue now with heuristic fallback\n")
+        try:
+            choice = input("  Enter choice [1]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            choice = "2"
+
+        if choice == "2":
+            print("\n  Proceeding with heuristic fallback.\n")
         else:
-            print(f"\n  ⚠ API unreachable after {MAX_RETRIES} attempts.")
-            print(f"  Proceeding with heuristic fallback — estimates will be approximate.\n")
+            for attempt in range(1, MAX_RETRIES + 1):
+                print(f"\n  Retry {attempt}/{MAX_RETRIES} — waiting {RETRY_WAIT}s... ", end="", flush=True)
+                try:
+                    time.sleep(RETRY_WAIT)
+                except KeyboardInterrupt:
+                    print("\n  Skipped. Proceeding with heuristic fallback.\n")
+                    break
+                status, msg = check_api_health()
+                if status == "ok":
+                    print("✓ connected!")
+                    api_ok = True
+                    break
+                elif status == "auth":
+                    print(f"✗ {msg}")
+                    print(f"  Authentication issue detected. Run `gh auth login` to fix.\n")
+                    break
+                else:
+                    print(f"✗ {msg}")
+            else:
+                print(f"\n  ⚠ API unreachable after {MAX_RETRIES} attempts.")
+                print(f"  Proceeding with heuristic fallback.\n")
 
     day_analyses = []
     all_sessions = []
