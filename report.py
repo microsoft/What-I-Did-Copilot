@@ -504,6 +504,113 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
             </div>"""
 
 
+def _signal_tier_table(title: str, icon: str, description: str, tiers: list) -> str:
+    """Render a single signal explanation table with tiers."""
+    rows = ""
+    for i, (range_label, hour_label, example) in enumerate(tiers):
+        bg = C["subtle"] if i % 2 == 0 else C["card"]
+        rows += (
+            f'<tr style="background:{bg}">'
+            f'<td style="padding:3px 10px;font-size:10px;font-weight:600;color:{C["text"]};'
+            f'border-bottom:1px solid {C["border"]};width:18%;white-space:nowrap">{range_label}</td>'
+            f'<td style="padding:3px 10px;font-size:10px;color:{C["muted"]};'
+            f'border-bottom:1px solid {C["border"]};width:82%">{example}</td>'
+            f'</tr>'
+        )
+    return f"""
+        <div style="margin-top:14px">
+          <div style="font-size:10px;font-weight:700;color:{C['text']};margin-bottom:2px">
+            {icon} {title}</div>
+          <div style="font-size:10px;color:{C['muted']};margin-bottom:6px;line-height:1.4">
+            {description}</div>
+          <table width="100%" cellpadding="0" cellspacing="0"
+                 style="border:1px solid {C['border']};border-radius:5px;overflow:hidden">
+            {rows}
+          </table>
+        </div>"""
+
+
+def _signal_guide() -> str:
+    """Detailed explanation of each session signal with tiered examples."""
+    tools = _signal_tier_table(
+        "Tool Invocations", "&#128295;",
+        "Each time Copilot performs a discrete action: read a file, edit code, run a command, "
+        "search, create a file. Higher counts indicate more complex, multi-step work.",
+        [
+            ("1–5",    "0.25h", "Quick task &mdash; open a file, make one edit, done. "
+                                "<em>\"Fix this typo in config.yaml\"</em>"),
+            ("5–15",   "0.5h",  "Small focused change &mdash; read a few files, edit a function, run tests. "
+                                "<em>\"Add error handling to the upload endpoint\"</em>"),
+            ("15–50",  "0.75h", "Moderate multi-file work &mdash; touch 3-4 files, debug, iterate. "
+                                "<em>\"Refactor the auth module to use JWT\"</em>"),
+            ("50–150", "1.5h",  "Substantial feature &mdash; design + implement across a module with tests. "
+                                "<em>\"Build the report generation pipeline\"</em>"),
+            ("150–400","3h",    "Major implementation &mdash; full tool or feature from scratch with iteration. "
+                                "<em>\"Ship an executive deck builder from concept to working system\"</em>"),
+            ("400+",   "5h",    "System overhaul &mdash; extensive multi-session redesign across many files. "
+                                "<em>\"Redesign the entire report layout with branding and ROI\"</em>"),
+        ]
+    )
+    reqs = _signal_tier_table(
+        "Premium Requests", "&#9889;",
+        "Opus/Sonnet-class model calls that consume your Copilot quota. Each represents a "
+        "round of deep AI reasoning. More requests = more back-and-forth collaboration.",
+        [
+            ("0",      "0h",    "No AI reasoning &mdash; script execution or file operations only"),
+            ("1–5",    "0.25h", "Quick consultation &mdash; ask one question, get answer, done. "
+                                "<em>\"What does this error mean?\"</em>"),
+            ("5–20",   "0.5h",  "Moderate back-and-forth &mdash; debug a problem, explore options. "
+                                "<em>\"Why is this test failing? Try a different approach\"</em>"),
+            ("20–50",  "1h",    "Extended collaboration &mdash; iterative feature build with refinement. "
+                                "<em>\"Build this component, now adjust the styling, now add tests\"</em>"),
+            ("50–100", "2h",    "Deep work session &mdash; complex design + implementation + review. "
+                                "<em>\"Architect the data pipeline and implement each stage\"</em>"),
+            ("100+",   "3h",    "Marathon partnership &mdash; sustained, intensive multi-hour collaboration. "
+                                "<em>\"Full system design through to deployment with 162 model calls\"</em>"),
+        ]
+    )
+    lines = _signal_tier_table(
+        "Lines of Code", "&#128196;",
+        "Net code added to the project. Indicates the volume of deliverable output &mdash; "
+        "more lines generally means more development and review work for a human.",
+        [
+            ("0",      "0h",    "Research or analysis only &mdash; investigation, planning, no code written"),
+            ("1–25",   "0.1h",  "Config tweak or small fix &mdash; change a setting, fix a one-liner"),
+            ("25–100", "0.25h", "Small feature &mdash; a new function, helper, or template. "
+                                "<em>\"Add a utility function with error handling\"</em>"),
+            ("100–300","0.5h",  "Moderate development &mdash; a new module or significant feature. "
+                                "<em>\"Build the session harvester with event parsing\"</em>"),
+            ("300+",   "1h",    "Substantial build &mdash; major feature, new tool, or extensive refactor. "
+                                "<em>\"Ship 405 lines of presentation generation code\"</em>"),
+        ]
+    )
+    active = _signal_tier_table(
+        "Active Engagement Time", "&#9201;",
+        "Time you were actively engaged with Copilot, excluding idle gaps longer than 5 minutes. "
+        "Measures how long the human-AI collaboration actually lasted.",
+        [
+            ("&lt; 2m", "0.25h", "Single question &mdash; quick lookup or one-shot edit"),
+            ("2–10m",   "0.5h",  "Focused task &mdash; fix a bug, write a function, short iteration"),
+            ("10–30m",  "1h",    "Working session &mdash; implement and test a feature with feedback"),
+            ("30–60m",  "2h",    "Deep work &mdash; multi-step design, implementation, and refinement"),
+            ("60m+",    "3h",    "Full focus block &mdash; comprehensive system work across many files"),
+        ]
+    )
+    return f"""
+        <div style="margin-top:16px;padding-top:12px;border-top:1px solid {C['border']}">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                      color:{C['muted']};margin-bottom:4px">What each signal means</div>
+          <div style="font-size:10px;color:{C['muted']};line-height:1.4;margin-bottom:4px">
+            These raw session signals are what the AI reads when estimating human effort.
+            Higher values in any signal indicate more complex work that would take longer without AI.
+          </div>
+          {tools}
+          {reqs}
+          {lines}
+          {active}
+        </div>"""
+
+
 def _date_badge(iso_date: str) -> str:
     if not iso_date:
         return ""
@@ -1157,6 +1264,7 @@ window.onload = function() {
       </div>
       <div id="evidence-tasks" style="display:none">
         {_estimation_waterfall_inner(goals, analysis)}
+        {_signal_guide()}
       </div>
     </td>
   </tr>
