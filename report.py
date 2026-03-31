@@ -1,6 +1,6 @@
 """
 report.py — Daily digest HTML for GitHub Copilot sessions.
-Layout: Header → Narrative → Leverage Banner → KPI cards → Complexity → Skills → Goals summary → Pricing/Activity → Task accordion
+Layout: Header → Narrative → Leverage Banner → KPI cards → What I Work On → Skills I Augment → How I Work → Goals summary → Pricing/Activity → Task accordion
 """
 from datetime import datetime
 from harvest import compute_elapsed_minutes
@@ -209,8 +209,11 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
 
 
 
-def _complexity_breakdown(goals: list) -> str:
-    """Horizontal stacked bar showing hours by task_type."""
+def _what_i_work_on(goals: list, sessions: list) -> str:
+    """Section 1: 'What I Work On' — complexity stacked bar + deliverables."""
+    import re
+
+    # ── Complexity stacked bar ──
     type_colors = {
         "Development":        C["accent"],
         "Bug Fix & Debug":    C["orange"],
@@ -219,7 +222,6 @@ def _complexity_breakdown(goals: list) -> str:
         "Execution & Ops":    C["muted"],
     }
 
-    # Aggregate hours by task_type
     hours_by_type: dict = {}
     for g in goals:
         for t in g.get("tasks", []):
@@ -227,62 +229,144 @@ def _complexity_breakdown(goals: list) -> str:
             if tt:
                 hours_by_type[tt] = hours_by_type.get(tt, 0) + t.get("human_hours", 0)
 
-    if not hours_by_type:
-        return ""
+    complexity_html = ""
+    if hours_by_type:
+        total_h = sum(hours_by_type.values()) or 1
 
-    total_h = sum(hours_by_type.values()) or 1
+        bar_cells = ""
+        for tt in type_colors:
+            h = hours_by_type.get(tt, 0)
+            if h <= 0:
+                continue
+            pct = h / total_h * 100
+            color = type_colors.get(tt, C["muted"])
+            bar_cells += (
+                f'<td style="width:{pct:.1f}%;background:{color};height:18px;'
+                f'font-size:0;line-height:0;padding:0"></td>'
+            )
 
-    # Build stacked bar segments (table cells)
-    bar_cells = ""
-    for tt in type_colors:
-        h = hours_by_type.get(tt, 0)
-        if h <= 0:
-            continue
-        pct = h / total_h * 100
-        color = type_colors.get(tt, C["muted"])
-        bar_cells += (
-            f'<td style="width:{pct:.1f}%;background:{color};height:18px;'
-            f'font-size:0;line-height:0;padding:0"></td>'
-        )
+        legend_items = ""
+        for tt in type_colors:
+            h = hours_by_type.get(tt, 0)
+            if h <= 0:
+                continue
+            pct = h / total_h * 100
+            color = type_colors.get(tt, C["muted"])
+            legend_items += (
+                f'<td style="padding:4px 16px 4px 0;vertical-align:middle;white-space:nowrap">'
+                f'<span style="display:inline-block;width:10px;height:10px;background:{color};'
+                f'border-radius:2px;margin-right:6px;vertical-align:middle"></span>'
+                f'<span style="font-size:12px;font-weight:600;color:{C["text"]};'
+                f'vertical-align:middle">{tt}</span>'
+                f'<span style="font-size:11px;color:{C["muted"]};margin-left:6px;'
+                f'vertical-align:middle">{_fmt_h(h)} ({pct:.0f}%)</span>'
+                f'</td>'
+            )
 
-    # Build legend rows
-    legend_items = ""
-    for tt in type_colors:
-        h = hours_by_type.get(tt, 0)
-        if h <= 0:
-            continue
-        pct = h / total_h * 100
-        color = type_colors.get(tt, C["muted"])
-        legend_items += (
-            f'<td style="padding:4px 16px 4px 0;vertical-align:middle;white-space:nowrap">'
-            f'<span style="display:inline-block;width:10px;height:10px;background:{color};'
-            f'border-radius:2px;margin-right:6px;vertical-align:middle"></span>'
-            f'<span style="font-size:12px;font-weight:600;color:{C["text"]};'
-            f'vertical-align:middle">{tt}</span>'
-            f'<span style="font-size:11px;color:{C["muted"]};margin-left:6px;'
-            f'vertical-align:middle">{_fmt_h(h)} ({pct:.0f}%)</span>'
-            f'</td>'
-        )
-
-    return f"""
-  <tr>
-    <td style="background:{C['card']};padding:0;
-               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
-        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
-                    color:rgba(255,255,255,0.7)">Work Complexity</div>
-        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-          Distribution of effort by task category</div>
-      </div>
-      <div style="padding:14px 24px 18px">
+        complexity_html = f"""
         <table width="100%" cellpadding="0" cellspacing="0"
                style="border-radius:9px;overflow:hidden;border:1px solid {C['border']}">
           <tr>{bar_cells}</tr>
         </table>
         <table cellpadding="0" cellspacing="0" style="margin-top:10px">
           <tr>{legend_items}</tr>
-        </table>
-      </div>
+        </table>"""
+
+    # ── Deliverables produced ──
+    file_categories = {
+        "Scripts":        {"icon": "&#128187;", "extensions": {".py", ".js", ".ts", ".sh", ".ps1"}},
+        "Reports":        {"icon": "&#128202;", "extensions": {".html"}},
+        "Documents":      {"icon": "&#128196;", "extensions": {".md", ".txt", ".docx", ".pdf"}},
+        "Data & Config":  {"icon": "&#9881;",   "extensions": {".json", ".yaml", ".yml", ".toml", ".env", ".gitignore", ".cfg"}},
+        "Presentations":  {"icon": "&#128209;", "extensions": {".pptx", ".ppt"}},
+    }
+
+    all_files: set = set()
+    for s in sessions:
+        for f in s.get("code_changes", {}).get("filesModified", []):
+            all_files.add(f.replace("\\", "/").split("/")[-1])
+        for msg in s.get("messages", []):
+            for tool in msg.get("tools_after", []):
+                m = re.search(r'(?:create|edit)[^/\\]*[\\/]([^\\/]+\.\w+)', tool, re.I)
+                if m:
+                    all_files.add(m.group(1))
+
+    deliverables_html = ""
+    if all_files:
+        counts: dict = {k: [] for k in file_categories}
+        for fname in sorted(all_files):
+            ext = "." + fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+            if fname.lower() == ".gitignore":
+                ext = ".gitignore"
+            for cat, info in file_categories.items():
+                if ext in info["extensions"]:
+                    counts[cat].append(fname)
+                    break
+
+        total_files = len(all_files)
+
+        cells = ""
+        for cat, info in file_categories.items():
+            c = len(counts[cat])
+            if c <= 0:
+                continue
+            file_preview = ", ".join(counts[cat][:3])
+            if len(counts[cat]) > 3:
+                file_preview += f" +{len(counts[cat]) - 3}"
+            cells += (
+                f'<td style="padding:8px 12px;text-align:center;vertical-align:top">'
+                f'<div style="font-size:24px;font-weight:700;color:{C["accent"]};line-height:1">{c}</div>'
+                f'<div style="font-size:10px;font-weight:600;color:{C["muted"]};margin-top:4px;'
+                f'text-transform:uppercase;letter-spacing:0.5px">{info["icon"]} {cat}</div>'
+                f'</td>'
+            )
+
+        # Build expandable file list
+        file_list_rows = ""
+        for cat, info in file_categories.items():
+            if not counts[cat]:
+                continue
+            fnames = ", ".join(f'<span style="font-size:10px;color:{C["text"]}">{fn}</span>'
+                               for fn in counts[cat])
+            file_list_rows += (
+                f'<tr><td style="padding:4px 0;font-size:10px;font-weight:600;'
+                f'color:{C["muted"]};white-space:nowrap;vertical-align:top;width:100px">'
+                f'{info["icon"]} {cat}</td>'
+                f'<td style="padding:4px 8px;font-size:10px;color:{C["text"]}">{fnames}</td></tr>'
+            )
+
+        deliverables_html = f"""
+        <div style="border-top:1px solid {C['border']};margin-top:14px;padding-top:12px">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                      color:{C['muted']};margin-bottom:2px">Deliverables Produced</div>
+          <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
+            <strong style="color:{C['text']}">{total_files} files</strong> created or modified</div>
+          <table cellpadding="0" cellspacing="0">
+            <tr>{cells}</tr>
+          </table>
+          <div id="deliverables-detail-hdr" style="cursor:pointer;padding:6px 0 0;margin-top:6px"
+               onclick="toggleDetail('deliverables-detail')">
+            <span id="deliverables-detail-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
+            <span style="font-size:10px;font-weight:600;color:{C['accent']}">Show file names</span>
+          </div>
+          <div id="deliverables-detail-tasks" style="display:none;margin-top:6px">
+            <table cellpadding="0" cellspacing="0" width="100%">{file_list_rows}</table>
+          </div>
+        </div>"""
+
+    if not complexity_html and not deliverables_html:
+        return ""
+
+    return f"""
+  <tr>
+    <td style="background:{C['card']};padding:16px 24px 18px;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                  color:{C['muted']};margin-bottom:4px">WHAT I WORK ON</div>
+      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
+        Distribution of effort and deliverables</div>
+      {complexity_html}
+      {deliverables_html}
     </td>
   </tr>"""
 
@@ -674,18 +758,18 @@ def _work_pattern(sessions: list) -> str:
     <td style="background:{C['card']};padding:16px 24px 18px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:2px">Work Pattern</div>
-      <div style="font-size:11px;color:{C['muted']};margin-bottom:12px">
+                  color:{C['muted']};margin-bottom:4px">HOW I WORK</div>
+      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
         When Copilot-assisted work happened</div>
       <table width="100%" cellpadding="0" cellspacing="0">
         {rows}
       </table>
-      <div id="daily-detail-hdr" style="cursor:pointer;padding:8px 0 0;margin-top:8px;
-                                         border-top:1px solid {C['border']}"
+      <div id="daily-detail-hdr" style="margin-top:12px;padding:8px 12px;background:{C['accent_lt']};
+                                         border-radius:6px;cursor:pointer;border:1px solid rgba(0,120,212,0.15)"
            onclick="toggleDetail('daily-detail')">
         <span id="daily-detail-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
-        <span style="font-size:10px;font-weight:700;color:{C['muted']};text-transform:uppercase;
-                     letter-spacing:0.8px">Daily breakdown &mdash; click to expand</span>
+        <span style="font-size:11px;font-weight:600;color:{C['accent']}">See daily breakdown</span>
+        <span style="font-size:10px;color:{C['muted']};margin-left:8px">Hourly activity heatmap per day</span>
       </div>
       <div id="daily-detail-tasks" style="display:none;margin-top:8px">
         {_daily_activity_detail(sessions)}
@@ -760,21 +844,16 @@ def _skills_mobilized(goals: list) -> str:
 
     return f"""
   <tr>
-    <td style="background:{C['card']};padding:0;
+    <td style="background:{C['card']};padding:16px 24px 18px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
-        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
-                    color:rgba(255,255,255,0.7)">Specialist Skills Augmented</div>
-        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-          Copilot augmented <strong style="color:rgba(255,255,255,0.8)">{n_roles} skill sets</strong>
-          across {total_tasks} tasks &mdash; enabling work that would otherwise require
-          additional expertise</div>
-      </div>
-      <div style="padding:14px 24px 18px">
-        <table width="100%" cellpadding="0" cellspacing="0">
-          <tr>{cards}</tr>
-        </table>
-      </div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                  color:{C['muted']};margin-bottom:4px">SKILLS I AUGMENT</div>
+      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
+        Copilot augmented <strong style="color:{C['text']}">{n_roles} skill sets</strong>
+        across {total_tasks} tasks</div>
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>{cards}</tr>
+      </table>
     </td>
   </tr>"""
 
@@ -1701,13 +1780,9 @@ window.onload = function() {
               sum(s.get("git_ops", []).count("pr") for s in sessions),
               sum(s.get("git_ops", []).count("commit") for s in sessions))}
 
-  {_complexity_breakdown(goals)}
-
-  {_intent_breakdown(goals)}
+  {_what_i_work_on(goals, sessions)}
 
   {_skills_mobilized(goals)}
-
-  {_deliverables_produced(sessions)}
 
   {_work_pattern(sessions)}
 
