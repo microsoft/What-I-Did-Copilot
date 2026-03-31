@@ -47,6 +47,7 @@ def _merge_analyses(day_analyses: list) -> dict:
     all_files   = []
     all_projects = set()
     merged_session_metrics = {}
+    heuristic_dates = []
 
     for target_date, analysis, sessions in day_analyses:
         for g in analysis.get("goals", []):
@@ -63,6 +64,8 @@ def _merge_analyses(day_analyses: list) -> dict:
                 all_files.append(f)
         all_sessions.extend(sessions)
         all_projects.update(analysis.get("projects", []))
+        if analysis.get("analysis_method") == "heuristic":
+            heuristic_dates.append(target_date)
         # Merge per-project session metrics across days (keyed by date|project)
         for proj, metrics in analysis.get("session_metrics", {}).items():
             dated_key = target_date + "|" + proj
@@ -100,6 +103,8 @@ def _merge_analyses(day_analyses: list) -> dict:
         "sessions_count":   len(all_sessions),
         "projects":         list(all_projects),
         "active_dates":     active_dates,
+        "heuristic_dates":  heuristic_dates,
+        "analysis_method":  "heuristic" if heuristic_dates else "ai",
     }
 
 
@@ -192,6 +197,14 @@ def main():
     print()
     analysis = _merge_analyses(day_analyses)
     _print_summary(analysis)
+
+    heuristic_dates = analysis.get("heuristic_dates", [])
+    if heuristic_dates:
+        n = len(heuristic_dates)
+        total = len(analysis.get("active_dates", []))
+        print(f"\n  ⚠ WARNING: {n}/{total} day(s) used heuristic fallback (API unavailable).")
+        print(f"  Estimates for those days are approximate and likely inflated.")
+        print(f"  Re-run with --refresh when the GitHub Models API is available for accurate results.")
 
     from report import generate_html
     html = generate_html(report_label, analysis, all_sessions)

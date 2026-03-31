@@ -171,7 +171,11 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False) -> dict
     if not refresh and cache_file.exists():
         try:
             cached = json.loads(cache_file.read_text(encoding="utf-8"))
-            print("  (Using cached analysis — pass --refresh to re-analyse.)")
+            method = cached.get("analysis_method", "ai")
+            if method == "heuristic":
+                print("  ⚠ Using cached HEURISTIC analysis — estimates are approximate. Pass --refresh to re-analyse with AI.")
+            else:
+                print("  (Using cached analysis — pass --refresh to re-analyse.)")
             return _attach_metrics(cached)
         except Exception:
             pass
@@ -324,6 +328,7 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
         analysis = json.loads(raw)
         analysis["sessions_count"] = len(sessions)
         analysis["projects"]       = list({s["project"] for s in sessions})
+        analysis["analysis_method"] = "ai"
         _attach_metrics(analysis)
         # Cache
         try:
@@ -335,10 +340,10 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
 
     except urllib.error.HTTPError as e:
         body = e.read().decode()[:300]
-        print(f"  API error {e.code}: {body}")
-        print("  Falling back to heuristic analysis.")
+        print(f"  ⚠ API error {e.code}: {body}")
+        print("  ⚠ Using heuristic fallback — estimates will be approximate. Re-run with --refresh when API is available.")
     except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
-        print(f"  API call failed ({e}). Falling back to heuristic analysis.")
+        print(f"  ⚠ API unavailable ({type(e).__name__}). Using heuristic fallback — estimates will be approximate.")
 
     return _attach_metrics(_fallback_analysis(target_date, sessions))
 
@@ -479,10 +484,11 @@ def _fallback_analysis(target_date: str, sessions: list) -> dict:
 
     projects = list({s["project"] for s in sessions})
     return {
-        "headline":       f"Copilot activity on {target_date}",
-        "primary_focus":  sessions[0]["project"].split("/")[-1].title() if sessions else "Mixed",
-        "day_narrative":  "Heuristic summary — run `gh auth login` for full semantic analysis.",
-        "goals":          goals,
-        "sessions_count": len(sessions),
-        "projects":       projects,
+        "headline":        f"Copilot activity on {target_date}",
+        "primary_focus":   sessions[0]["project"].split("/")[-1].title() if sessions else "Mixed",
+        "day_narrative":   "Heuristic summary — estimates are approximate. Re-run with --refresh when API is available for accurate analysis.",
+        "goals":           goals,
+        "sessions_count":  len(sessions),
+        "projects":        projects,
+        "analysis_method": "heuristic",
     }

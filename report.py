@@ -1183,6 +1183,31 @@ window.onload = function() {
 };
 </script>"""
 
+    heuristic_dates = analysis.get("heuristic_dates", [])
+    active_dates    = analysis.get("active_dates", [])
+    heuristic_banner = ""
+    if heuristic_dates:
+        n_h = len(heuristic_dates)
+        n_t = len(active_dates) if active_dates else n_h
+        if n_h == n_t:
+            scope = "All days in this report"
+        else:
+            scope = f"{n_h} of {n_t} days"
+        heuristic_banner = f"""
+  <tr>
+    <td style="background:{C['orange_lt']};padding:12px 24px;
+               border-left:2px solid {C['orange']};border-right:1px solid {C['border']}">
+      <div style="font-size:12px;font-weight:700;color:{C['orange']};margin-bottom:4px">
+        &#9888; Approximate Estimates</div>
+      <div style="font-size:11px;color:{C['text']};line-height:1.5">
+        {scope} used <strong>heuristic fallback</strong> because the AI analysis API was unavailable.
+        Estimates may be less accurate. Re-run with <code style="font-size:10px;background:#fff;
+        padding:1px 5px;border-radius:3px">whatidid --refresh</code> when the API is available
+        for precise results.
+      </div>
+    </td>
+  </tr>"""
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1209,6 +1234,8 @@ window.onload = function() {
       {f'<div style="margin-top:8px"><span style="font-size:9px;font-weight:700;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:1px;margin-right:8px">Projects</span>{project_pills}</div>' if projects else ''}
     </td>
   </tr>
+
+  {heuristic_banner}
 
   <!-- NARRATIVE -->
   <tr>
