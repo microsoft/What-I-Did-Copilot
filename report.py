@@ -2,8 +2,14 @@
 report.py — Daily digest HTML for GitHub Copilot sessions.
 Layout: Header → Narrative → Leverage Banner → KPI cards → What I Work On → Skills I Augment → How I Work → Goals summary → Pricing/Activity → Task accordion
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from harvest import compute_elapsed_minutes
+
+
+def _utc_to_local(ts: str) -> datetime:
+    """Parse an ISO-8601 UTC timestamp and convert to the system's local timezone."""
+    dt = datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    return dt.astimezone()
 
 C = {
     "bg":        "#f0f2f5",
@@ -284,14 +290,20 @@ def _what_i_work_on(goals: list, sessions: list) -> str:
     all_files: dict = {}  # filename -> project
     for s in sessions:
         proj = s.get("project", "")
+        # Source 1: filesModified from shutdown data (+ tool-event merge)
         for f in s.get("code_changes", {}).get("filesModified", []):
             fname = f.replace("\\", "/").split("/")[-1]
             all_files.setdefault(fname, proj)
+        # Source 2: files_touched extracted from edit/create tool events
+        for f in s.get("files_touched", []):
+            fname = f.replace("\\", "/").split("/")[-1]
+            all_files.setdefault(fname, proj)
+        # Source 3: regex fallback on tool summaries (handles varied formats)
         for msg in s.get("messages", []):
             for tool in msg.get("tools_after", []):
-                m = re.search(r'(?:create|edit)[^/\\]*[\\/]([^\\/]+\.\w+)', tool, re.I)
+                m = re.search(r'(?:create|edit).+[\\/]([^\\/]+\.\w{1,8})', tool, re.I)
                 if m:
-                    all_files.setdefault(m.group(1), proj)
+                    all_files.setdefault(m.group(1).rstrip('.'), proj)
 
     deliverables_html = ""
     if all_files:
@@ -405,7 +417,7 @@ def _daily_activity_detail(sessions: list) -> str:
             if not ts:
                 continue
             try:
-                dt = _dt.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
+                dt = _utc_to_local(ts)
                 day_key = dt.strftime("%Y-%m-%d")
                 day_periods[day_key][_period_idx(dt.hour)] += 1
             except (ValueError, TypeError):
@@ -531,7 +543,7 @@ def _work_pattern(sessions: list) -> str:
             if not ts:
                 continue
             try:
-                dt = _dt.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
+                dt = _utc_to_local(ts)
                 buckets[_bucket_for_hour(dt.hour)] += 1
             except (ValueError, TypeError):
                 pass

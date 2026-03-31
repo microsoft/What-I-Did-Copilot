@@ -152,6 +152,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
     all_files = []
     for s in sessions:
         all_files.extend(s.get("code_changes", {}).get("filesModified", []))
+        all_files.extend(s.get("files_touched", []))
     all_files = list(dict.fromkeys(all_files))  # deduplicate, preserve order
 
     # Build per-project session metrics for evidence display

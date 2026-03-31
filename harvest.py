@@ -125,6 +125,7 @@ def get_sessions_for_date(target_date: str) -> list:
         session_start = None
         session_end   = None
         git_ops_list  = []
+        files_touched = set()  # files from edit/create tool events
 
         for e in events:
             ts = e.get("timestamp", "")
@@ -156,6 +157,17 @@ def get_sessions_for_date(target_date: str) -> list:
                     summary = tr.get("intentionSummary") or tr.get("name", "")
                     if summary and messages and messages[-1]["role"] == "user":
                         messages[-1]["tools_after"].append(summary)
+
+                    # Track files touched by edit/create tool operations
+                    tool_name_lower = (tr.get("name") or "").lower()
+                    if tool_name_lower in ("edit", "create"):
+                        path_str = (tr.get("input", {}) or {}).get("path", "")
+                        if not path_str and summary:
+                            pm = _re.search(r'[\\/]([^\\/]+\.\w{1,8})\.?\s*$', summary)
+                            if pm:
+                                path_str = pm.group(1)
+                        if path_str:
+                            files_touched.add(path_str.replace("\\", "/"))
 
             elif etype == "tool.execution_complete":
                 tool_name = e.get("data", {}).get("toolName", "")
@@ -202,6 +214,12 @@ def get_sessions_for_date(target_date: str) -> list:
 
         tokens["total"] = sum(tokens.values())
 
+        # Merge files: shutdown data + tool event extraction
+        shutdown_files = set(code_changes.get("filesModified", []))
+        all_modified = shutdown_files | files_touched
+        if all_modified and not shutdown_files:
+            code_changes.setdefault("filesModified", sorted(all_modified))
+
         user_messages = [m for m in messages if m["role"] == "user"]
         if not user_messages:
             continue
@@ -228,6 +246,7 @@ def get_sessions_for_date(target_date: str) -> list:
             "git_ops":           git_ops_list,
             "workspace_summary": workspace.get("summary", ""),
             "tool_invocations":  sum(len(m.get("tools_after", [])) for m in messages if m["role"] == "user"),
+            "files_touched":     sorted(all_modified),
         })
 
     return sessions
