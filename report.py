@@ -277,43 +277,81 @@ def _complexity_breakdown(goals: list) -> str:
 
 
 def _skills_mobilized(goals: list) -> str:
-    """Prominent pills showing professional roles (or fallback to domain+tech skills)."""
-    roles: set = set()
+    """Grid of professional roles Copilot substituted for, with task counts."""
+    from collections import Counter
+    role_counts: Counter = Counter()
     for g in goals:
         for t in g.get("tasks", []):
             for r in t.get("professional_roles", []):
-                roles.add(r)
+                role_counts[r] += 1
 
     # Fallback: aggregate domain_skills + tech_skills if no professional_roles
-    if not roles:
+    if not role_counts:
         for g in goals:
             for t in g.get("tasks", []):
                 for s in t.get("domain_skills", []):
-                    roles.add(s)
+                    role_counts[s] += 1
                 for s in t.get("tech_skills", []):
-                    roles.add(s)
+                    role_counts[s] += 1
 
-    if not roles:
+    if not role_counts:
         return ""
 
-    pill_style = (
-        f"display:inline-block;padding:5px 14px;border-radius:16px;"
-        f"font-size:12px;font-weight:600;margin:3px 4px 3px 0;"
-        f"background:{C['accent_lt']};color:{C['accent']};white-space:nowrap;"
-        f"border:1px solid rgba(0,120,212,0.15)"
-    )
+    ROLE_ICONS = {
+        "Software Engineer":    "&#128187;",  # laptop
+        "Frontend Developer":   "&#127912;",  # art palette
+        "UX Designer":          "&#9998;",    # pencil
+        "Visual Designer":      "&#127912;",  # art palette
+        "Data Analyst":         "&#128200;",  # chart
+        "Data Engineer":        "&#128202;",  # bar chart
+        "DevOps Engineer":      "&#9881;",    # gear
+        "Technical Writer":     "&#128221;",  # memo
+        "Product Manager":      "&#127919;",  # target
+        "Security Engineer":    "&#128274;",  # lock
+        "Solutions Architect":  "&#127959;",  # building
+        "QA Engineer":          "&#128269;",  # magnifying glass
+    }
 
-    pills = "".join(f'<span style="{pill_style}">{r}</span>' for r in sorted(roles))
+    n_roles = len(role_counts)
+    total_tasks = sum(role_counts.values())
+
+    # Build role cards in a table grid (3 per row)
+    cards = ""
+    sorted_roles = role_counts.most_common()
+    for i, (role, count) in enumerate(sorted_roles):
+        icon = ROLE_ICONS.get(role, "&#128161;")  # lightbulb default
+        pct = round(count / total_tasks * 100) if total_tasks else 0
+        cards += f"""
+              <td style="padding:4px 6px;width:33%;vertical-align:top">
+                <div style="border:1px solid {C['border']};border-radius:6px;padding:10px 12px;
+                            background:{C['subtle']};height:50px">
+                  <div style="font-size:16px;margin-bottom:4px">{icon}</div>
+                  <div style="font-size:11px;font-weight:700;color:{C['text']};line-height:1.3">{role}</div>
+                  <div style="font-size:10px;color:{C['muted']};margin-top:2px">{count} task{'s' if count != 1 else ''} &middot; {pct}%</div>
+                </div>
+              </td>"""
+        # Close row every 3 cards
+        if (i + 1) % 3 == 0 and i < len(sorted_roles) - 1:
+            cards += "</tr><tr>"
+
+    # Pad last row if needed
+    remainder = len(sorted_roles) % 3
+    if remainder:
+        for _ in range(3 - remainder):
+            cards += '<td style="padding:4px 6px;width:33%"></td>'
 
     return f"""
   <tr>
     <td style="background:{C['card']};padding:14px 24px 18px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:4px">Skills Mobilized</div>
+                  color:{C['muted']};margin-bottom:4px">Specialist Skills Substituted</div>
       <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
-        Professional roles Copilot substituted for</div>
-      <div>{pills}</div>
+        Copilot replaced the need for <strong style="color:{C['text']}">{n_roles} specialist roles</strong>
+        across {total_tasks} tasks &mdash; skills that would otherwise require hiring or consulting.</div>
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>{cards}</tr>
+      </table>
     </td>
   </tr>"""
 
@@ -392,11 +430,14 @@ def _tier_lines(n: int) -> float:
 
 
 def _tier_active(m: float) -> float:
-    if m < 2:    return 0.25
-    if m < 10:   return 0.5
-    if m < 30:   return 1.0
-    if m < 60:   return 2.0
-    return 3.0
+    """Active engagement multiplier — reflects that a human without AI
+    would need roughly 4× the collaboration time to achieve the same result,
+    accounting for specialist skills Copilot substitutes for."""
+    if m < 2:    return 1.0
+    if m < 10:   return 2.0
+    if m < 30:   return 4.0
+    if m < 60:   return 8.0
+    return 12.0
 
 
 def compute_formula_estimate(metrics: dict) -> dict:
@@ -704,13 +745,14 @@ def _signal_guide() -> str:
     active = _signal_tier_table(
         "Active Engagement Time", "&#9201;",
         "Time you were actively engaged with Copilot, excluding idle gaps longer than 5 minutes. "
-        "Measures how long the human-AI collaboration actually lasted.",
+        "Multiplier reflects that a human without AI would need ~4&times; longer to achieve the "
+        "same result, accounting for the specialist skills Copilot substitutes for.",
         [
-            ("&lt; 2m", "0.25h", "Single question &mdash; quick lookup or one-shot edit"),
-            ("2–10m",   "0.5h",  "Focused task &mdash; fix a bug, write a function, short iteration"),
-            ("10–30m",  "1h",    "Working session &mdash; implement and test a feature with feedback"),
-            ("30–60m",  "2h",    "Deep work &mdash; multi-step design, implementation, and refinement"),
-            ("60m+",    "3h",    "Full focus block &mdash; comprehensive system work across many files"),
+            ("&lt; 2m", "1h",   "Single question &mdash; quick lookup or one-shot edit"),
+            ("2–10m",   "2h",   "Focused task &mdash; fix a bug, write a function, short iteration"),
+            ("10–30m",  "4h",   "Working session &mdash; implement and test a feature with feedback"),
+            ("30–60m",  "8h",   "Deep work &mdash; multi-step design, implementation, and refinement"),
+            ("60m+",    "12h",  "Full focus block &mdash; comprehensive system work across many files"),
         ]
     )
     return f"""
