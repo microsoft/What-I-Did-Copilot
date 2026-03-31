@@ -410,7 +410,7 @@ def compute_formula_estimate(metrics: dict) -> dict:
     lines_h  = _tier_lines(metrics.get("lines_added", 0))
 
     base = max(tool_h, req_h, active_h)
-    total = min(base + lines_h, 6.0)  # Cap at 6h
+    total = base + lines_h
     total = max(total, 0.25)           # Floor at 0.25h
 
     return {

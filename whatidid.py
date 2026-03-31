@@ -85,6 +85,62 @@ def _date_range(from_str: str, to_str: str) -> list:
     return days
 
 
+def _normalize_project(name: str) -> str:
+    """Normalize project name for grouping (lowercase, strip path separators)."""
+    return name.replace("\\", "/").split("/")[-1].lower().strip().replace(" ", "-")
+
+
+def _merge_related_goals(goals: list) -> list:
+    """Group goals from the same project across different days into single entries.
+
+    Goals are considered related when they share the same normalized project name.
+    Merged goals combine all tasks, sum hours, and show the date range.
+    """
+    from collections import OrderedDict
+
+    groups: OrderedDict = OrderedDict()
+    for g in goals:
+        proj = g.get("project", "")
+        key = _normalize_project(proj) if proj else f"_unnamed_{id(g)}"
+
+        if key in groups:
+            merged = groups[key]
+            merged["tasks"].extend(g.get("tasks", []))
+            merged["human_hours"] += g.get("human_hours", 0)
+            merged["_dates"].add(g.get("date", ""))
+            # Keep the longer/better title
+            if len(g.get("title", "")) > len(merged.get("title", "")):
+                merged["title"] = g["title"]
+            # Merge docs
+            for d in g.get("docs_referenced", []):
+                if d not in merged.get("docs_referenced", []):
+                    merged.setdefault("docs_referenced", []).append(d)
+        else:
+            groups[key] = {
+                **g,
+                "tasks": list(g.get("tasks", [])),
+                "human_hours": g.get("human_hours", 0),
+                "_dates": {g.get("date", "")},
+            }
+
+    # Finalize: set date field to earliest date, add date range to title if multi-day
+    result = []
+    for merged in groups.values():
+        dates = sorted(merged.pop("_dates", set()))
+        if len(dates) > 1:
+            merged["date"] = dates[0]
+            d0 = dates[0][5:]   # MM-DD
+            d1 = dates[-1][5:]
+            merged["summary"] = (merged.get("summary", "") or "") + f" ({len(dates)} days: {d0} to {d1})"
+        elif dates:
+            merged["date"] = dates[0]
+        # Round hours
+        merged["human_hours"] = round(merged["human_hours"] * 4) / 4
+        result.append(merged)
+
+    return result
+
+
 def _merge_analyses(day_analyses: list) -> dict:
     """Combine per-day analysis dicts into one, tagging each goal with its date."""
     all_goals   = []
@@ -123,6 +179,10 @@ def _merge_analyses(day_analyses: list) -> dict:
 
     active_dates = sorted({d for d, _, _ in day_analyses})
 
+    # Merge goals from the same project across days into single entries
+    if len(active_dates) > 1:
+        all_goals = _merge_related_goals(all_goals)
+
     if len(active_dates) == 1:
         headline  = day_analyses[0][1].get("headline", f"Activity on {active_dates[0]}")
         narrative = day_analyses[0][1].get("day_narrative", "")
@@ -131,12 +191,12 @@ def _merge_analyses(day_analyses: list) -> dict:
         d1 = active_dates[-1][5:]
         n  = len(all_goals)
         headline  = (f"{len(active_dates)} active days ({d0} – {d1}): "
-                     f"{n} goal{'s' if n != 1 else ''} accomplished")
+                     f"{n} project{'s' if n != 1 else ''} delivered")
         narrative = (f"Across {len(active_dates)} active days from "
                      f"{active_dates[0]} to {active_dates[-1]}, Copilot assisted with "
-                     f"{n} distinct goal{'s' if n != 1 else ''} across "
-                     f"{len(all_projects)} project{'s' if len(all_projects) != 1 else ''}. "
-                     f"Each goal below shows the date it was completed.")
+                     f"{n} distinct project{'s' if n != 1 else ''} across "
+                     f"{len(all_projects)} workspace{'s' if len(all_projects) != 1 else ''}. "
+                     f"Related work across days has been grouped.")
 
     return {
         "headline":         headline,
