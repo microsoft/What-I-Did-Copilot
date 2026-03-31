@@ -459,12 +459,27 @@ def _deliverables_produced(sessions: list) -> str:
 
 
 def _daily_activity_detail(sessions: list) -> str:
-    """Per-day hourly activity bars — 24 columns per day, height = message intensity."""
+    """GitHub-style heatmap grid: rows=days, columns=time periods, color=intensity."""
     from datetime import datetime as _dt
     from collections import defaultdict
 
-    # Collect messages per day per hour
-    day_hours: dict = defaultdict(lambda: [0] * 24)
+    PERIODS = [
+        ("Early Morning", "5–9am",   5,  9),
+        ("Morning",       "9am–12pm", 9, 12),
+        ("Afternoon",     "12–5pm", 12, 17),
+        ("Evening",       "5–9pm",  17, 21),
+        ("Night",         "9pm–5am", 21, 29),  # 21-24 + 0-5
+    ]
+
+    def _period_idx(hour: int) -> int:
+        if 5 <= hour < 9:   return 0
+        if 9 <= hour < 12:  return 1
+        if 12 <= hour < 17: return 2
+        if 17 <= hour < 21: return 3
+        return 4  # 21-24 and 0-5
+
+    # Collect messages per day per period
+    day_periods: dict = defaultdict(lambda: [0] * 5)
     for s in sessions:
         for msg in s.get("messages", []):
             ts = msg.get("timestamp", "")
@@ -473,23 +488,50 @@ def _daily_activity_detail(sessions: list) -> str:
             try:
                 dt = _dt.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
                 day_key = dt.strftime("%Y-%m-%d")
-                day_hours[day_key][dt.hour] += 1
+                day_periods[day_key][_period_idx(dt.hour)] += 1
             except (ValueError, TypeError):
                 pass
 
-    if not day_hours:
+    if not day_periods:
         return ""
 
-    # Find global max for consistent scaling
-    global_max = max(max(hours) for hours in day_hours.values()) or 1
+    # Color intensity scale — logarithmic breaks for better visual spread
+    global_max = max(max(p) for p in day_periods.values()) or 1
+    SHADES = [
+        (C["bg"],      C["text"]),     # 0 = no activity
+        ("#dbeafe",    C["text"]),     # 1 = very light
+        ("#93c5fd",    C["text"]),     # 2 = light
+        ("#3b82f6",    "#ffffff"),     # 3 = medium
+        ("#1d4ed8",    "#ffffff"),     # 4 = high
+        ("#1e3a5f",    "#ffffff"),     # 5 = intense
+    ]
 
-    rows = ""
-    for day in sorted(day_hours.keys()):
-        hours = day_hours[day]
-        total_msgs = sum(hours)
-        peak_hour = hours.index(max(hours))
+    def _shade(count: int) -> tuple:
+        """Return (bg_color, text_color) based on message count."""
+        if count == 0:
+            return SHADES[0]
+        # Log-based scaling: 1→1, 2-3→2, 4-8→3, 9-20→4, 21+→5
+        import math
+        level = min(5, max(1, int(math.log2(count) + 1)))
+        return SHADES[level]
 
-        # Date label
+    # Column headers
+    header_cells = f'<td style="width:70px;padding:4px 0"></td>'
+    for name, times, _, _ in PERIODS:
+        header_cells += (
+            f'<td style="text-align:center;padding:4px 2px;width:18%">'
+            f'<div style="font-size:9px;font-weight:700;color:{C["muted"]};'
+            f'text-transform:uppercase;letter-spacing:0.3px">{name}</div>'
+            f'<div style="font-size:8px;color:{C["muted"]}">{times}</div>'
+            f'</td>'
+        )
+    header_cells += f'<td style="width:50px;padding:4px 4px;text-align:right"></td>'
+
+    # Data rows
+    data_rows = ""
+    for day in sorted(day_periods.keys()):
+        periods = day_periods[day]
+        total = sum(periods)
         try:
             d = _dt.strptime(day, "%Y-%m-%d")
             day_label = d.strftime("%b %d")
@@ -498,53 +540,51 @@ def _daily_activity_detail(sessions: list) -> str:
             day_label = day[5:]
             weekday = ""
 
-        # Build 24 hour columns
-        bar_cells = ""
-        for h in range(24):
-            count = hours[h]
-            bar_h = int(count / global_max * 32) if count else 0
-            is_peak = h == peak_hour and count > 0
-            color = C["accent"] if not is_peak else C["green"]
-            bar_cells += (
-                f'<td style="padding:0 0 0 1px;vertical-align:bottom;width:{100/24:.1f}%">'
-                f'<div style="background:{color};border-radius:2px 2px 0 0;'
-                f'height:{bar_h}px;min-height:{1 if count else 0}px"></div>'
+        cells = (
+            f'<td style="padding:3px 10px 3px 0;vertical-align:middle;width:70px">'
+            f'<span style="font-size:10px;font-weight:700;color:{C["text"]}">{day_label}</span>'
+            f'&nbsp;<span style="font-size:9px;color:{C["muted"]}">{weekday}</span>'
+            f'</td>'
+        )
+        for i, count in enumerate(periods):
+            bg, fg = _shade(count)
+            count_label = str(count) if count > 0 else ""
+            cells += (
+                f'<td style="padding:2px;vertical-align:middle">'
+                f'<div style="background:{bg};border-radius:4px;height:28px;'
+                f'line-height:28px;text-align:center;font-size:9px;font-weight:600;'
+                f'color:{fg}">{count_label}</div>'
                 f'</td>'
             )
+        cells += (
+            f'<td style="padding:3px 0 3px 6px;vertical-align:middle;text-align:right">'
+            f'<span style="font-size:9px;color:{C["muted"]}">{total}</span>'
+            f'</td>'
+        )
+        data_rows += f'<tr>{cells}</tr>'
 
-        # Hour labels (show every 6 hours)
-        hour_labels = ""
-        for h in range(24):
-            label = ""
-            if h % 6 == 0:
-                label = f"{h}:00"
-            hour_labels += (
-                f'<td style="padding:0;font-size:8px;color:{C["muted"]};'
-                f'text-align:center;vertical-align:top">{label}</td>'
-            )
-
-        rows += f"""
-          <div style="margin-bottom:12px">
-            <div style="display:inline-block;width:70px;vertical-align:top;padding-top:12px">
-              <div style="font-size:11px;font-weight:700;color:{C['text']}">{day_label}</div>
-              <div style="font-size:9px;color:{C['muted']}">{weekday} &middot; {total_msgs} msgs</div>
-            </div>
-            <div style="display:inline-block;width:calc(100% - 80px);vertical-align:top">
-              <table width="100%" cellpadding="0" cellspacing="0" style="height:34px">
-                <tr>{bar_cells}</tr>
-              </table>
-              <table width="100%" cellpadding="0" cellspacing="0">
-                <tr>{hour_labels}</tr>
-              </table>
-            </div>
-          </div>"""
+    # Legend
+    legend = (
+        f'<div style="margin-top:8px;text-align:right">'
+        f'<span style="font-size:8px;color:{C["muted"]};margin-right:4px">Less</span>'
+    )
+    for bg, _ in SHADES:
+        legend += (
+            f'<span style="display:inline-block;width:12px;height:12px;'
+            f'background:{bg};border-radius:2px;margin:0 1px;'
+            f'border:1px solid {C["border"]};vertical-align:middle"></span>'
+        )
+    legend += (
+        f'<span style="font-size:8px;color:{C["muted"]};margin-left:4px">More</span>'
+        f'</div>'
+    )
 
     return f"""
-        <div style="font-size:9px;color:{C['muted']};margin-bottom:8px">
-          Each bar = messages per hour. <span style="color:{C['green']}">&#9632;</span> = peak hour.
-          Taller bars indicate more intensive Copilot interaction.
-        </div>
-        {rows}"""
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>{header_cells}</tr>
+          {data_rows}
+        </table>
+        {legend}"""
 
 
 def _work_pattern(sessions: list) -> str:
