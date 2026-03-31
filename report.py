@@ -505,16 +505,19 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
 
 
 def _signal_tier_table(title: str, icon: str, description: str, tiers: list) -> str:
-    """Render a single signal explanation table with tiers."""
+    """Render a single signal explanation table with tiers and multipliers."""
     rows = ""
     for i, (range_label, hour_label, example) in enumerate(tiers):
         bg = C["subtle"] if i % 2 == 0 else C["card"]
         rows += (
             f'<tr style="background:{bg}">'
             f'<td style="padding:3px 10px;font-size:10px;font-weight:600;color:{C["text"]};'
-            f'border-bottom:1px solid {C["border"]};width:18%;white-space:nowrap">{range_label}</td>'
+            f'border-bottom:1px solid {C["border"]};width:14%;white-space:nowrap">{range_label}</td>'
+            f'<td style="padding:3px 10px;border-bottom:1px solid {C["border"]};width:12%;text-align:center">'
+            f'<span style="font-size:10px;font-weight:700;color:{C["accent"]};'
+            f'background:{C["accent_lt"]};padding:1px 8px;border-radius:8px">{hour_label}</span></td>'
             f'<td style="padding:3px 10px;font-size:10px;color:{C["muted"]};'
-            f'border-bottom:1px solid {C["border"]};width:82%">{example}</td>'
+            f'border-bottom:1px solid {C["border"]};width:74%">{example}</td>'
             f'</tr>'
         )
     return f"""
@@ -525,6 +528,17 @@ def _signal_tier_table(title: str, icon: str, description: str, tiers: list) -> 
             {description}</div>
           <table width="100%" cellpadding="0" cellspacing="0"
                  style="border:1px solid {C['border']};border-radius:5px;overflow:hidden">
+            <tr style="background:{C['accent_lt']}">
+              <th style="padding:3px 10px;font-size:9px;font-weight:700;color:{C['accent']};
+                         text-transform:uppercase;letter-spacing:0.5px;
+                         border-bottom:1px solid {C['border']};width:14%">Range</th>
+              <th style="padding:3px 10px;font-size:9px;font-weight:700;color:{C['accent']};
+                         text-transform:uppercase;letter-spacing:0.5px;text-align:center;
+                         border-bottom:1px solid {C['border']};width:12%">Multiplier</th>
+              <th style="padding:3px 10px;font-size:9px;font-weight:700;color:{C['accent']};
+                         text-transform:uppercase;letter-spacing:0.5px;
+                         border-bottom:1px solid {C['border']};width:74%">What this means</th>
+            </tr>
             {rows}
           </table>
         </div>"""
@@ -600,9 +614,11 @@ def _signal_guide() -> str:
         <div style="margin-top:16px;padding-top:12px;border-top:1px solid {C['border']}">
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
                       color:{C['muted']};margin-bottom:4px">What each signal means</div>
-          <div style="font-size:10px;color:{C['muted']};line-height:1.4;margin-bottom:4px">
-            These raw session signals are what the AI reads when estimating human effort.
-            Higher values in any signal indicate more complex work that would take longer without AI.
+          <div style="font-size:10px;color:{C['muted']};line-height:1.5;margin-bottom:4px">
+            Each session signal maps to a multiplier representing equivalent human effort. The AI
+            reads all signals together and assigns an estimate within the highest applicable range.
+            <br><strong style="color:{C['text']}">Reading the table:</strong> find your value in the
+            Range column &rarr; the Multiplier shows the hour contribution from that signal alone.
           </div>
           {tools}
           {reqs}
