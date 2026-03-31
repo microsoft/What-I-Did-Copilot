@@ -63,16 +63,10 @@ def _merge_analyses(day_analyses: list) -> dict:
                 all_files.append(f)
         all_sessions.extend(sessions)
         all_projects.update(analysis.get("projects", []))
-        # Merge per-project session metrics across days
+        # Merge per-project session metrics across days (keyed by date|project)
         for proj, metrics in analysis.get("session_metrics", {}).items():
-            if proj in merged_session_metrics:
-                m = merged_session_metrics[proj]
-                for k in ("tokens", "tool_invocations", "premium_requests",
-                          "lines_added", "lines_removed", "active_minutes",
-                          "wall_clock_minutes", "sessions"):
-                    m[k] = m.get(k, 0) + metrics.get(k, 0)
-            else:
-                merged_session_metrics[proj] = dict(metrics)
+            dated_key = target_date + "|" + proj
+            merged_session_metrics[dated_key] = dict(metrics)
 
     active_dates = sorted({d for d, _, _ in day_analyses})
 

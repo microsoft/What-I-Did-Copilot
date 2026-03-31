@@ -335,7 +335,18 @@ def _dominant_task_type(goal: dict) -> str:
     return max(type_hours, key=type_hours.get) if type_hours else "Development"
 
 
-def _resolve_metrics(project: str, session_metrics: dict) -> dict:
+def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -> dict:
+    """Look up session metrics for a goal, trying date-prefixed key first."""
+    if goal_date:
+        dated_key = goal_date + "|" + project
+        metrics = session_metrics.get(dated_key, {})
+        if metrics:
+            return metrics
+        last = project.replace("\\", "/").split("/")[-1]
+        metrics = session_metrics.get(goal_date + "|" + last, {})
+        if metrics:
+            return metrics
+    # Fall back to non-dated key (single-day reports)
     metrics = session_metrics.get(project, {})
     if not metrics:
         last = project.replace("\\", "/").split("/")[-1]
@@ -363,7 +374,7 @@ def _estimation_waterfall(goals: list, analysis: dict) -> str:
     for i, g in enumerate(goals):
         bg = C["subtle"] if i % 2 == 0 else C["card"]
         project = g.get("project", "")
-        metrics = _resolve_metrics(project, session_metrics)
+        metrics = _resolve_metrics(project, session_metrics, g.get("date", ""))
 
         dom_type  = _dominant_task_type(g)
         cal_range = CALIBRATION_RANGES.get(dom_type, "1–2h")
@@ -459,7 +470,7 @@ def _estimation_waterfall(goals: list, analysis: dict) -> str:
 def _evidence_strip(goal: dict, session_metrics: dict) -> str:
     """Compact metrics bar showing evidence behind a goal's estimate."""
     project = goal.get("project", "")
-    metrics = _resolve_metrics(project, session_metrics)
+    metrics = _resolve_metrics(project, session_metrics, goal.get("date", ""))
     if not metrics:
         return ""
 
