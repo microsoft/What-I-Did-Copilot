@@ -10,10 +10,11 @@ import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
+from harvest import compute_active_minutes, compute_elapsed_minutes
 
 # GitHub Models API — OpenAI-compatible endpoint, authenticated with GitHub token
-API_URL = "https://models.inference.ai.azure.com/chat/completions"
-MODEL   = "gpt-4o-mini"
+API_URL = "https://models.github.ai/inference/chat/completions"
+MODEL   = "openai/gpt-4o-mini"
 
 DOMAIN_SKILLS = (
     "System Architecture", "Product Planning", "Requirements Analysis",
@@ -45,6 +46,42 @@ def _get_github_token() -> str:
     except Exception:
         pass
     return ""
+
+
+def check_api_health() -> tuple:
+    """Quick connectivity check to the GitHub Models API.
+
+    Returns (status: str, message: str) where status is one of:
+      "ok"        — API reachable and authenticated
+      "auth"      — reachable but authentication failed (don't retry)
+      "down"      — unreachable or server error (retry may help)
+    """
+    token = _get_github_token()
+    if not token:
+        return "auth", "No GitHub token found. Run `gh auth login`."
+
+    # Minimal request — cheap and fast
+    payload = json.dumps({
+        "model": MODEL, "max_tokens": 5, "temperature": 0,
+        "messages": [{"role": "user", "content": "ping"}],
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        API_URL, data=payload,
+        headers={"Authorization": f"Bearer {token}", "content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15):
+            return "ok", "API reachable."
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return "auth", f"Authentication failed (HTTP {e.code}). Run `gh auth login` to refresh your token."
+        return "down", f"API returned HTTP {e.code}."
+    except urllib.error.URLError:
+        return "down", "API unreachable (timed out)."
+    except Exception as e:
+        return "down", f"API check failed ({e})."
 
 
 def _build_transcript(sessions: list) -> str:
@@ -97,7 +134,7 @@ def _cache_path(target_date: str) -> Path:
     return _CACHE_DIR / f"{target_date}.json"
 
 
-def analyze_day(target_date: str, sessions: list, refresh: bool = False) -> dict:
+def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api: bool = True) -> dict:
     # Aggregate metrics across all sessions
     total_tokens = {
         "input":          sum(s["tokens"]["input"]          for s in sessions),
@@ -117,6 +154,44 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False) -> dict
         all_files.extend(s.get("code_changes", {}).get("filesModified", []))
     all_files = list(dict.fromkeys(all_files))  # deduplicate, preserve order
 
+    # Build per-project session metrics for evidence display
+    _session_metrics: dict = {}
+    for s in sessions:
+        proj = s["project"]
+        n_tools = s.get("tool_invocations", 0) or sum(
+            len(m.get("tools_after", [])) for m in s["messages"] if m["role"] == "user"
+        )
+        cc = s.get("code_changes", {})
+        active_min = compute_active_minutes(s["messages"])
+        wall_min = compute_elapsed_minutes(s.get("session_start", ""), s.get("session_end", ""))
+
+        if proj in _session_metrics:
+            m = _session_metrics[proj]
+            m["tokens"]           += s["tokens"]["total"]
+            m["tool_invocations"] += n_tools
+            m["premium_requests"] += s.get("premium_requests", 0)
+            m["lines_added"]      += cc.get("linesAdded", 0)
+            m["lines_removed"]    += cc.get("linesRemoved", 0)
+            m["active_minutes"]   += active_min
+            m["wall_clock_minutes"] += wall_min
+            m["sessions"]         += 1
+        else:
+            _session_metrics[proj] = {
+                "tokens":            s["tokens"]["total"],
+                "tool_invocations":  n_tools,
+                "premium_requests":  s.get("premium_requests", 0),
+                "lines_added":       cc.get("linesAdded", 0),
+                "lines_removed":     cc.get("linesRemoved", 0),
+                "active_minutes":    active_min,
+                "wall_clock_minutes": wall_min,
+                "sessions":          1,
+            }
+
+    # Also index by last path component for flexible goal→project matching
+    for proj in list(_session_metrics.keys()):
+        last = proj.replace("\\", "/").split("/")[-1]
+        _session_metrics.setdefault(last, _session_metrics[proj])
+
     def _attach_metrics(result: dict) -> dict:
         result["tokens"]           = total_tokens
         result["premium_requests"] = total_premium
@@ -124,6 +199,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False) -> dict
         result["lines_added"]      = total_lines_added
         result["lines_removed"]    = total_lines_removed
         result["files_modified"]   = all_files
+        result["session_metrics"]  = _session_metrics
         return result
 
     # Return cached result if available
@@ -131,10 +207,17 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False) -> dict
     if not refresh and cache_file.exists():
         try:
             cached = json.loads(cache_file.read_text(encoding="utf-8"))
-            print("  (Using cached analysis — pass --refresh to re-analyse.)")
+            method = cached.get("analysis_method", "ai")
+            if method == "heuristic":
+                print("  WARNING: Using cached HEURISTIC analysis -- estimates are approximate. Pass --refresh to re-analyse with AI.")
+            else:
+                print("  (Using cached analysis — pass --refresh to re-analyse.)")
             return _attach_metrics(cached)
         except Exception:
             pass
+
+    if not use_api:
+        return _attach_metrics(_fallback_analysis(target_date, sessions))
 
     token = _get_github_token()
     if not token:
@@ -170,15 +253,21 @@ DEFAULT RULE: When in doubt, MERGE. Too few goals is better than too many.
 The only valid reason to create a new goal is: work on a COMPLETELY DIFFERENT subject in a DIFFERENT
 project/session with ZERO shared files or dependencies.
 
-GOOD GOAL TITLES (business outcome, verb-first):
+GOOD GOAL TITLES (business outcome, verb-first, based on the MOST SUBSTANTIAL work done):
+  "Built a daily Copilot activity analytics tool with branded HTML reports"
   "Shipped a daily work digest tool from concept to working system"
   "Provided strategic rewrite recommendations for the presentation"
   "Diagnosed and resolved checkout regression in production"
 
-BAD GOAL TITLES (too granular):
+BAD GOAL TITLES (too granular, based on first message instead of overall outcome):
   "Set up authentication"        ← part of a larger goal
   "Built report generator"       ← a task within a goal
-  "Fixed encoding bug"           ← a task within a goal
+  "Initialized git repository"   ← setup step, not the goal itself
+  "Prepared directory for checkin" ← describes first action, not the outcome
+
+TITLE RULE: The goal title must describe the PRIMARY DELIVERABLE, not the first thing done.
+If a session starts with "prepare for github" but spends 80% of time building a report tool,
+the title should be about the report tool, not the git setup.
 
 ═══════════════════════════════════════════
 RULE 2 — LANGUAGE
@@ -284,6 +373,7 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
         analysis = json.loads(raw)
         analysis["sessions_count"] = len(sessions)
         analysis["projects"]       = list({s["project"] for s in sessions})
+        analysis["analysis_method"] = "ai"
         _attach_metrics(analysis)
         # Cache
         try:
@@ -295,10 +385,10 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
 
     except urllib.error.HTTPError as e:
         body = e.read().decode()[:300]
-        print(f"  API error {e.code}: {body}")
-        print("  Falling back to heuristic analysis.")
+        print(f"  WARNING: API error {e.code}: {body}")
+        print("  Using heuristic fallback -- estimates will be approximate. Re-run with --refresh when API is available.")
     except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
-        print(f"  API call failed ({e}). Falling back to heuristic analysis.")
+        print(f"  WARNING: API unavailable ({type(e).__name__}). Using heuristic fallback -- estimates will be approximate.")
 
     return _attach_metrics(_fallback_analysis(target_date, sessions))
 
@@ -439,10 +529,11 @@ def _fallback_analysis(target_date: str, sessions: list) -> dict:
 
     projects = list({s["project"] for s in sessions})
     return {
-        "headline":       f"Copilot activity on {target_date}",
-        "primary_focus":  sessions[0]["project"].split("/")[-1].title() if sessions else "Mixed",
-        "day_narrative":  "Heuristic summary — run `gh auth login` for full semantic analysis.",
-        "goals":          goals,
-        "sessions_count": len(sessions),
-        "projects":       projects,
+        "headline":        f"Copilot activity on {target_date}",
+        "primary_focus":   sessions[0]["project"].split("/")[-1].title() if sessions else "Mixed",
+        "day_narrative":   "Heuristic summary — estimates are approximate. Re-run with --refresh when API is available for accurate analysis.",
+        "goals":           goals,
+        "sessions_count":  len(sessions),
+        "projects":        projects,
+        "analysis_method": "heuristic",
     }

@@ -7,13 +7,19 @@ Usage:
   python whatidid.py --date 2026-03-30                   # Specific date
   python whatidid.py --from 2026-03-09 --to 2026-03-30   # Date range
   python whatidid.py --from 2026-03-09                   # From date to today
+  python whatidid.py --date 7D                           # Last 7 days
+  python whatidid.py --date 30D                          # Last 30 days
   python whatidid.py --email you@company.com             # Send email
   python whatidid.py --html                              # Save HTML only
   python whatidid.py --refresh                           # Force re-analysis
 
+Date formats accepted: YYYY-MM-DD, MM-DD-YYYY, MM/DD/YYYY, DD-Mon-YYYY
+Lookback shortcuts: 7D, 14D, 30D, 60D, 90D (days back from today)
+
 Triggered as a Copilot skill via /whatididghcp
 """
 import argparse
+import re as _re
 import subprocess
 import sys
 from datetime import date, timedelta
@@ -23,16 +29,117 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 DEFAULT_EMAIL = "shahegde@microsoft.com"
 
+# Lookback pattern: e.g. 7D, 30d, 14D
+_LOOKBACK_RE = _re.compile(r'^(\d+)[dD]$')
+
+
+def _parse_date(s: str) -> str:
+    """Parse flexible date formats into YYYY-MM-DD.
+
+    Accepts: YYYY-MM-DD, MM-DD-YYYY, MM/DD/YYYY, DD-Mon-YYYY, 'today'
+    """
+    if not s or s.lower() == "today":
+        return date.today().isoformat()
+
+    # Lookback shortcut (7D, 30D, etc.)
+    m = _LOOKBACK_RE.match(s.strip())
+    if m:
+        days = int(m.group(1))
+        return (date.today() - timedelta(days=days)).isoformat()
+
+    cleaned = s.strip().replace("/", "-")
+
+    # Already YYYY-MM-DD
+    if _re.match(r'^\d{4}-\d{1,2}-\d{1,2}$', cleaned):
+        parts = cleaned.split("-")
+        return f"{parts[0]}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+
+    # MM-DD-YYYY
+    if _re.match(r'^\d{1,2}-\d{1,2}-\d{4}$', cleaned):
+        parts = cleaned.split("-")
+        return f"{parts[2]}-{int(parts[0]):02d}-{int(parts[1]):02d}"
+
+    # DD-Mon-YYYY (e.g., 15-Mar-2026)
+    m = _re.match(r'^(\d{1,2})-([A-Za-z]{3})-(\d{4})$', cleaned)
+    if m:
+        from datetime import datetime
+        dt = datetime.strptime(cleaned, "%d-%b-%Y")
+        return dt.strftime("%Y-%m-%d")
+
+    # Last resort — try fromisoformat
+    try:
+        return date.fromisoformat(cleaned).isoformat()
+    except ValueError:
+        print(f"  WARNING: Could not parse date '{s}'. Expected YYYY-MM-DD, MM-DD-YYYY, MM/DD/YYYY, or 7D/30D.")
+        sys.exit(1)
+
 
 def _date_range(from_str: str, to_str: str) -> list:
     """Return list of YYYY-MM-DD strings for every day in [from, to]."""
-    d0 = date.fromisoformat(from_str)
-    d1 = date.fromisoformat(to_str)
+    d0 = date.fromisoformat(_parse_date(from_str))
+    d1 = date.fromisoformat(_parse_date(to_str))
     days, cur = [], d0
     while cur <= d1:
         days.append(cur.isoformat())
         cur += timedelta(days=1)
     return days
+
+
+def _normalize_project(name: str) -> str:
+    """Normalize project name for grouping (lowercase, strip path separators)."""
+    return name.replace("\\", "/").split("/")[-1].lower().strip().replace(" ", "-")
+
+
+def _merge_related_goals(goals: list) -> list:
+    """Group goals from the same project across different days into single entries.
+
+    Goals are considered related when they share the same normalized project name.
+    Merged goals combine all tasks, sum hours, and show the date range.
+    """
+    from collections import OrderedDict
+
+    groups: OrderedDict = OrderedDict()
+    for g in goals:
+        proj = g.get("project", "")
+        key = _normalize_project(proj) if proj else f"_unnamed_{id(g)}"
+
+        if key in groups:
+            merged = groups[key]
+            merged["tasks"].extend(g.get("tasks", []))
+            merged["human_hours"] += g.get("human_hours", 0)
+            merged["_dates"].add(g.get("date", ""))
+            # Keep the longer/better title
+            if len(g.get("title", "")) > len(merged.get("title", "")):
+                merged["title"] = g["title"]
+            # Merge docs
+            for d in g.get("docs_referenced", []):
+                if d not in merged.get("docs_referenced", []):
+                    merged.setdefault("docs_referenced", []).append(d)
+        else:
+            groups[key] = {
+                **g,
+                "tasks": list(g.get("tasks", [])),
+                "human_hours": g.get("human_hours", 0),
+                "_dates": {g.get("date", "")},
+            }
+
+    # Finalize: set date field to earliest date, add date range info
+    result = []
+    for merged in groups.values():
+        dates = sorted(merged.pop("_dates", set()))
+        merged["_all_dates"] = dates  # Keep all dates for metrics aggregation
+        if len(dates) > 1:
+            merged["date"] = dates[0]
+            d0 = dates[0][5:]   # MM-DD
+            d1 = dates[-1][5:]
+            merged["summary"] = (merged.get("summary", "") or "") + f" ({len(dates)} days: {d0} to {d1})"
+        elif dates:
+            merged["date"] = dates[0]
+        # Round hours
+        merged["human_hours"] = round(merged["human_hours"] * 4) / 4
+        result.append(merged)
+
+    return result
 
 
 def _merge_analyses(day_analyses: list) -> dict:
@@ -46,6 +153,8 @@ def _merge_analyses(day_analyses: list) -> dict:
     total_lines_removed = 0
     all_files   = []
     all_projects = set()
+    merged_session_metrics = {}
+    heuristic_dates = []
 
     for target_date, analysis, sessions in day_analyses:
         for g in analysis.get("goals", []):
@@ -62,8 +171,43 @@ def _merge_analyses(day_analyses: list) -> dict:
                 all_files.append(f)
         all_sessions.extend(sessions)
         all_projects.update(analysis.get("projects", []))
+        if analysis.get("analysis_method") == "heuristic":
+            heuristic_dates.append(target_date)
+        # Merge per-project session metrics across days (keyed by date|project)
+        for proj, metrics in analysis.get("session_metrics", {}).items():
+            dated_key = target_date + "|" + proj
+            merged_session_metrics[dated_key] = dict(metrics)
+            # Also store under normalized key for cross-day matching
+            norm_key = target_date + "|" + _normalize_project(proj)
+            merged_session_metrics.setdefault(norm_key, dict(metrics))
 
     active_dates = sorted({d for d, _, _ in day_analyses})
+
+    # Merge goals from the same project across days into single entries
+    if len(active_dates) > 1:
+        all_goals = _merge_related_goals(all_goals)
+
+        # Create aggregated session_metrics for merged goals that span multiple days
+        for g in all_goals:
+            all_dates = g.get("_all_dates", [g.get("date", "")])
+            if len(all_dates) <= 1:
+                continue
+            proj = g.get("project", "")
+            norm = _normalize_project(proj)
+            # Sum metrics across all dates for this project
+            agg = {"tokens": 0, "tool_invocations": 0, "premium_requests": 0,
+                   "lines_added": 0, "lines_removed": 0, "active_minutes": 0,
+                   "wall_clock_minutes": 0, "sessions": 0}
+            for d in all_dates:
+                for try_key in [d + "|" + proj, d + "|" + norm]:
+                    m = merged_session_metrics.get(try_key, {})
+                    if m:
+                        for k in agg:
+                            agg[k] += m.get(k, 0)
+                        break
+            # Store aggregated metrics under the earliest date key
+            merged_session_metrics[all_dates[0] + "|" + proj] = agg
+            merged_session_metrics[all_dates[0] + "|" + norm] = agg
 
     if len(active_dates) == 1:
         headline  = day_analyses[0][1].get("headline", f"Activity on {active_dates[0]}")
@@ -73,12 +217,12 @@ def _merge_analyses(day_analyses: list) -> dict:
         d1 = active_dates[-1][5:]
         n  = len(all_goals)
         headline  = (f"{len(active_dates)} active days ({d0} – {d1}): "
-                     f"{n} goal{'s' if n != 1 else ''} accomplished")
+                     f"{n} project{'s' if n != 1 else ''} delivered")
         narrative = (f"Across {len(active_dates)} active days from "
                      f"{active_dates[0]} to {active_dates[-1]}, Copilot assisted with "
-                     f"{n} distinct goal{'s' if n != 1 else ''} across "
-                     f"{len(all_projects)} project{'s' if len(all_projects) != 1 else ''}. "
-                     f"Each goal below shows the date it was completed.")
+                     f"{n} distinct project{'s' if n != 1 else ''} across "
+                     f"{len(all_projects)} workspace{'s' if len(all_projects) != 1 else ''}. "
+                     f"Related work across days has been grouped.")
 
     return {
         "headline":         headline,
@@ -91,9 +235,12 @@ def _merge_analyses(day_analyses: list) -> dict:
         "lines_added":      total_lines_added,
         "lines_removed":    total_lines_removed,
         "files_modified":   all_files,
+        "session_metrics":  merged_session_metrics,
         "sessions_count":   len(all_sessions),
         "projects":         list(all_projects),
         "active_dates":     active_dates,
+        "heuristic_dates":  heuristic_dates,
+        "analysis_method":  "heuristic" if heuristic_dates else "ai",
     }
 
 
@@ -136,11 +283,11 @@ def main():
         description="Generate a digest of what GitHub Copilot helped you accomplish."
     )
     parser.add_argument("--date",    default="today",
-                        help="Single date: YYYY-MM-DD or 'today' (default)")
+                        help="Single date or lookback: YYYY-MM-DD, MM-DD-YYYY, 7D, 30D, 'today'")
     parser.add_argument("--from",    dest="date_from", default=None,
-                        help="Start of date range: YYYY-MM-DD")
+                        help="Start of date range (any format)")
     parser.add_argument("--to",      dest="date_to",   default=None,
-                        help="End of date range: YYYY-MM-DD (default: today)")
+                        help="End of date range (any format, default: today)")
     parser.add_argument("--email",   nargs="?", const=DEFAULT_EMAIL, default=None,
                         help=f"Send to this address (default: {DEFAULT_EMAIL})")
     parser.add_argument("--html",    action="store_true",
@@ -152,18 +299,77 @@ def main():
     today = date.today().isoformat()
 
     if args.date_from:
-        dates        = _date_range(args.date_from, args.date_to or today)
-        report_label = f"{args.date_from}_to_{args.date_to or today}"
+        from_date = _parse_date(args.date_from)
+        to_date   = _parse_date(args.date_to) if args.date_to else today
+        dates        = _date_range(from_date, to_date)
+        report_label = f"{from_date}_to_{to_date}"
+    elif _LOOKBACK_RE.match(args.date.strip()):
+        # Lookback shortcut: 7D, 30D, etc. → date range
+        from_date    = _parse_date(args.date)
+        dates        = _date_range(from_date, today)
+        report_label = f"{from_date}_to_{today}"
     else:
-        target       = today if args.date in ("today", "") else args.date
+        target       = _parse_date(args.date)
         dates        = [target]
         report_label = target
 
     from harvest import get_sessions_for_date
-    from analyze import analyze_day
+    from analyze import analyze_day, check_api_health
 
     print(f"\nwhatididghcp -- {report_label}")
     print("-" * 40)
+
+    # Pre-flight: check if AI analysis API is reachable
+    import time
+    MAX_RETRIES = 5
+    RETRY_WAIT  = 60  # 1 minute
+    api_ok = False
+    print("  Checking AI analysis API... ", end="", flush=True)
+    status, msg = check_api_health()
+    if status == "ok":
+        print("[OK] connected.")
+        api_ok = True
+    elif status == "auth":
+        print(f"[FAIL] {msg}")
+        print(f"\n  WARNING: This is an authentication issue -- retrying won't help.")
+        print(f"  Fix: run `gh auth login` in your terminal, then re-run.\n")
+        print(f"  Proceeding with heuristic fallback.\n")
+    else:
+        print(f"[FAIL] {msg}\n")
+        print(f"  The AI analysis API is currently unreachable.")
+        print(f"  Without it, estimates will use a less accurate heuristic approach.\n")
+        print(f"  Options:")
+        print(f"    1. Retry automatically (up to {MAX_RETRIES}× at 1-min intervals)")
+        print(f"    2. Continue now with heuristic fallback\n")
+        try:
+            choice = input("  Enter choice [1]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            choice = "2"
+
+        if choice == "2":
+            print("\n  Proceeding with heuristic fallback.\n")
+        else:
+            for attempt in range(1, MAX_RETRIES + 1):
+                print(f"\n  Retry {attempt}/{MAX_RETRIES} — waiting {RETRY_WAIT}s... ", end="", flush=True)
+                try:
+                    time.sleep(RETRY_WAIT)
+                except KeyboardInterrupt:
+                    print("\n  Skipped. Proceeding with heuristic fallback.\n")
+                    break
+                status, msg = check_api_health()
+                if status == "ok":
+                    print("[OK] connected!")
+                    api_ok = True
+                    break
+                elif status == "auth":
+                    print(f"[FAIL] {msg}")
+                    print(f"  Authentication issue detected. Run `gh auth login` to fix.\n")
+                    break
+                else:
+                    print(f"[FAIL] {msg}")
+            else:
+                print(f"\n  WARNING: API unreachable after {MAX_RETRIES} attempts.")
+                print(f"  Proceeding with heuristic fallback.\n")
 
     day_analyses = []
     all_sessions = []
@@ -174,7 +380,7 @@ def main():
             continue
         premium = sum(s.get("premium_requests", 0) for s in sessions)
         print(f"  {d}: {len(sessions)} session(s), {premium} premium requests")
-        analysis = analyze_day(d, sessions, refresh=args.refresh)
+        analysis = analyze_day(d, sessions, refresh=args.refresh, use_api=api_ok)
         day_analyses.append((d, analysis, sessions))
         all_sessions.extend(sessions)
 
@@ -186,6 +392,14 @@ def main():
     print()
     analysis = _merge_analyses(day_analyses)
     _print_summary(analysis)
+
+    heuristic_dates = analysis.get("heuristic_dates", [])
+    if heuristic_dates:
+        n = len(heuristic_dates)
+        total = len(analysis.get("active_dates", []))
+        print(f"\n  WARNING: {n}/{total} day(s) used heuristic fallback (API unavailable).")
+        print(f"  Estimates for those days are approximate and likely inflated.")
+        print(f"  Re-run with --refresh when the GitHub Models API is available for accurate results.")
 
     from report import generate_html
     html = generate_html(report_label, analysis, all_sessions)
@@ -208,7 +422,11 @@ def main():
             if not output_path:
                 output_path = _save_and_open(html, report_label)
 
-    print("\nDone.\n")
+    print("\nDone.")
+    if today in [d for d in dates]:
+        print("  Note: Active sessions (still open) may show incomplete metrics.")
+        print("    Close your Copilot session and re-run for full code/token data.")
+    print()
 
 
 if __name__ == "__main__":
