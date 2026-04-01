@@ -11,6 +11,7 @@ cache/
 
 # Generated reports
 report_*.html
+*.html
 
 # OS
 .DS_Store
@@ -22,22 +23,5 @@ Thumbs.db
 *.swp
 *.swo
 
-# Project-specific
-
-# Cache (generated analysis data)
-cache/
-
-# Generated reports
-report_*.html
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.idea/
-*.swp
-*.swo
-
-# Claude local settings (may contain personal allowlists or PII)
-.claude/settings.local.json
+# Claude local settings
+.claude/
