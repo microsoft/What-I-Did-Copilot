@@ -9,9 +9,9 @@ Usage:
   python whatidid.py --from 2026-03-09                   # From date to today
   python whatidid.py --date 7D                           # Last 7 days
   python whatidid.py --date 30D                          # Last 30 days
-  python whatidid.py --email you@company.com             # Send email
-  python whatidid.py --html                              # Save HTML only
+  python whatidid.py --html                              # Save HTML file
   python whatidid.py --refresh                           # Force re-analysis
+  python whatidid.py --from 2026-03-01 --to 2026-03-31 --lock  # Freeze estimates
 
 Date formats accepted: YYYY-MM-DD, MM-DD-YYYY, MM/DD/YYYY, DD-Mon-YYYY
 Lookback shortcuts: 7D, 14D, 30D, 60D, 90D (days back from today)
@@ -19,6 +19,7 @@ Lookback shortcuts: 7D, 14D, 30D, 60D, 90D (days back from today)
 Triggered as a Copilot skill via /whatididghcp
 """
 import argparse
+import json as _json
 import re as _re
 import subprocess
 import sys
@@ -278,23 +279,130 @@ def _save_and_open(html: str, label: str) -> Path:
     return output_path
 
 
+def _detect_email() -> str:
+    """Detect the user's email address.
+
+    Priority order:
+    1. GitHub API /user/emails (primary verified) via `gh auth token`
+    2. git config user.email
+    3. DEFAULT_EMAIL constant
+    """
+    # 1. Try GitHub API
+    try:
+        token_result = subprocess.run(
+            ["gh", "auth", "token"], capture_output=True, text=True, timeout=5
+        )
+        token = token_result.stdout.strip()
+        if token:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://api.github.com/user/emails",
+                headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                emails = _json.loads(resp.read().decode())
+            # Prefer primary+verified, then primary, then first verified
+            for e in emails:
+                if e.get("primary") and e.get("verified"):
+                    return e["email"]
+            for e in emails:
+                if e.get("primary"):
+                    return e["email"]
+            for e in emails:
+                if e.get("verified"):
+                    return e["email"]
+    except Exception:
+        pass
+
+    # 2. git config
+    try:
+        result = subprocess.run(
+            ["git", "config", "user.email"], capture_output=True, text=True, timeout=5
+        )
+        email = result.stdout.strip()
+        if email:
+            return email
+    except Exception:
+        pass
+
+    # 3. Fallback
+    return DEFAULT_EMAIL
+
+
+def _send_outlook_email(subject: str, html: str, to_email: str) -> None:
+    """Send an email via Outlook COM automation with the full HTML report as the body.
+    Silently no-ops if Outlook is unavailable."""
+    import tempfile, os
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".html", encoding="utf-8", delete=False
+    )
+    try:
+        tmp.write(html)
+        tmp.close()
+        # Single-quoted PowerShell strings are literal — no backslash escaping needed,
+        # only single quotes need doubling.
+        ps_path = tmp.name.replace("'", "''")
+        escaped_subject = subject.replace("'", "''")
+        escaped_to = to_email.replace("'", "''")
+        ps = (
+            f"$html = Get-Content -Path '{ps_path}' -Raw -Encoding UTF8;"
+            f"$ol = New-Object -ComObject Outlook.Application;"
+            f"$mail = $ol.CreateItem(0);"
+            f"$mail.Subject = '{escaped_subject}';"
+            f"$mail.To = '{escaped_to}';"
+            f"$mail.HTMLBody = $html;"
+            f"$mail.Send();"
+            f"$ol.Session.SendAndReceive($true);"
+            f"Start-Sleep -Seconds 5"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps],
+            timeout=60,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"\n  [email error] {result.stderr.strip() or result.stdout.strip()}")
+    except Exception:
+        pass
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+
+
+def _preprocess_argv(argv: list) -> list:
+    """Rewrite --ND shorthand (e.g. --14D) to --date ND before argparse sees it."""
+    out = []
+    for arg in argv:
+        m = _re.match(r'^--(\d+[dD])$', arg)
+        if m:
+            out += ["--date", m.group(1).upper()]
+        else:
+            out.append(arg)
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate a digest of what GitHub Copilot helped you accomplish."
     )
-    parser.add_argument("--date",    default="today",
-                        help="Single date or lookback: YYYY-MM-DD, MM-DD-YYYY, 7D, 30D, 'today'")
+    parser.add_argument("--date",    default="7D",
+                        help="Single date or lookback: YYYY-MM-DD, MM-DD-YYYY, 7D, 30D, 'today' (default: 7D)")
     parser.add_argument("--from",    dest="date_from", default=None,
                         help="Start of date range (any format)")
     parser.add_argument("--to",      dest="date_to",   default=None,
                         help="End of date range (any format, default: today)")
-    parser.add_argument("--email",   nargs="?", const=DEFAULT_EMAIL, default=None,
-                        help=f"Send to this address (default: {DEFAULT_EMAIL})")
     parser.add_argument("--html",    action="store_true",
-                        help="Save HTML file (default when --email not used)")
+                        help="Save HTML file (default)")
     parser.add_argument("--refresh", action="store_true",
                         help="Re-run semantic analysis even if cached")
-    args = parser.parse_args()
+    parser.add_argument("--lock",    action="store_true",
+                        help="Freeze estimates after this run — future --refresh calls will be ignored")
+    parser.add_argument("--email",   nargs="?", const=True, default=False,
+                        help="Send report via Outlook (auto-detects email, or pass an explicit address)")
+    args = parser.parse_args(_preprocess_argv(sys.argv[1:]))
 
     today = date.today().isoformat()
 
@@ -393,6 +501,24 @@ def main():
     analysis = _merge_analyses(day_analyses)
     _print_summary(analysis)
 
+    if args.lock:
+        from analyze import _cache_path
+        locked_count = 0
+        for d in dates:
+            cf = _cache_path(d)
+            if cf.exists():
+                try:
+                    data = _json.loads(cf.read_text(encoding="utf-8"))
+                    if not data.get("locked"):
+                        data["locked"] = True
+                        cf.write_text(_json.dumps(data, indent=2), encoding="utf-8")
+                        locked_count += 1
+                except Exception:
+                    pass
+        if locked_count:
+            print(f"\n  Locked {locked_count} cache file(s). These estimates are now frozen.")
+            print("  To unlock: delete the cache file(s) in cache/ and re-run.")
+
     heuristic_dates = analysis.get("heuristic_dates", [])
     if heuristic_dates:
         n = len(heuristic_dates)
@@ -404,23 +530,19 @@ def main():
     from report import generate_html
     html = generate_html(report_label, analysis, all_sessions)
 
-    send_email_flag = bool(args.email)
-    save_html       = args.html or not send_email_flag
+    _save_and_open(html, report_label)
 
-    output_path = None
-    if save_html:
-        output_path = _save_and_open(html, report_label)
-
-    if send_email_flag:
-        from email_send import send_email
-        subject = f"What I Did (Copilot) — {report_label}"
-        print(f"\nSending to {args.email}...")
-        if send_email(args.email, subject, html):
-            print("   Sent.")
+    if args.email is not False:
+        # Resolve recipient email
+        if args.email is True or args.email is None:
+            to_email = _detect_email()
+            print(f"  Detected email: {to_email}")
         else:
-            print("   Email failed. Saving HTML as fallback...")
-            if not output_path:
-                output_path = _save_and_open(html, report_label)
+            to_email = args.email
+        subject = f"My GitHub Copilot Impact | {report_label.replace('_', ' ')}"
+        print(f"  Sending email to: {to_email} ...", end="", flush=True)
+        _send_outlook_email(subject, html, to_email)
+        print(" sent.")
 
     print("\nDone.")
     if today in [d for d in dates]:

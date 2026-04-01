@@ -168,10 +168,10 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
     return f"""
   <tr>
     <td style="padding:0;border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <table width="100%" cellpadding="0" cellspacing="0"
+      <table width="100%" cellpadding="0" cellspacing="0" bgcolor="{C['green']}"
              style="background:linear-gradient(135deg,{C['green']},#15803d);border-collapse:collapse">
         <tr>
-          <td style="padding:18px 24px 6px;text-align:center">
+          <td bgcolor="{C['green']}" style="padding:18px 24px 6px;text-align:center">
             <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;
                         color:rgba(255,255,255,0.65);margin-bottom:6px">Return on Copilot Investment</div>
             <div style="font-size:44px;font-weight:800;color:#ffffff;line-height:1;
@@ -179,7 +179,7 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
           </td>
         </tr>
         <tr>
-          <td style="padding:4px 24px 14px">
+          <td bgcolor="#1a7f37" style="padding:4px 24px 14px">
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td style="width:33%;text-align:center;padding:8px 8px;
@@ -293,12 +293,12 @@ def _what_i_work_on(goals: list, sessions: list) -> str:
   <tr>
     <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
                     color:rgba(255,255,255,0.7)">What Got Produced</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
           Artifacts created and skills augmented to produce them</div>
-      </div>
+      </td></tr></table>
       <div style="padding:14px 24px 18px">
         <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
           <strong style="color:{C['text']}">{total_files} files</strong> created or modified</div>
@@ -524,12 +524,12 @@ def _work_pattern(sessions: list) -> str:
   <tr>
     <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
                     color:rgba(255,255,255,0.7)">When I Worked</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
           When Copilot-assisted work happened during the day</div>
-      </div>
+      </td></tr></table>
       <div style="padding:14px 24px 18px">
       <table width="100%" cellpadding="0" cellspacing="0">
         {rows}
@@ -653,12 +653,12 @@ def _collaboration_intent(sessions: list, goals: list) -> str:
   <tr>
     <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
                     color:rgba(255,255,255,0.7)">How I Collaborated</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
           Intent behind every interaction &mdash; from research to shipping</div>
-      </div>
+      </td></tr></table>
       <div style="padding:14px 24px 16px">
         <div style="font-size:11px;color:{C['muted']};margin-bottom:14px;line-height:1.5">
           {insight}
@@ -691,80 +691,130 @@ def _collaboration_intent(sessions: list, goals: list) -> str:
 
 
 def _skills_mobilized(goals: list) -> str:
-    """Grid of professional roles Copilot substituted for, with task counts."""
-    from collections import Counter
-    role_counts: Counter = Counter()
-    for g in goals:
-        for t in g.get("tasks", []):
-            for r in t.get("professional_roles", []):
-                role_counts[r] += 1
-
-    # Fallback: aggregate domain_skills + tech_skills if no professional_roles
-    if not role_counts:
-        for g in goals:
-            for t in g.get("tasks", []):
-                for s in t.get("domain_skills", []):
-                    role_counts[s] += 1
-                for s in t.get("tech_skills", []):
-                    role_counts[s] += 1
-
-    if not role_counts:
-        return ""
+    """Ranked horizontal bar chart of professional roles by hours of assistance."""
+    from collections import defaultdict
 
     ROLE_ICONS = {
-        "Software Engineer":    "&#128187;",  # laptop
-        "Frontend Developer":   "&#127912;",  # art palette
-        "UX Designer":          "&#9998;",    # pencil
-        "Visual Designer":      "&#127912;",  # art palette
-        "Data Analyst":         "&#128200;",  # chart
-        "Data Engineer":        "&#128202;",  # bar chart
-        "DevOps Engineer":      "&#9881;",    # gear
-        "Technical Writer":     "&#128221;",  # memo
-        "Product Manager":      "&#127919;",  # target
-        "Security Engineer":    "&#128274;",  # lock
-        "Solutions Architect":  "&#127959;",  # building
-        "QA Engineer":          "&#128269;",  # magnifying glass
+        # Technical
+        "Software Engineer":          "&#128187;",   # 💻 laptop
+        "Frontend Developer":         "&#127760;",   # 🌐 globe
+        "Data Analyst":               "&#128200;",   # 📈 chart
+        "Data Engineer":              "&#128202;",   # 📊 bar chart
+        "DevOps Engineer":            "&#9881;",     # ⚙ gear
+        "Solutions Architect":        "&#127959;",   # 🏗 building
+        "Security Engineer":          "&#128274;",   # 🔒 lock
+        "QA Engineer":                "&#128269;",   # 🔍 magnifying glass
+        # Design & communication
+        "UX Designer":                "&#9998;",     # ✎ pencil
+        "Visual Designer":            "&#127912;",   # 🎨 palette
+        "Technical Writer":           "&#128221;",   # 📝 memo
+        # Business & strategy
+        "Product Manager":            "&#127919;",   # 🎯 target
+        "Program Manager":            "&#128203;",   # 📋 clipboard
+        "Business Analyst":           "&#128196;",   # 📄 page
+        "Management Consultant":      "&#128188;",   # 💼 briefcase
+        # Domain & industry
+        "Research Scientist":         "&#128300;",   # 🔬 microscope
+        "Financial Analyst":          "&#128185;",   # 💹 chart with currency
+        "Risk & Compliance Analyst":  "&#128737;",   # 🛡 shield
+        "Domain Expert":              "&#127891;",   # 🎓 graduation cap
     }
 
-    n_roles = len(role_counts)
-    total_tasks = sum(role_counts.values())
+    # Tech skill → role affinity weights.
+    # Used to split hours between roles on multi-role tasks rather than
+    # proration — e.g. Python weights toward Software Engineer, SQL toward
+    # Data Analyst, HTML/CSS toward UX/Visual Designer.
+    TECH_AFFINITY: dict = {
+        "Python":      {"Software Engineer": 3, "Data Analyst": 1, "Data Engineer": 2},
+        "SQL":         {"Data Analyst": 3, "Data Engineer": 2},
+        "JavaScript":  {"Software Engineer": 3, "Frontend Developer": 2},
+        "TypeScript":  {"Software Engineer": 3, "Frontend Developer": 2},
+        "HTML/CSS":    {"Frontend Developer": 2, "UX Designer": 2, "Visual Designer": 1},
+        "CSS":         {"UX Designer": 2, "Visual Designer": 2},
+        "Bash/Shell":  {"Software Engineer": 2, "DevOps Engineer": 2},
+        "PowerShell":  {"DevOps Engineer": 3, "Software Engineer": 1},
+        "R":           {"Data Analyst": 3, "Data Engineer": 1},
+        "Java":        {"Software Engineer": 3},
+        "Go":          {"Software Engineer": 3, "DevOps Engineer": 1},
+        "Rust":        {"Software Engineer": 3},
+        "C#":          {"Software Engineer": 3},
+        "C++":         {"Software Engineer": 3},
+    }
 
-    # Build role cards in a table grid (3 per row)
-    cards = ""
-    sorted_roles = role_counts.most_common()
-    for i, (role, count) in enumerate(sorted_roles):
-        icon = ROLE_ICONS.get(role, "&#128161;")  # lightbulb default
-        pct = round(count / total_tasks * 100) if total_tasks else 0
-        cards += f"""
-              <td style="padding:4px 6px;width:33%;vertical-align:top">
-                <div style="border:1px solid {C['border']};border-radius:6px;padding:10px 12px;
-                            background:{C['subtle']};height:50px">
-                  <div style="font-size:16px;margin-bottom:4px">{icon}</div>
-                  <div style="font-size:11px;font-weight:700;color:{C['text']};line-height:1.3">{role}</div>
-                  <div style="font-size:10px;color:{C['muted']};margin-top:2px">{count} task{'s' if count != 1 else ''} &middot; {pct}%</div>
-                </div>
-              </td>"""
-        # Close row every 3 cards
-        if (i + 1) % 3 == 0 and i < len(sorted_roles) - 1:
-            cards += "</tr><tr>"
+    role_data: dict = defaultdict(lambda: {"count": 0, "hours": 0.0})
+    for g in goals:
+        for t in g.get("tasks", []):
+            task_hours = t.get("human_hours", 0) or 0
+            roles = t.get("professional_roles", [])
+            if not roles:
+                roles = t.get("domain_skills", []) + t.get("tech_skills", [])
+            if not roles:
+                continue
+            tech = [s for s in t.get("tech_skills", []) if s in TECH_AFFINITY]
 
-    # Pad last row if needed
-    remainder = len(sorted_roles) % 3
-    if remainder:
-        for _ in range(3 - remainder):
-            cards += '<td style="padding:4px 6px;width:33%"></td>'
+            # Build per-role affinity score from tech skills
+            scores: dict = {}
+            for r in roles:
+                scores[r] = sum(TECH_AFFINITY[sk].get(r, 0) for sk in tech)
+
+            total_score = sum(scores.values())
+            for r in roles:
+                role_data[r]["count"] += 1
+                if total_score > 0:
+                    role_data[r]["hours"] += task_hours * (scores[r] / total_score)
+                else:
+                    role_data[r]["hours"] += task_hours / len(roles)
+
+    if not role_data:
+        return ""
+
+    sorted_roles = sorted(role_data.items(), key=lambda x: x[1]["hours"], reverse=True)
+    max_hours = sorted_roles[0][1]["hours"] or 1
+    total_hours = sum(d["hours"] for _, d in sorted_roles)
+    n_roles = len(sorted_roles)
+    total_tasks = sum(d["count"] for _, d in sorted_roles)
+
+    rows = ""
+    for role, data in sorted_roles:
+        icon  = ROLE_ICONS.get(role, "&#128161;")
+        hrs   = data["hours"]
+        count = data["count"]
+        bar   = round(hrs / max_hours * 100)
+        h_str = _fmt_h(hrs)
+        rows += f"""
+          <tr>
+            <td style="padding:5px 10px 5px 0;white-space:nowrap;vertical-align:middle;width:24px">
+              <span style="font-size:15px">{icon}</span>
+            </td>
+            <td style="padding:5px 12px 5px 0;white-space:nowrap;vertical-align:middle;width:130px">
+              <span style="font-size:12px;font-weight:600;color:{C['text']}">{role}</span>
+            </td>
+            <td style="padding:5px 0;vertical-align:middle">
+              <div style="background:{C['bg']};border-radius:4px;height:14px;width:100%">
+                <div style="background:{C['accent']};border-radius:4px;height:14px;width:{bar}%;
+                            min-width:4px"></div>
+              </div>
+            </td>
+            <td style="padding:5px 0 5px 12px;white-space:nowrap;vertical-align:middle;width:40px;text-align:right">
+              <span style="font-size:13px;font-weight:700;color:{C['accent']}">{h_str}</span>
+            </td>
+            <td style="padding:5px 0 5px 8px;white-space:nowrap;vertical-align:middle;width:55px">
+              <span style="font-size:10px;color:{C['muted']}">{count} task{'s' if count != 1 else ''}</span>
+            </td>
+          </tr>"""
 
     return f"""
   <tr>
     <td style="background:{C['card']};padding:16px 24px 18px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:4px">SKILLS AUGMENTED</div>
-      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px">
-        Copilot augmented <strong style="color:{C['text']}">{n_roles} skill sets</strong>
-        across {total_tasks} tasks</div>
+                  color:{C['muted']};margin-bottom:6px">SKILLS AUGMENTED</div>
+      <div style="font-size:14px;font-weight:700;color:{C['text']};margin-bottom:4px;line-height:1.4">
+        This is the team GitHub Copilot assembled for me &mdash; on demand, at zero headcount cost.</div>
+      <div style="font-size:11px;color:{C['muted']};margin-bottom:14px">
+        {_fmt_h(total_hours)} of expert-level assistance across {n_roles} professional disciplines &middot; {total_tasks} tasks delivered</div>
       <table width="100%" cellpadding="0" cellspacing="0">
-        <tr>{cards}</tr>
+        {rows}
       </table>
     </td>
   </tr>"""
@@ -909,7 +959,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
                      font-weight:600;width:13%">{active_str}</td>
           <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
                      font-weight:600;width:13%">+{la}</td>
-          <td style="padding:4px 6px;text-align:center;width:13%;vertical-align:middle" rowspan="2">
+          <td class="formula-col" style="padding:4px 6px;text-align:center;width:13%;vertical-align:middle;display:none" rowspan="2">
             <div style="font-size:14px;font-weight:700;color:{C['accent']}">{formula_h}</div>
             <div style="font-size:8px;color:{C['muted']};text-transform:uppercase;margin-top:1px">formula</div>
           </td>
@@ -935,7 +985,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           <td style="padding:8px 10px;border-top:2px solid {C['border']};
                      font-size:11px;font-weight:700;color:{C['accent']};text-align:right" colspan="5">
             Total</td>
-          <td style="padding:8px 6px;border-top:2px solid {C['border']};text-align:center">
+          <td class="formula-col" style="padding:8px 6px;border-top:2px solid {C['border']};text-align:center;display:none">
             <div style="font-size:16px;font-weight:700;color:{C['accent']}">{_fmt_h(total_formula_h)}</div>
           </td>
           <td style="padding:8px 6px;border-top:2px solid {C['border']};text-align:center">
@@ -953,11 +1003,13 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
       </div>
       <div style="font-size:10px;color:{C['muted']};margin-bottom:10px;padding:8px 12px;
                   background:{C['subtle']};border-radius:6px;border:1px solid {C['border']}">
-        <code style="font-size:10px;color:{C['accent']}">estimate = max(tools, requests, active) + lines</code>
-        &nbsp;&nbsp;
-        <span style="color:{C['accent']}">&#9632;</span> Formula &nbsp;
-        <span style="color:{C['green']}">&#9632;</span> AI estimate &nbsp;
+        <span style="color:{C['green']}">&#9632;</span> AI-calibrated estimate &nbsp;·&nbsp;
         <strong style="color:{C['accent']}">Bold</strong> = highest signal
+        &nbsp;&nbsp;
+        <span id="formula-col-toggle" data-open="0" onclick="toggleFormulaCol()"
+              style="cursor:pointer;font-size:9px;color:{C['accent']};user-select:none">
+          &#9654; Show formula column
+        </span>
       </div>
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
@@ -977,9 +1029,9 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
                      color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
                      border-bottom:1px solid {C['border']};width:13%">Lines</th>
-          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+          <th class="formula-col" style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
                      color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%">Formula</th>
+                     border-bottom:1px solid {C['border']};width:13%;display:none">Formula</th>
           <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
                      color:{C['green']};text-transform:uppercase;letter-spacing:0.5px;
                      border-bottom:1px solid {C['border']};width:13%">AI Est.</th>
@@ -1016,19 +1068,25 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
         return ""
 
     formula_h = _fmt_h(fe["total"])
-    ai_h = _fmt_h(goal.get("human_hours", 0))
+    ai_h      = _fmt_h(goal.get("human_hours", 0))
+    fid       = f"fs-{abs(hash(goal.get('title', '') + goal.get('date', ''))) % 100000}"
 
     return f"""
             <div style="padding:8px 24px;background:{C['subtle']};border-bottom:1px solid {C['border']}">
               <div style="font-size:10px;color:{C['muted']};line-height:1.5">
                 <span style="font-weight:700;color:{C['accent']};margin-right:4px">&#128202;</span>
                 {' &middot; '.join(parts)}
+                &nbsp;&nbsp;
+                <strong style="color:{C['green']}">{ai_h}</strong>
+                <span style="font-size:9px;color:{C['muted']}"> AI-calibrated</span>
+                <span id="{fid}-arrow" onclick="toggleFormula('{fid}')"
+                      style="cursor:pointer;font-size:9px;color:{C['accent']};
+                             margin-left:10px;user-select:none">&#9654; formula</span>
               </div>
-              <div style="font-size:10px;color:{C['muted']};margin-top:2px">
+              <div id="{fid}" style="display:none;margin-top:4px;font-size:10px;color:{C['muted']}">
                 <code style="font-size:9px;background:{C['bg']};padding:1px 5px;border-radius:3px;
                              color:{C['text']}">max({_fmt_h(fe['tool_h'])}, {_fmt_h(fe['req_h'])}, {_fmt_h(fe['active_h'])}) + {_fmt_h(fe['lines_h'])}</code>
-                = <strong style="color:{C['accent']}">{formula_h}</strong> formula
-                &middot; <strong style="color:{C['green']}">{ai_h}</strong> AI estimate
+                = <strong style="color:{C['accent']}">{formula_h}</strong> deterministic
               </div>
             </div>"""
 
@@ -1279,12 +1337,12 @@ def _activity_bar(analysis: dict) -> str:
   <tr>
     <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
                     color:rgba(255,255,255,0.7)">By the Numbers</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
           Cost, tokens, and Copilot usage metrics</div>
-      </div>
+      </td></tr></table>
     </td>
   </tr>
   <tr>
@@ -1382,21 +1440,24 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
         session_lookup = {}
     if session_metrics is None:
         session_metrics = {}
-    rows = ""
-    for i, g in enumerate(goals):
-        gid         = f"goal-{i}"
-        n           = len(g.get("tasks", []))
-        h           = _fmt_h(g.get("human_hours", 0))
-        bg          = C["subtle"] if i % 2 == 0 else C["card"]
-        top_d, top_t = _top_skills_for_goal(g)
-        skill_pills = _pills(top_d, top_t)
-        task_sub    = f'{n} task{"s" if n != 1 else ""}'
-        docs        = g.get("docs_referenced", [])
-        doc_html    = _doc_refs_html(docs)
-        date_badge  = _date_badge(g.get("date", ""))
-        tasks       = g.get("tasks", [])
 
-        rows += f"""
+    VISIBLE = 5
+    # Sort by hours descending so highest-impact projects appear first
+    sorted_goals = sorted(goals, key=lambda g: g.get("human_hours", 0), reverse=True)
+    n_extra      = max(0, len(sorted_goals) - VISIBLE)
+
+    def _goal_row(i: int, g: dict) -> str:
+        gid          = f"goal-{i}"
+        n            = len(g.get("tasks", []))
+        h            = _fmt_h(g.get("human_hours", 0))
+        bg           = C["subtle"] if i % 2 == 0 else C["card"]
+        top_d, top_t = _top_skills_for_goal(g)
+        skill_pills  = _pills(top_d, top_t)
+        task_sub     = f'{n} task{"s" if n != 1 else ""}'
+        doc_html     = _doc_refs_html(g.get("docs_referenced", []))
+        date_badge   = _date_badge(g.get("date", ""))
+        tasks        = g.get("tasks", [])
+        return f"""
         <tr id="{gid}-hdr" style="background:{bg};cursor:pointer"
             onclick="toggleDetail('{gid}')">
           <td style="padding:10px 10px;border-bottom:1px solid {C['border']};
@@ -1428,7 +1489,6 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
         <tr id="{gid}-tasks" style="display:none">
           <td colspan="4" style="padding:0 8px 12px;background:{C['bg']}">
             {_goal_context_bar(g, session_lookup)}
-            {_evidence_strip(g, session_metrics)}
             <table width="100%" cellpadding="0" cellspacing="0"
                    style="border:1px solid {C['border']};border-radius:6px;overflow:hidden">
               <tr style="background:{C['accent_lt']}">
@@ -1447,6 +1507,31 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
             </table>
           </td>
         </tr>"""
+
+    rows = ""
+    for i, g in enumerate(sorted_goals[:VISIBLE]):
+        rows += _goal_row(i, g)
+
+    if n_extra > 0:
+        # "Show more" toggle row
+        label = f"Show {n_extra} more project{'s' if n_extra != 1 else ''}"
+        rows += f"""
+        <tr>
+          <td colspan="4" style="padding:0;border-bottom:1px solid {C['border']}">
+            <button id="goals-show-more" onclick="toggleExtraGoals({n_extra})"
+                    style="width:100%;background:{C['subtle']};border:none;border-top:1px solid {C['border']};
+                           padding:8px 16px;font-size:11px;font-weight:600;color:{C['accent']};
+                           cursor:pointer;text-align:center;font-family:inherit">
+              &#9654; {label}
+            </button>
+          </td>
+        </tr>"""
+        # Hidden extra goals wrapped in a tbody for easy toggle
+        extra_rows = ""
+        for i, g in enumerate(sorted_goals[VISIBLE:], start=VISIBLE):
+            extra_rows += _goal_row(i, g)
+        rows += f'</tbody><tbody id="goals-extra" style="display:none">{extra_rows}</tbody><tbody>'
+
     return rows
 
 
@@ -1578,6 +1663,45 @@ def _task_rows(tasks: list) -> str:
     return rows
 
 
+REPO_URL = "https://github.com/microsoft/mycopilotworks"
+
+
+def _share_bar(target_date: str, goals: list, headline: str, total_human_h: float) -> str:
+    """Share via Email / Teams strip, injected just below the report header."""
+    import json as _json
+
+    n_goals     = len(goals)
+    total_tasks = sum(len(g.get("tasks", [])) for g in goals)
+    goal_lines  = "\n".join(f"  \u2022 {g.get('label') or g.get('title', '')}" for g in goals)
+    signature   = f"\n\n\u2014\n\U0001f4ca Get your own GitHub Copilot Impact Report\n{REPO_URL}"
+
+    share_text = (
+        f"{headline}\n\n"
+        f"This period: {n_goals} project{'s' if n_goals != 1 else ''} \u00b7 "
+        f"{total_tasks} tasks \u00b7 {_fmt_h(total_human_h)} professional effort equivalent\n\n"
+        f"Key deliverables:\n{goal_lines}"
+        f"{signature}"
+    )
+
+    email_subject = f"What I Did with GitHub Copilot \u2014 {target_date}"
+    js_subject    = _json.dumps(email_subject)
+    js_body       = _json.dumps(share_text)
+    js_teams      = _json.dumps(share_text)
+
+    return f"""
+  <tr>
+    <td style="background:#ffffff;padding:7px 24px;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']};
+               border-bottom:1px solid {C['border']}">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:10px;color:{C['muted']}">
+          Run with <code style="font-size:10px;background:#f6f8fa;padding:1px 4px;border-radius:3px">--email</code> to send this report via Outlook
+        </span>
+      </div>
+    </td>
+  </tr>"""
+
+
 def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
     goals      = analysis.get("goals", [])
     narrative  = analysis.get("day_narrative", "")
@@ -1591,7 +1715,7 @@ def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
 
     project_pills = "".join(
         f'<span style="background:rgba(255,255,255,0.18);color:#fff;padding:2px 10px;'
-        f'border-radius:10px;font-size:11px;margin-right:5px;display:inline-block;'
+        f'border-radius:4px;font-size:11px;margin-right:5px;display:inline-block;'
         f'margin-bottom:3px;border:1px solid rgba(255,255,255,0.3)">{p}</span>'
         for p in projects
     )
@@ -1628,6 +1752,58 @@ function toggleDetail(id) {
   tasks.style.display  = open ? 'none'      : openDisplay;
   hdr.style.background = open ? ''          : '#e8f2fb';
   if (arrow) arrow.innerHTML = open ? '&#9654;' : '&#9660;';
+}
+function toggleFormula(id) {
+  var el    = document.getElementById(id);
+  var arrow = document.getElementById(id + '-arrow');
+  if (!el) return;
+  var open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : 'block';
+  if (arrow) arrow.innerHTML = open ? '&#9654; formula' : '&#9660; formula';
+}
+function toggleFormulaCol() {
+  var btn  = document.getElementById('formula-col-toggle');
+  var cols = document.querySelectorAll('.formula-col');
+  var hide = btn.getAttribute('data-open') === '1';
+  cols.forEach(function(el) { el.style.display = hide ? 'none' : ''; });
+  btn.setAttribute('data-open', hide ? '0' : '1');
+  btn.innerHTML = hide ? '&#9654; Show formula column' : '&#9660; Hide formula column';
+}
+function shareViaEmail(subject, body) {
+  var a = document.createElement('a');
+  a.href = 'mailto:?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() { document.body.removeChild(a); }, 200);
+}
+function shareViaTeams(message) {
+  var btn = document.getElementById('teams-share-btn');
+  var orig = btn.innerHTML;
+  function onCopied() {
+    btn.innerHTML = '&#10003; Copied &mdash; paste into Teams';
+    btn.style.background = '#1a7f37';
+    btn.style.borderColor = '#1a7f37';
+    setTimeout(function() { btn.innerHTML = orig; btn.style.background = '#6264a7'; btn.style.borderColor = '#6264a7'; }, 3000);
+  }
+  function onFailed() {
+    window.prompt('Copy this and paste into Teams:', message);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(message).then(onCopied).catch(onFailed);
+  } else {
+    onFailed();
+  }
+}
+function toggleExtraGoals(count) {
+  var extra = document.getElementById('goals-extra');
+  var btn   = document.getElementById('goals-show-more');
+  if (!extra) return;
+  var showing = extra.style.display !== 'none';
+  extra.style.display = showing ? 'none' : '';
+  btn.innerHTML = showing
+    ? '&#9654; Show ' + count + ' more project' + (count === 1 ? '' : 's')
+    : '&#9660; Show fewer';
 }
 window.onload = function() {
   var hint = document.getElementById('expand-hint');
@@ -1677,7 +1853,7 @@ window.onload = function() {
 
   <!-- HEADER -->
   <tr>
-    <td style="background:linear-gradient(135deg,#24292f,#1b1f23);border-radius:9px 9px 0 0;padding:22px 24px">
+    <td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);border-radius:9px 9px 0 0;padding:22px 24px">
       <div style="font-size:10px;color:rgba(255,255,255,0.6);letter-spacing:1.2px;
                   text-transform:uppercase;margin-bottom:4px">
         {target_date} &nbsp;·&nbsp; GitHub Copilot Impact Report
@@ -1686,6 +1862,8 @@ window.onload = function() {
       {f'<div style="margin-top:8px"><span style="font-size:9px;font-weight:700;color:rgba(255,255,255,0.45);text-transform:uppercase;letter-spacing:1px;margin-right:8px">Projects</span>{project_pills}</div>' if projects else ''}
     </td>
   </tr>
+
+  {_share_bar(target_date, goals, headline, total_human_h)}
 
   {heuristic_banner}
 
@@ -1708,12 +1886,12 @@ window.onload = function() {
   <tr>
     <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
                     color:rgba(255,255,255,0.7)">What Got Accomplished</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
           Detailed project breakdown with task-level evidence</div>
-      </div>
+      </td></tr></table>
       <div style="padding:14px 24px 16px">
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
@@ -1761,11 +1939,22 @@ window.onload = function() {
 
   <!-- FOOTER -->
   <tr>
-    <td style="background:{C['text']};border-radius:0 0 9px 9px;padding:12px 24px;
+    <td bgcolor="#1f2328" style="background:{C['text']};border-radius:0 0 9px 9px;padding:16px 24px;
                text-align:center">
-      <div style="font-size:10px;color:rgba(255,255,255,0.4)">
-        <strong style="color:rgba(255,255,255,0.65)">whatididghcp</strong>
-        &nbsp;·&nbsp; GitHub Copilot &nbsp;·&nbsp; {target_date}
+      <div style="font-size:13px;font-weight:700;color:#ffffff;margin-bottom:4px">
+        Want your own GitHub Copilot Impact Report?
+      </div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.55);margin-bottom:8px">
+        One command. Every session. A complete story of your AI-assisted work.
+      </div>
+      <a href="https://github.com/microsoft/mycopilotworks"
+         style="display:inline-block;background:{C['accent']};color:#ffffff;
+                font-size:11px;font-weight:700;text-decoration:none;
+                padding:6px 16px;border-radius:6px;letter-spacing:0.3px">
+        &#128279; github.com/microsoft/mycopilotworks
+      </a>
+      <div style="font-size:10px;color:rgba(255,255,255,0.25);margin-top:10px">
+        {target_date} &nbsp;·&nbsp; GitHub Copilot Impact Report
       </div>
     </td>
   </tr>

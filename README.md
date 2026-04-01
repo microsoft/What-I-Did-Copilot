@@ -27,7 +27,9 @@ Every project broken down into tasks with effort estimates. Expandable detail sh
 Tangible artifacts — **scripts, reports, documents, presentations, config files** — categorized and counted. See exactly what Copilot helped you create or modify.
 
 ### 🧠 Skills Augmented
-The professional roles Copilot substituted for — Software Engineer, Data Analyst, UX Designer, Technical Writer — with task counts showing how your capabilities were multiplied.
+*"This is the team GitHub Copilot assembled for me — on demand, at zero headcount cost."*
+
+Hours of assistance broken down across **20 professional roles** — Software Engineer, Data Analyst, UX Designer, Solutions Architect, Management Consultant, Research Scientist, and more. A ranked bar chart shows exactly which disciplines carried the most weight, making the invisible staffing equivalent visible.
 
 ### 🎯 How I Collaborated
 A **donut chart** breaking down every interaction by intent — Building, Investigating, Designing, Researching, Iterating, Shipping. See your collaboration signature: were you mostly building, or debugging? Designing, or researching? Per-project breakdowns reveal how your approach varied across workstreams.
@@ -44,10 +46,9 @@ Collapsible detail showing exactly how effort estimates were calculated — tool
 ## 📸 Sample Report
 
 <div align="center">
-<em>Report generated with <code>whatidid --from 2026-03-01 --to 2026-03-30</code></em>
+<em>Report generated with <code>python whatidid.py --14D</code></em>
 
-<!-- Replace with actual screenshot: take a full-page screenshot of a generated report and save as docs/images/sample-report.png -->
-<img src="docs/images/sample-report.jpg" alt="Sample Impact Report" width="680">
+<img src="docs/images/sample-report.gif" alt="Sample Impact Report" width="680">
 </div>
 
 ## 🚀 Quick Start
@@ -73,14 +74,13 @@ gh copilot
 ### 3. Run your first report
 
 ```bash
-# Today's report
+# Last 7 days (default)
 python whatidid.py
 
-# Last 7 days
-python whatidid.py --date 7D
-
-# Last 30 days
-python whatidid.py --date 30D
+# Lookback shortcuts — any number of days
+python whatidid.py --7D
+python whatidid.py --14D
+python whatidid.py --30D
 
 # Specific date
 python whatidid.py --date 2026-03-19
@@ -88,11 +88,11 @@ python whatidid.py --date 2026-03-19
 # Date range (e.g., all of March)
 python whatidid.py --from 2026-03-01 --to 2026-03-31
 
-# Save HTML without emailing
-python whatidid.py --date 7D --html
+# Send report via Outlook (auto-detects your email from GitHub auth)
+python whatidid.py --email
 
-# Send report via Outlook
-python whatidid.py --email you@company.com
+# Send to a specific address
+python whatidid.py --14D --email you@company.com
 
 # Force re-analysis (bypass cache)
 python whatidid.py --refresh
@@ -108,7 +108,7 @@ function whatidid { python "C:/path/to/mycopilotworks/whatidid.py" @args }
 
 Then:
 ```bash
-whatidid --date 7D --html
+whatidid --14D --email
 ```
 
 ## 🏗️ How It Works
@@ -126,7 +126,7 @@ whatidid --date 7D --html
            report.py     → HTML report: story arc, donut charts, heatmaps, ROI
                 │
                 ▼
-         email_send.py   → send via Outlook COM automation (optional)
+         whatidid.py     → opens report in browser; --email sends via Outlook COM
 ```
 
 See [docs/architecture.md](docs/architecture.md) for session file formats, token cost model, and leverage calculation details.
@@ -138,7 +138,7 @@ See [docs/architecture.md](docs/architecture.md) for session file formats, token
 | **Python 3.10+** | Core runtime |
 | **GitHub CLI (`gh`)** | Provides API token for AI analysis — run `gh auth login` |
 | **GitHub Copilot** | Session data source — must have active sessions in `~/.copilot/session-state/` |
-| **Microsoft Outlook** | *(Optional)* For email delivery via COM automation |
+| **Microsoft Outlook** | *(Optional)* For `--email` delivery via COM automation — auto-detects recipient from GitHub auth |
 
 No `pip install` needed — the tool uses only Python standard library + GitHub Models API.
 
