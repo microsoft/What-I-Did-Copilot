@@ -549,7 +549,7 @@ def _work_pattern(sessions: list) -> str:
   </tr>"""
 
 
-def _collaboration_intent(sessions: list, goals: list) -> str:
+def _collaboration_intent(sessions: list) -> str:
     """Section: 'How I Collaborated' — intent donut chart with per-project breakdowns."""
     from harvest import aggregate_intents
     import harvest as _harvest
@@ -557,8 +557,6 @@ def _collaboration_intent(sessions: list, goals: list) -> str:
     # Prefer intent metadata from `harvest` when available; fall back to empty mappings.
     _INTENT_COLORS = getattr(_harvest, "_INTENT_COLORS", {})
     _INTENT_ICONS  = getattr(_harvest, "_INTENT_ICONS", {})
-    # `goals` is accepted for API symmetry / future use.
-    _ = goals
 
     intent_data = aggregate_intents(sessions)
     counts = intent_data["counts"]
@@ -1935,7 +1933,7 @@ window.onload = function() {
   {_skills_mobilized(goals)}
 
   <!-- 3. HOW I WORKED WITH COPILOT (intent) -->
-  {_collaboration_intent(sessions, goals)}
+  {_collaboration_intent(sessions)}
 
   <!-- 4. WHEN I WORKED WITH COPILOT -->
   {_work_pattern(sessions)}

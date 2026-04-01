@@ -5,7 +5,6 @@ Usage: python make_gif.py [report.html] [output.gif]
 """
 import sys
 import asyncio
-import glob as _glob
 from pathlib import Path
 from PIL import Image
 import io
