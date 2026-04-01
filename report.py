@@ -551,7 +551,14 @@ def _work_pattern(sessions: list) -> str:
 
 def _collaboration_intent(sessions: list, goals: list) -> str:
     """Section: 'How I Collaborated' — intent donut chart with per-project breakdowns."""
-    from harvest import aggregate_intents, _INTENT_COLORS, _INTENT_ICONS
+    from harvest import aggregate_intents
+    import harvest as _harvest
+
+    # Prefer intent metadata from `harvest` when available; fall back to empty mappings.
+    _INTENT_COLORS = getattr(_harvest, "_INTENT_COLORS", {})
+    _INTENT_ICONS  = getattr(_harvest, "_INTENT_ICONS", {})
+    # `goals` is accepted for API symmetry / future use.
+    _ = goals
 
     intent_data = aggregate_intents(sessions)
     counts = intent_data["counts"]
@@ -1069,7 +1076,9 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
 
     formula_h = _fmt_h(fe["total"])
     ai_h      = _fmt_h(goal.get("human_hours", 0))
-    fid       = f"fs-{abs(hash(goal.get('title', '') + goal.get('date', ''))) % 100000}"
+    import hashlib as _hl
+    _key = (goal.get('title', '') + goal.get('date', '')).encode()
+    fid  = "fs-" + _hl.sha1(_key).hexdigest()[:12]
 
     return f"""
             <div style="padding:8px 24px;background:{C['subtle']};border-bottom:1px solid {C['border']}">
@@ -1530,9 +1539,9 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
         extra_rows = ""
         for i, g in enumerate(sorted_goals[VISIBLE:], start=VISIBLE):
             extra_rows += _goal_row(i, g)
-        rows += f'</tbody><tbody id="goals-extra" style="display:none">{extra_rows}</tbody><tbody>'
+        rows += f'<tbody id="goals-extra" style="display:none">{extra_rows}</tbody>'
 
-    return rows
+    return f'<tbody>{rows}</tbody>'
 
 
 def _goal_context_bar(g: dict, session_lookup: dict) -> str:
@@ -1667,7 +1676,7 @@ REPO_URL = "https://github.com/microsoft/mycopilotworks"
 
 
 def _share_bar(target_date: str, goals: list, headline: str, total_human_h: float) -> str:
-    """Share via Email / Teams strip, injected just below the report header."""
+    """Summary/share hint strip injected just below the report header."""
     import json as _json
 
     n_goals     = len(goals)
@@ -1693,10 +1702,24 @@ def _share_bar(target_date: str, goals: list, headline: str, total_human_h: floa
     <td style="background:#ffffff;padding:7px 24px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']};
                border-bottom:1px solid {C['border']}">
-      <div style="display:flex;align-items:center;justify-content:space-between">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <span style="font-size:10px;color:{C['muted']}">
           Run with <code style="font-size:10px;background:#f6f8fa;padding:1px 4px;border-radius:3px">--email</code> to send this report via Outlook
         </span>
+        <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+          <button type="button"
+                  style="font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid {C['accent']};
+                         background:{C['accent']};color:#ffffff;cursor:pointer;white-space:nowrap"
+                  onclick="shareViaEmail({js_subject}, {js_body})">
+            Share via Email
+          </button>
+          <button id="teams-share-btn" type="button"
+                  style="font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid #6264a7;
+                         background:#6264a7;color:#ffffff;cursor:pointer;white-space:nowrap"
+                  onclick="shareViaTeams({js_teams})">
+            Share via Teams
+          </button>
+        </div>
       </div>
     </td>
   </tr>"""
@@ -1896,7 +1919,7 @@ window.onload = function() {
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
         {_goals_summary(goals, session_lookup, analysis.get("session_metrics", {}))}
-        {totals_row}
+        <tbody>{totals_row}</tbody>
       </table>
       <div id="expand-hint" style="display:none;font-size:11px;color:{C['muted']};
                                     text-align:right;margin-top:6px">

@@ -140,7 +140,7 @@ See [docs/architecture.md](docs/architecture.md) for session file formats, token
 | **GitHub Copilot** | Session data source — must have active sessions in `~/.copilot/session-state/` |
 | **Microsoft Outlook** | *(Optional)* For `--email` delivery via COM automation — auto-detects recipient from GitHub auth |
 
-No `pip install` needed — the tool uses only Python standard library + GitHub Models API.
+No `pip install` needed for normal use — the **core report generator** (`harvest.py`, `analyze.py`, `report.py`, `whatidid.py`) uses only the Python standard library + GitHub Models API. The optional GIF capture helper (`make_gif.py`, used to generate the sample animation in this README) depends on extra packages (Playwright and Pillow); only install those if you want to reproduce the GIF.
 
 ## 🤝 Copilot CLI Skill
 

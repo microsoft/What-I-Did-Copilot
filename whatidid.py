@@ -9,7 +9,6 @@ Usage:
   python whatidid.py --from 2026-03-09                   # From date to today
   python whatidid.py --date 7D                           # Last 7 days
   python whatidid.py --date 30D                          # Last 30 days
-  python whatidid.py --html                              # Save HTML file
   python whatidid.py --refresh                           # Force re-analysis
   python whatidid.py --from 2026-03-01 --to 2026-03-31 --lock  # Freeze estimates
 
@@ -329,9 +328,9 @@ def _detect_email() -> str:
     return DEFAULT_EMAIL
 
 
-def _send_outlook_email(subject: str, html: str, to_email: str) -> None:
+def _send_outlook_email(subject: str, html: str, to_email: str) -> bool:
     """Send an email via Outlook COM automation with the full HTML report as the body.
-    Silently no-ops if Outlook is unavailable."""
+    Returns True on success, False if Outlook is unavailable or the send fails."""
     import tempfile, os
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".html", encoding="utf-8", delete=False
@@ -363,8 +362,11 @@ def _send_outlook_email(subject: str, html: str, to_email: str) -> None:
         )
         if result.returncode != 0:
             print(f"\n  [email error] {result.stderr.strip() or result.stdout.strip()}")
-    except Exception:
-        pass
+            return False
+        return True
+    except Exception as exc:
+        print(f"\n  [email error] {exc}")
+        return False
     finally:
         try:
             os.unlink(tmp.name)
@@ -394,8 +396,6 @@ def main():
                         help="Start of date range (any format)")
     parser.add_argument("--to",      dest="date_to",   default=None,
                         help="End of date range (any format, default: today)")
-    parser.add_argument("--html",    action="store_true",
-                        help="Save HTML file (default)")
     parser.add_argument("--refresh", action="store_true",
                         help="Re-run semantic analysis even if cached")
     parser.add_argument("--lock",    action="store_true",
@@ -541,8 +541,8 @@ def main():
             to_email = args.email
         subject = f"My GitHub Copilot Impact | {report_label.replace('_', ' ')}"
         print(f"  Sending email to: {to_email} ...", end="", flush=True)
-        _send_outlook_email(subject, html, to_email)
-        print(" sent.")
+        ok = _send_outlook_email(subject, html, to_email)
+        print(" sent." if ok else " failed.")
 
     print("\nDone.")
     if today in [d for d in dates]:

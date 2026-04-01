@@ -5,11 +5,25 @@ Usage: python make_gif.py [report.html] [output.gif]
 """
 import sys
 import asyncio
+import glob as _glob
 from pathlib import Path
 from PIL import Image
 import io
 
-REPORT_HTML = Path(__file__).parent / "report_2026-03-18_to_2026-04-01.html"
+def _latest_report() -> Path:
+    """Return the most recently modified report_*.html in the script's directory."""
+    candidates = sorted(
+        Path(__file__).parent.glob("report_*.html"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if candidates:
+        return candidates[0]
+    raise FileNotFoundError(
+        "No report_*.html found in the current directory. "
+        "Pass an explicit path: python make_gif.py <report.html>"
+    )
+
 OUTPUT_GIF  = Path(__file__).parent / "docs" / "images" / "sample-report.gif"
 
 # GIF settings
@@ -85,7 +99,11 @@ def save_gif(frames: list, output: Path):
 
 
 async def main():
-    html_path = Path(sys.argv[1]) if len(sys.argv) > 1 else REPORT_HTML
+    try:
+        html_path = Path(sys.argv[1]) if len(sys.argv) > 1 else _latest_report()
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
     out_path  = Path(sys.argv[2]) if len(sys.argv) > 2 else OUTPUT_GIF
 
     if not html_path.exists():
