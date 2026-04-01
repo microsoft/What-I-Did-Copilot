@@ -152,6 +152,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
     all_files = []
     for s in sessions:
         all_files.extend(s.get("code_changes", {}).get("filesModified", []))
+        all_files.extend(s.get("files_touched", []))
     all_files = list(dict.fromkeys(all_files))  # deduplicate, preserve order
 
     # Build per-project session metrics for evidence display
@@ -204,15 +205,26 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
 
     # Return cached result if available
     cache_file = _cache_path(target_date)
-    if not refresh and cache_file.exists():
+    if cache_file.exists():
         try:
             cached = json.loads(cache_file.read_text(encoding="utf-8"))
-            method = cached.get("analysis_method", "ai")
-            if method == "heuristic":
-                print("  WARNING: Using cached HEURISTIC analysis -- estimates are approximate. Pass --refresh to re-analyse with AI.")
-            else:
-                print("  (Using cached analysis — pass --refresh to re-analyse.)")
-            return _attach_metrics(cached)
+            if cached.get("locked"):
+                if refresh:
+                    print("  (Cache is locked — ignoring --refresh. Delete the cache file to unlock.)")
+                else:
+                    method = cached.get("analysis_method", "ai")
+                    if method == "heuristic":
+                        print("  WARNING: Using locked HEURISTIC cache — estimates are approximate.")
+                    else:
+                        print("  (Using locked cache — estimates are frozen.)")
+                return _attach_metrics(cached)
+            if not refresh:
+                method = cached.get("analysis_method", "ai")
+                if method == "heuristic":
+                    print("  WARNING: Using cached HEURISTIC analysis -- estimates are approximate. Pass --refresh to re-analyse with AI.")
+                else:
+                    print("  (Using cached analysis — pass --refresh to re-analyse.)")
+                return _attach_metrics(cached)
         except Exception:
             pass
 
@@ -238,6 +250,18 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
 
 SESSION TRANSCRIPT:
 {transcript}
+
+═══════════════════════════════════════════
+RULE 0 — PERSONAL / OFF-TOPIC FILTER
+═══════════════════════════════════════════
+
+SKIP any user messages that are clearly personal and unrelated to professional work.
+Personal queries include (but are not limited to): health, fitness, nutrition, supplements,
+food, recipes, personal finance, relationships, news, general trivia, shopping, entertainment.
+
+If an ENTIRE session contains only personal queries, omit that session from the output entirely.
+If personal queries are MIXED with professional work in a session, include only the professional tasks.
+Do NOT invent a professional framing for a personal query — just leave it out.
 
 ═══════════════════════════════════════════
 RULE 1 — GOAL GROUPING (most important rule)
@@ -340,7 +364,7 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
           "domain_skills": ["1-2 from: {domain_list}"],
           "tech_skills": ["0-2 from: {tech_list} (omit if none)"],
           "task_type": "one of: Development | Bug Fix & Debug | Analysis & Research | Design & UX | Execution & Ops",
-          "professional_roles": ["1-2 from: Software Engineer, Frontend Developer, UX Designer, Visual Designer, Data Analyst, Data Engineer, DevOps Engineer, Technical Writer, Product Manager, Security Engineer, Solutions Architect, QA Engineer"],
+          "professional_roles": ["1-2 roles from the list below. Match to what was ACTUALLY DONE, not the job title of the user. These represent professional services roles — pick the role a billing firm would charge for this work.\n\nTECHNICAL ROLES (code, systems, data):\n  • Software Engineer      — writing/debugging code, implementing features, building tools, scripting in any language\n  • Frontend Developer     — HTML/CSS/JS/TS, web or app UI implementation\n  • Data Analyst           — SQL queries, KPI dashboards, structured data analysis, metrics computation, BI reports. ONLY if actual data/SQL work was done — NOT for general research.\n  • Data Engineer          — data pipelines, ETL, warehouse schema, data infrastructure\n  • DevOps Engineer        — CI/CD, deployment automation, containerisation, infrastructure-as-code\n  • Solutions Architect    — system/API design, architecture decisions, technical integration strategy\n  • Security Engineer      — auth, encryption, vulnerability assessment, security review\n  • QA Engineer            — test writing, debugging, validation, quality assurance\n\nDESIGN & COMMUNICATION ROLES:\n  • UX Designer            — user flows, wireframes, usability, interaction design\n  • Visual Designer        — slide decks, graphics, layouts, branding, visual output\n  • Technical Writer       — documentation, READMEs, how-to guides, technical explainers\n\nBUSINESS & STRATEGY ROLES:\n  • Product Manager        — product roadmap, feature requirements, user stories, prioritisation\n  • Program Manager        — project coordination, delivery planning, cross-team dependencies, status reporting\n  • Business Analyst       — process analysis, gap analysis, requirements gathering, workflow documentation\n  • Management Consultant  — strategic recommendations, frameworks, benchmarking, executive presentations\n\nDOMAIN & INDUSTRY EXPERT ROLES (use when the work requires deep subject-matter knowledge beyond generic software skills):\n  • Research Scientist     — hypothesis-driven investigation, experiments, literature review, scientific modelling\n  • Financial Analyst      — financial modelling, valuation, investment analysis, quantitative finance, forecasting\n  • Risk & Compliance Analyst — regulatory analysis, risk assessment, compliance documentation, audit preparation\n  • Domain Expert          — industry-specific analysis requiring specialist knowledge (engineering, medicine, law, energy, etc.) that does not fit a more specific role above\n\nDECISION RULES:\n  - General web search / reading docs / evaluating tools → Software Engineer (if technical) or Business Analyst (if process/strategy)\n  - Writing a report or presentation → Management Consultant (if strategic) or Visual Designer (if primarily layout/slides) or Technical Writer (if reference documentation)\n  - Any Python/R/Julia for numerical modelling or finance → Financial Analyst if domain is finance/quant, else Software Engineer\n  - Regulatory or policy research → Risk & Compliance Analyst"],
           "human_hours": <single calibrated number per the scale above, nearest 0.25h>
         }}
       ]
@@ -432,24 +456,45 @@ def _infer_skills(text: str, tools: list) -> tuple:
     elif any(_word(w, t) for w in ("deploy", "release", "pipeline", "ci", "cd", "ops", "config")):
         task_type = "Execution & Ops"
 
-    # Infer professional_roles
+    # Infer professional_roles (heuristic fallback — mirrors the AI prompt taxonomy)
     roles = []
     if task_type == "Bug Fix & Debug":
         roles.append("QA Engineer")
     if task_type == "Design & UX" or ".html" in ts or ".css" in ts:
-        roles.append("Frontend Developer")
+        roles.append("UX Designer" if "ux" in ts or "wireframe" in ts or "flow" in ts else "Frontend Developer")
     if ".py" in ts or "python" in ts or task_type == "Development":
         roles.append("Software Engineer")
-    if any(_word(w, t) for w in ("analyze", "report", "data", "metric")):
+    # Data Analyst = actual data/SQL/metrics work only
+    if any(_word(w, t) for w in ("sql", "query", "dashboard", "kpi", "dataset", "dataframe", "pivot", "bi report", "power bi")):
         roles.append("Data Analyst")
-    if any(_word(w, t) for w in ("write", "draft", "document", "readme")):
+    elif any(_word(w, t) for w in ("pipeline", "etl", "schema", "warehouse", "dbt")):
+        roles.append("Data Engineer")
+    if any(_word(w, t) for w in ("document", "readme", "how-to", "guide", "explainer")):
         roles.append("Technical Writer")
-    if any(_word(w, t) for w in ("deploy", "pipeline", "ci", "cd")):
+    if any(_word(w, t) for w in ("deploy", "dockerfile", "kubernetes", "terraform", "ci/cd", "github action")):
         roles.append("DevOps Engineer")
-    if any(_word(w, t) for w in ("design", "architect", "plan")):
+    if any(_word(w, t) for w in ("architect", "api design", "integration design")):
         roles.append("Solutions Architect")
+    if any(_word(w, t) for w in ("roadmap", "user stor", "prioriti", "backlog", "product requirement")):
+        roles.append("Product Manager")
+    if any(_word(w, t) for w in ("project plan", "milestone", "delivery", "dependency", "status report", "program")):
+        roles.append("Program Manager")
+    if any(_word(w, t) for w in ("process map", "gap analysis", "workflow", "business requirement", "stakeholder interview")):
+        roles.append("Business Analyst")
+    if any(_word(w, t) for w in ("strategy", "recommendation", "framework", "benchmark", "executive", "consulting")):
+        roles.append("Management Consultant")
+    if any(_word(w, t) for w in ("financial model", "valuation", "forecast", "portfolio", "backtest", "alpha", "pnl", "quant")):
+        roles.append("Financial Analyst")
+    if any(_word(w, t) for w in ("compliance", "regulation", "audit", "risk assessment", "kyc", "aml", "regulatory")):
+        roles.append("Risk & Compliance Analyst")
+    if any(_word(w, t) for w in ("experiment", "hypothesis", "literature", "simulation", "scientific", "research paper")):
+        roles.append("Research Scientist")
     if not roles:
-        roles.append("Software Engineer")
+        # Generic research/investigation — technical vs strategic
+        if any(_word(w, t) for w in ("research", "investigate", "evaluate", "explore", "assess", "compare")):
+            roles.append("Software Engineer" if any(_word(w, t) for w in ("tool", "library", "api", "sdk", "code", "script")) else "Business Analyst")
+        else:
+            roles.append("Software Engineer")
 
     return domain[:2], tech[:2], task_type, roles[:2]
 

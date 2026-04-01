@@ -38,3 +38,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Claude local settings (may contain personal allowlists or PII)
+.claude/settings.local.json
