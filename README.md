@@ -4,7 +4,7 @@
 
 **Turn invisible AI collaboration into a visible story of impact.**
 
-*One command. Every session harvested. Every task classified. A polished report that shows what you accomplished, how you collaborated, and what it would have cost without Copilot.*
+*One command generates a polished report on what you built with Copilot, the skills it augmented, and the leverage it delivered.*
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://python.org)
 [![GitHub Copilot](https://img.shields.io/badge/GitHub%20Copilot-powered-green)](https://github.com/features/copilot)
