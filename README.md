@@ -13,9 +13,9 @@
 
 ---
 
-> **"In March, Copilot delivered $4,380 worth of professional services for a $39/mo seat — a 112× return on investment."**
+*"Where did the tokens go? What am I actually building with Copilot? Am I accessing skills I didn't have before?"*
 
-That's a real output from this tool. It reads your local Copilot session logs, classifies every task with AI, and renders a report that tells the complete story of your AI-assisted work:
+If you can't answer these confidently, you're not alone. Most developers know Copilot helps — but can't show *how much*, *at what*, or *why it matters*. This tool turns your local session logs into a single report that makes the invisible visible — what got built, what skills were augmented, and what it would have cost to do it alone.
 
 ### ✅ What Got Accomplished — and the Leverage Behind It
 Every project broken down into tasks with **human effort equivalents** — see that a 10-minute Copilot session replaced 3 hours of manual work. The ROI banner distills it to one number: how many multiples of your $39/mo seat Copilot delivered in professional services value.
