@@ -1690,26 +1690,6 @@ REPO_URL = "https://github.com/microsoft/mycopilotworks"
 
 def _share_bar(target_date: str, goals: list, headline: str, total_human_h: float) -> str:
     """Summary/share hint strip injected just below the report header."""
-    import json as _json
-
-    n_goals     = len(goals)
-    total_tasks = sum(len(g.get("tasks", [])) for g in goals)
-    goal_lines  = "\n".join(f"  \u2022 {g.get('label') or g.get('title', '')}" for g in goals)
-    signature   = f"\n\n\u2014\n\U0001f4ca Get your own GitHub Copilot Impact Report\n{REPO_URL}"
-
-    share_text = (
-        f"{headline}\n\n"
-        f"This period: {n_goals} project{'s' if n_goals != 1 else ''} \u00b7 "
-        f"{total_tasks} tasks \u00b7 {_fmt_h(total_human_h)} professional effort equivalent\n\n"
-        f"Key deliverables:\n{goal_lines}"
-        f"{signature}"
-    )
-
-    email_subject = f"What I Did with GitHub Copilot \u2014 {target_date}"
-    js_subject    = _json.dumps(email_subject)
-    js_body       = _json.dumps(share_text)
-    js_teams      = _json.dumps(share_text)
-
     return f"""
   <tr>
     <td style="background:#ffffff;padding:7px 24px;

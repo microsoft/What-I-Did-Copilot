@@ -68,9 +68,11 @@ def _find_copilot_cli() -> str:
 
     # 3. VS Code's bundled copilot CLI
     if platform.system() == "Windows":
-        bat = Path(os.environ.get("APPDATA", "")) / "Code" / "User" / "globalStorage" / "github.copilot-chat" / "copilotCli" / "copilot.bat"
-        if bat.exists():
-            return str(bat)
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            bat = Path(appdata) / "Code" / "User" / "globalStorage" / "github.copilot-chat" / "copilotCli" / "copilot.bat"
+            if bat.exists():
+                return str(bat)
     else:
         for base in ("~/.vscode/globalStorage", "~/.vscode-server/data/User/globalStorage"):
             cli = Path(base).expanduser() / "github.copilot-chat" / "copilotCli" / "copilot"
@@ -92,10 +94,10 @@ def _analyze_via_copilot_cli(prompt: str) -> dict | None:
 
     if cli == "gh-copilot":
         cmd = ["gh", "copilot", "--", "-p", prompt, "--output-format", "text",
-               "--allow-all-tools", "--no-file-access"]
+               "--no-file-access"]
     else:
         cmd = [cli, "-p", prompt, "--output-format", "text",
-               "--allow-all-tools", "--no-file-access"]
+               "--no-file-access"]
 
     try:
         print("  (Using Copilot CLI for analysis — no API key needed.)")
