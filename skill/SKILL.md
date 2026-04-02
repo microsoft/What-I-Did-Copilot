@@ -1,35 +1,58 @@
 ---
-name: whatididghcp
-description: "Generate a daily analytics report of what GitHub Copilot helped accomplish today. Shows tasks completed, human effort equivalent, code impact (lines added/removed), premium requests used, and a narrative story. Use when the user asks about their daily Copilot activity, what Copilot helped with today, or wants a digest of the day's work."
+name: whatidid
+description: "Generate a daily analytics report of what GitHub Copilot helped accomplish. Shows tasks completed, human effort equivalent, code impact, premium requests used, and a narrative story. Use when the user asks about their daily Copilot activity, what Copilot helped with today, or wants a digest of the day's work."
 ---
 
-# whatididghcp — Daily Copilot Digest
+# whatidid — Copilot Impact Report
 
-Run the following to generate and email today's activity report:
+This skill lives in the `mycopilotworks` repo. Locate the repo on the user's machine before running.
+
+## Find the repo
 
 ```bash
-python "C:/Users/shahegde/Github Copilot/whatididghcp/whatidid.py" --email shahegde@microsoft.com
+# Check common locations
+for dir in "$HOME/mycopilotworks" "$HOME/Github Copilot/whatididghcp" "$HOME/repos/mycopilotworks"; do
+  [ -f "$dir/whatidid.py" ] && echo "$dir" && break
+done
 ```
 
-If the user asks for a specific date, use:
+If not found, clone it:
 ```bash
-python "C:/Users/shahegde/Github Copilot/whatididghcp/whatidid.py" --date YYYY-MM-DD --email shahegde@microsoft.com
+git clone https://github.com/microsoft/mycopilotworks.git
+cd mycopilotworks
 ```
 
-If the user wants a date range:
+## Generate the report
+
+From the repo directory, run:
+
 ```bash
-python "C:/Users/shahegde/Github Copilot/whatididghcp/whatidid.py" --from YYYY-MM-DD --to YYYY-MM-DD --email shahegde@microsoft.com
+# Default: last 7 days, open in browser
+python whatidid.py
+
+# Lookback shortcuts
+python whatidid.py --7D
+python whatidid.py --14D
+python whatidid.py --30D
+
+# Specific date or range
+python whatidid.py --date YYYY-MM-DD
+python whatidid.py --from YYYY-MM-DD --to YYYY-MM-DD
+
+# Send via Outlook (auto-detects email from gh auth)
+python whatidid.py --email
+
+# Send to a specific address
+python whatidid.py --14D --email user@company.com
+
+# View only (no email)
+python whatidid.py --html
 ```
 
-If the user just wants to view (no email):
-```bash
-python "C:/Users/shahegde/Github Copilot/whatididghcp/whatidid.py" --html
-```
-
-After running, tell the user:
+## After running, tell the user:
 - How many sessions and projects were found
 - The headline and primary focus identified
 - The total human effort estimate and code impact (lines added/removed)
-- That the email has been sent (or HTML saved)
+- Whether the email was sent or HTML was saved
 
-If there are no sessions for the date, explain that Copilot session data is stored in ~/.copilot/session-state/ and suggest checking the date.
+If there are no sessions for the date, explain that Copilot session data is stored in `~/.copilot/session-state/` and suggest checking the date or that the user may need active Copilot CLI or VS Code agent sessions.

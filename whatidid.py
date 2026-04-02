@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-DEFAULT_EMAIL = "shahegde@microsoft.com"
+DEFAULT_EMAIL = ""  # Auto-detected from GitHub API or git config
 
 # Lookback pattern: e.g. 7D, 30d, 14D
 _LOOKBACK_RE = _re.compile(r'^(\d+)[dD]$')
@@ -536,13 +536,17 @@ def main():
         # Resolve recipient email
         if args.email is True or args.email is None:
             to_email = _detect_email()
-            print(f"  Detected email: {to_email}")
+            if to_email:
+                print(f"  Detected email: {to_email}")
+            else:
+                print("  Could not detect email. Use --email you@company.com to specify.")
         else:
             to_email = args.email
-        subject = f"My GitHub Copilot Impact | {report_label.replace('_', ' ')}"
-        print(f"  Sending email to: {to_email} ...", end="", flush=True)
-        ok = _send_outlook_email(subject, html, to_email)
-        print(" sent." if ok else " failed.")
+        if to_email:
+            subject = f"My GitHub Copilot Impact | {report_label.replace('_', ' ')}"
+            print(f"  Sending email to: {to_email} ...", end="", flush=True)
+            ok = _send_outlook_email(subject, html, to_email)
+            print(" sent." if ok else " failed.")
 
     print("\nDone.")
     if today in [d for d in dates]:
