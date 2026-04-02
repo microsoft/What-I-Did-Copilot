@@ -17,31 +17,23 @@
 
 That's a real output from this tool. It reads your local Copilot session logs, classifies every task with AI, and renders a report that tells the complete story of your AI-assisted work:
 
-### 📊 Return on Copilot Investment
-A hero banner showing your **ROI multiplier** — professional services equivalent vs. your $39/mo seat cost. See exactly what those tokens translated into in dollar value.
-
-### ✅ What Got Accomplished
-Every project broken down into tasks with effort estimates. Expandable detail shows the what, how, and skills involved in each deliverable. This is the evidence trail.
+### ✅ What Got Accomplished — and the Leverage Behind It
+Every project broken down into tasks with **human effort equivalents** — see that a 10-minute Copilot session replaced 3 hours of manual work. The ROI banner distills it to one number: how many multiples of your $39/mo seat Copilot delivered in professional services value.
 
 ### 📦 What Got Produced
-Tangible artifacts — **scripts, reports, documents, presentations, config files** — categorized and counted. See exactly what Copilot helped you create or modify.
+Tangible artifacts — scripts, reports, documents, presentations, config files — categorized and counted. Not "Copilot helped me code" but "Copilot helped me ship 4 Python modules, 2 HTML reports, and a PowerShell deployment script."
 
-### 🧠 Skills Augmented
-*"This is the team GitHub Copilot assembled for me — on demand, at zero headcount cost."*
+### 🧠 Skills Copilot Augmented
+Hours of assistance mapped across **20+ professional roles** — Software Engineer, Data Analyst, UX Designer, Solutions Architect, and more. See exactly which disciplines Copilot staffed for you, on demand, at zero headcount cost.
 
-Hours of assistance broken down across **20 professional roles** — Software Engineer, Data Analyst, UX Designer, Solutions Architect, Management Consultant, Research Scientist, and more. A ranked bar chart shows exactly which disciplines carried the most weight, making the invisible staffing equivalent visible.
+### 🎯 How You Collaborated
+Every interaction classified by intent — **Building, Researching, Designing, Investigating, Iterating, Shipping**. Discover your collaboration signature and whether Copilot is an always-on tax or a targeted force multiplier.
 
-### 🎯 How I Collaborated
-A **donut chart** breaking down every interaction by intent — Building, Investigating, Designing, Researching, Iterating, Shipping. See your collaboration signature: were you mostly building, or debugging? Designing, or researching? Per-project breakdowns reveal how your approach varied across workstreams.
+### ⏰ When You Collaborated
+Time-of-day activity patterns with a daily heatmap — spot whether you're an early-morning builder or a late-night debugger, and whether AI assistance is concentrated or spread across your day.
 
-### ⏰ When I Worked
-Time-of-day activity patterns with an expandable **daily heatmap** — see whether you're an early-morning builder or a late-night debugger, with intensity shading across every time slot.
-
-### 🔢 By the Numbers
-The raw metrics: Copilot seat cost vs. market API rates, premium request consumption, token breakdown (input, output, cache hits), and AI processing time.
-
-### 📐 Estimation Evidence
-Collapsible detail showing exactly how effort estimates were calculated — tool invocations, premium requests, active engagement time, and the deterministic formula behind each number.
+### 📐 Complexity Evidence
+Collapsible estimation detail showing the quantitative signals behind every effort number — tool invocations, premium requests, token volumes, and the deterministic formula. Evidence that Copilot isn't just handling boilerplate — it's tackling real complexity.
 
 ## 📸 Sample Report
 
@@ -140,7 +132,7 @@ See [docs/architecture.md](docs/architecture.md) for session file formats, token
 | **GitHub Copilot** | Session data source — must have active sessions in `~/.copilot/session-state/` |
 | **Microsoft Outlook** | *(Optional)* For `--email` delivery via COM automation — auto-detects recipient from GitHub auth |
 
-No `pip install` needed for normal use — the **core report generator** (`harvest.py`, `analyze.py`, `report.py`, `whatidid.py`) uses only the Python standard library + GitHub Models API. The optional GIF capture helper (`make_gif.py`, used to generate the sample animation in this README) depends on extra packages (Playwright and Pillow); only install those if you want to reproduce the GIF.
+No `pip install` needed — the core report generator (`harvest.py`, `analyze.py`, `report.py`, `whatidid.py`) uses only the Python standard library + GitHub Models API.
 
 ## 🤝 Copilot CLI Skill
 
