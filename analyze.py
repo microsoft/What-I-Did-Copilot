@@ -48,6 +48,83 @@ def _get_github_token() -> str:
     return ""
 
 
+def _find_copilot_cli() -> str:
+    """Find the copilot CLI binary — checks PATH, gh copilot, and VS Code's bundled copy."""
+    import shutil, os, platform
+
+    # 1. Standalone copilot in PATH
+    if shutil.which("copilot"):
+        return "copilot"
+
+    # 2. gh copilot (wraps the CLI via GitHub CLI extension)
+    if shutil.which("gh"):
+        try:
+            r = subprocess.run(["gh", "copilot", "--", "--version"],
+                               capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                return "gh-copilot"
+        except Exception:
+            pass
+
+    # 3. VS Code's bundled copilot CLI
+    if platform.system() == "Windows":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            bat = Path(appdata) / "Code" / "User" / "globalStorage" / "github.copilot-chat" / "copilotCli" / "copilot.bat"
+            if bat.exists():
+                return str(bat)
+    else:
+        for base in ("~/.vscode/globalStorage", "~/.vscode-server/data/User/globalStorage"):
+            cli = Path(base).expanduser() / "github.copilot-chat" / "copilotCli" / "copilot"
+            if cli.exists():
+                return str(cli)
+
+    return ""
+
+
+def _analyze_via_copilot_cli(prompt: str) -> dict | None:
+    """Run AI analysis by piping the prompt through an authenticated copilot CLI session.
+
+    This uses the user's existing Copilot subscription — no API key needed.
+    Works for VS Code users who don't have gh CLI or a GitHub token.
+    """
+    cli = _find_copilot_cli()
+    if not cli:
+        return None
+
+    if cli == "gh-copilot":
+        cmd = ["gh", "copilot", "--", "-p", prompt, "--output-format", "text",
+               "--no-file-access"]
+    else:
+        cmd = [cli, "-p", prompt, "--output-format", "text",
+               "--no-file-access"]
+
+    try:
+        print("  (Using Copilot CLI for analysis — no API key needed.)")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        if result.returncode != 0:
+            return None
+
+        raw = result.stdout.strip()
+        # Extract JSON from response — copilot may wrap it in markdown fences
+        if "```json" in raw:
+            raw = raw.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```", 1)[1].split("```", 1)[0].strip()
+        # Find first { to last }
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            raw = raw[start:end]
+
+        return json.loads(raw)
+    except subprocess.TimeoutExpired:
+        print("  WARNING: Copilot CLI timed out after 180s.")
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"  WARNING: Copilot CLI analysis failed ({type(e).__name__}).")
+    return None
+
+
 def check_api_health() -> tuple:
     """Quick connectivity check to the GitHub Models API.
 
@@ -134,119 +211,9 @@ def _cache_path(target_date: str) -> Path:
     return _CACHE_DIR / f"{target_date}.json"
 
 
-def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api: bool = True) -> dict:
-    # Aggregate metrics across all sessions
-    total_tokens = {
-        "input":          sum(s["tokens"]["input"]          for s in sessions),
-        "output":         sum(s["tokens"]["output"]         for s in sessions),
-        "cache_read":     sum(s["tokens"]["cache_read"]     for s in sessions),
-        "cache_creation": sum(s["tokens"]["cache_creation"] for s in sessions),
-    }
-    total_tokens["total"] = sum(total_tokens.values())
-
-    total_premium     = sum(s.get("premium_requests", 0)           for s in sessions)
-    total_api_ms      = sum(s.get("total_api_ms", 0)               for s in sessions)
-    total_lines_added = sum(s.get("code_changes", {}).get("linesAdded", 0)   for s in sessions)
-    total_lines_removed = sum(s.get("code_changes", {}).get("linesRemoved", 0) for s in sessions)
-
-    all_files = []
-    for s in sessions:
-        all_files.extend(s.get("code_changes", {}).get("filesModified", []))
-        all_files.extend(s.get("files_touched", []))
-    all_files = list(dict.fromkeys(all_files))  # deduplicate, preserve order
-
-    # Build per-project session metrics for evidence display
-    _session_metrics: dict = {}
-    for s in sessions:
-        proj = s["project"]
-        n_tools = s.get("tool_invocations", 0) or sum(
-            len(m.get("tools_after", [])) for m in s["messages"] if m["role"] == "user"
-        )
-        cc = s.get("code_changes", {})
-        active_min = compute_active_minutes(s["messages"])
-        wall_min = compute_elapsed_minutes(s.get("session_start", ""), s.get("session_end", ""))
-
-        if proj in _session_metrics:
-            m = _session_metrics[proj]
-            m["tokens"]           += s["tokens"]["total"]
-            m["tool_invocations"] += n_tools
-            m["premium_requests"] += s.get("premium_requests", 0)
-            m["lines_added"]      += cc.get("linesAdded", 0)
-            m["lines_removed"]    += cc.get("linesRemoved", 0)
-            m["active_minutes"]   += active_min
-            m["wall_clock_minutes"] += wall_min
-            m["sessions"]         += 1
-        else:
-            _session_metrics[proj] = {
-                "tokens":            s["tokens"]["total"],
-                "tool_invocations":  n_tools,
-                "premium_requests":  s.get("premium_requests", 0),
-                "lines_added":       cc.get("linesAdded", 0),
-                "lines_removed":     cc.get("linesRemoved", 0),
-                "active_minutes":    active_min,
-                "wall_clock_minutes": wall_min,
-                "sessions":          1,
-            }
-
-    # Also index by last path component for flexible goal→project matching
-    for proj in list(_session_metrics.keys()):
-        last = proj.replace("\\", "/").split("/")[-1]
-        _session_metrics.setdefault(last, _session_metrics[proj])
-
-    def _attach_metrics(result: dict) -> dict:
-        result["tokens"]           = total_tokens
-        result["premium_requests"] = total_premium
-        result["total_api_ms"]     = total_api_ms
-        result["lines_added"]      = total_lines_added
-        result["lines_removed"]    = total_lines_removed
-        result["files_modified"]   = all_files
-        result["session_metrics"]  = _session_metrics
-        return result
-
-    # Return cached result if available
-    cache_file = _cache_path(target_date)
-    if cache_file.exists():
-        try:
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
-            if cached.get("locked"):
-                if refresh:
-                    print("  (Cache is locked — ignoring --refresh. Delete the cache file to unlock.)")
-                else:
-                    method = cached.get("analysis_method", "ai")
-                    if method == "heuristic":
-                        print("  WARNING: Using locked HEURISTIC cache — estimates are approximate.")
-                    else:
-                        print("  (Using locked cache — estimates are frozen.)")
-                return _attach_metrics(cached)
-            if not refresh:
-                method = cached.get("analysis_method", "ai")
-                if method == "heuristic":
-                    print("  WARNING: Using cached HEURISTIC analysis -- estimates are approximate. Pass --refresh to re-analyse with AI.")
-                else:
-                    print("  (Using cached analysis — pass --refresh to re-analyse.)")
-                return _attach_metrics(cached)
-        except Exception:
-            pass
-
-    if not use_api:
-        return _attach_metrics(_fallback_analysis(target_date, sessions))
-
-    token = _get_github_token()
-    if not token:
-        print("  (No GitHub token — using heuristic analysis. Run `gh auth login` to enable semantic analysis.)")
-        return _attach_metrics(_fallback_analysis(target_date, sessions))
-
-    transcript  = _build_transcript(sessions)
-
-    # Truncate transcript to stay within token limit (~4 chars per token, leave room for prompt)
-    MAX_TRANSCRIPT_CHARS = 12000  # ~3000 tokens, leaving ~5000 for prompt + response
-    if len(transcript) > MAX_TRANSCRIPT_CHARS:
-        transcript = transcript[:MAX_TRANSCRIPT_CHARS] + "\n\n[... transcript truncated for length ...]"
-
-    domain_list = ", ".join(DOMAIN_SKILLS[:6]) + ", ..."
-    tech_list   = ", ".join(TECH_SKILLS[:6])   + ", ..."
-
-    prompt = f"""Analyze this day of GitHub Copilot-assisted work and produce a JSON digest.
+def _build_analysis_prompt(transcript: str, domain_list: str, tech_list: str) -> str:
+    """Build the analysis prompt — shared by both the API and copilot CLI paths."""
+    return f"""Analyze this day of GitHub Copilot-assisted work and produce a JSON digest.
 
 SESSION TRANSCRIPT:
 {transcript}
@@ -364,13 +331,152 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
           "domain_skills": ["1-2 from: {domain_list}"],
           "tech_skills": ["0-2 from: {tech_list} (omit if none)"],
           "task_type": "one of: Development | Bug Fix & Debug | Analysis & Research | Design & UX | Execution & Ops",
-          "professional_roles": ["1-2 roles from the list below. Match to what was ACTUALLY DONE, not the job title of the user. These represent professional services roles — pick the role a billing firm would charge for this work.\n\nTECHNICAL ROLES (code, systems, data):\n  • Software Engineer      — writing/debugging code, implementing features, building tools, scripting in any language\n  • Frontend Developer     — HTML/CSS/JS/TS, web or app UI implementation\n  • Data Analyst           — SQL queries, KPI dashboards, structured data analysis, metrics computation, BI reports. ONLY if actual data/SQL work was done — NOT for general research.\n  • Data Engineer          — data pipelines, ETL, warehouse schema, data infrastructure\n  • DevOps Engineer        — CI/CD, deployment automation, containerisation, infrastructure-as-code\n  • Solutions Architect    — system/API design, architecture decisions, technical integration strategy\n  • Security Engineer      — auth, encryption, vulnerability assessment, security review\n  • QA Engineer            — test writing, debugging, validation, quality assurance\n\nDESIGN & COMMUNICATION ROLES:\n  • UX Designer            — user flows, wireframes, usability, interaction design\n  • Visual Designer        — slide decks, graphics, layouts, branding, visual output\n  • Technical Writer       — documentation, READMEs, how-to guides, technical explainers\n\nBUSINESS & STRATEGY ROLES:\n  • Product Manager        — product roadmap, feature requirements, user stories, prioritisation\n  • Program Manager        — project coordination, delivery planning, cross-team dependencies, status reporting\n  • Business Analyst       — process analysis, gap analysis, requirements gathering, workflow documentation\n  • Management Consultant  — strategic recommendations, frameworks, benchmarking, executive presentations\n\nDOMAIN & INDUSTRY EXPERT ROLES (use when the work requires deep subject-matter knowledge beyond generic software skills):\n  • Research Scientist     — hypothesis-driven investigation, experiments, literature review, scientific modelling\n  • Financial Analyst      — financial modelling, valuation, investment analysis, quantitative finance, forecasting\n  • Risk & Compliance Analyst — regulatory analysis, risk assessment, compliance documentation, audit preparation\n  • Domain Expert          — industry-specific analysis requiring specialist knowledge (engineering, medicine, law, energy, etc.) that does not fit a more specific role above\n\nDECISION RULES:\n  - General web search / reading docs / evaluating tools → Software Engineer (if technical) or Business Analyst (if process/strategy)\n  - Writing a report or presentation → Management Consultant (if strategic) or Visual Designer (if primarily layout/slides) or Technical Writer (if reference documentation)\n  - Any Python/R/Julia for numerical modelling or finance → Financial Analyst if domain is finance/quant, else Software Engineer\n  - Regulatory or policy research → Risk & Compliance Analyst"],
+          "professional_roles": ["1-2 roles a billing firm would charge for this work — e.g. Software Engineer, Data Analyst, UX Designer, Management Consultant, etc."],
           "human_hours": <single calibrated number per the scale above, nearest 0.25h>
         }}
       ]
     }}
   ]
 }}"""
+
+
+def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api: bool = True) -> dict:
+    # Aggregate metrics across all sessions
+    total_tokens = {
+        "input":          sum(s["tokens"]["input"]          for s in sessions),
+        "output":         sum(s["tokens"]["output"]         for s in sessions),
+        "cache_read":     sum(s["tokens"]["cache_read"]     for s in sessions),
+        "cache_creation": sum(s["tokens"]["cache_creation"] for s in sessions),
+    }
+    total_tokens["total"] = sum(total_tokens.values())
+
+    total_premium     = sum(s.get("premium_requests", 0)           for s in sessions)
+    total_api_ms      = sum(s.get("total_api_ms", 0)               for s in sessions)
+    total_lines_added = sum(s.get("code_changes", {}).get("linesAdded", 0)   for s in sessions)
+    total_lines_removed = sum(s.get("code_changes", {}).get("linesRemoved", 0) for s in sessions)
+
+    all_files = []
+    for s in sessions:
+        all_files.extend(s.get("code_changes", {}).get("filesModified", []))
+        all_files.extend(s.get("files_touched", []))
+    all_files = list(dict.fromkeys(all_files))  # deduplicate, preserve order
+
+    # Build per-project session metrics for evidence display
+    _session_metrics: dict = {}
+    for s in sessions:
+        proj = s["project"]
+        n_tools = s.get("tool_invocations", 0) or sum(
+            len(m.get("tools_after", [])) for m in s["messages"] if m["role"] == "user"
+        )
+        cc = s.get("code_changes", {})
+        active_min = compute_active_minutes(s["messages"])
+        wall_min = compute_elapsed_minutes(s.get("session_start", ""), s.get("session_end", ""))
+
+        if proj in _session_metrics:
+            m = _session_metrics[proj]
+            m["tokens"]           += s["tokens"]["total"]
+            m["tool_invocations"] += n_tools
+            m["premium_requests"] += s.get("premium_requests", 0)
+            m["lines_added"]      += cc.get("linesAdded", 0)
+            m["lines_removed"]    += cc.get("linesRemoved", 0)
+            m["active_minutes"]   += active_min
+            m["wall_clock_minutes"] += wall_min
+            m["sessions"]         += 1
+        else:
+            _session_metrics[proj] = {
+                "tokens":            s["tokens"]["total"],
+                "tool_invocations":  n_tools,
+                "premium_requests":  s.get("premium_requests", 0),
+                "lines_added":       cc.get("linesAdded", 0),
+                "lines_removed":     cc.get("linesRemoved", 0),
+                "active_minutes":    active_min,
+                "wall_clock_minutes": wall_min,
+                "sessions":          1,
+            }
+
+    # Also index by last path component for flexible goal→project matching
+    for proj in list(_session_metrics.keys()):
+        last = proj.replace("\\", "/").split("/")[-1]
+        _session_metrics.setdefault(last, _session_metrics[proj])
+
+    def _attach_metrics(result: dict) -> dict:
+        result["tokens"]           = total_tokens
+        result["premium_requests"] = total_premium
+        result["total_api_ms"]     = total_api_ms
+        result["lines_added"]      = total_lines_added
+        result["lines_removed"]    = total_lines_removed
+        result["files_modified"]   = all_files
+        result["session_metrics"]  = _session_metrics
+        return result
+
+    # Return cached result if available
+    cache_file = _cache_path(target_date)
+    if cache_file.exists():
+        try:
+            cached = json.loads(cache_file.read_text(encoding="utf-8"))
+            if cached.get("locked"):
+                if refresh:
+                    print("  (Cache is locked — ignoring --refresh. Delete the cache file to unlock.)")
+                else:
+                    method = cached.get("analysis_method", "ai")
+                    if method == "heuristic":
+                        print("  WARNING: Using locked HEURISTIC cache — estimates are approximate.")
+                    else:
+                        print("  (Using locked cache — estimates are frozen.)")
+                return _attach_metrics(cached)
+            if not refresh:
+                method = cached.get("analysis_method", "ai")
+                if method == "heuristic":
+                    print("  WARNING: Using cached HEURISTIC analysis -- estimates are approximate. Pass --refresh to re-analyse with AI.")
+                else:
+                    print("  (Using cached analysis — pass --refresh to re-analyse.)")
+                return _attach_metrics(cached)
+        except Exception:
+            pass
+
+    if not use_api:
+        return _attach_metrics(_fallback_analysis(target_date, sessions))
+
+    token = _get_github_token()
+    if not token:
+        # Try copilot CLI fallback (uses Copilot subscription, no API key needed)
+        print("  (No GitHub token — trying Copilot CLI for analysis...)")
+        transcript = _build_transcript(sessions)
+        MAX_TRANSCRIPT_CHARS = 12000
+        if len(transcript) > MAX_TRANSCRIPT_CHARS:
+            transcript = transcript[:MAX_TRANSCRIPT_CHARS] + "\n\n[... transcript truncated for length ...]"
+
+        domain_list = ", ".join(DOMAIN_SKILLS[:6]) + ", ..."
+        tech_list   = ", ".join(TECH_SKILLS[:6])   + ", ..."
+
+        prompt = _build_analysis_prompt(transcript, domain_list, tech_list)
+        cli_result = _analyze_via_copilot_cli(prompt)
+        if cli_result:
+            cli_result["sessions_count"]  = len(sessions)
+            cli_result["projects"]        = list({s["project"] for s in sessions})
+            cli_result["analysis_method"] = "ai-copilot-cli"
+            _attach_metrics(cli_result)
+            try:
+                _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                cache_file.write_text(json.dumps(cli_result, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+            return cli_result
+
+        print("  (Copilot CLI unavailable — using heuristic analysis. Run `gh auth login` to enable semantic analysis.)")
+        return _attach_metrics(_fallback_analysis(target_date, sessions))
+
+    transcript  = _build_transcript(sessions)
+
+    # Truncate transcript to stay within token limit (~4 chars per token, leave room for prompt)
+    MAX_TRANSCRIPT_CHARS = 12000  # ~3000 tokens, leaving ~5000 for prompt + response
+    if len(transcript) > MAX_TRANSCRIPT_CHARS:
+        transcript = transcript[:MAX_TRANSCRIPT_CHARS] + "\n\n[... transcript truncated for length ...]"
+
+    domain_list = ", ".join(DOMAIN_SKILLS[:6]) + ", ..."
+    tech_list   = ", ".join(TECH_SKILLS[:6])   + ", ..."
+
+    prompt = _build_analysis_prompt(transcript, domain_list, tech_list)
 
     payload = json.dumps({
         "model":       MODEL,

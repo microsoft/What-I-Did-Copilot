@@ -75,17 +75,32 @@ SEAT_COST_PER_MONTH = 39  # Enterprise Copilot seat $/month
 
 
 def _prorated_seat_cost(analysis: dict) -> "tuple[int, int]":
-    """Return (seat_cost, n_months) prorated over the distinct calendar months in active_dates."""
+    """Return (seat_cost, n_months) prorated over the report's time span.
+
+    For short reports (≤31 days), always use 1 month regardless of calendar
+    month boundaries — a 7-day export shouldn't show 2 months of seat cost
+    just because it crosses a month boundary.
+    """
     dates = analysis.get("active_dates", [])
     if not dates:
         return SEAT_COST_PER_MONTH, 1
-    months: set = set()
+
+    # Parse dates and determine the span
+    parsed = []
     for d in dates:
         try:
-            dt = datetime.strptime(str(d)[:10], "%Y-%m-%d")
-            months.add((dt.year, dt.month))
+            parsed.append(datetime.strptime(str(d)[:10], "%Y-%m-%d"))
         except ValueError:
             pass
+    if not parsed:
+        return SEAT_COST_PER_MONTH, 1
+
+    span_days = (max(parsed) - min(parsed)).days + 1
+    if span_days <= 31:
+        return SEAT_COST_PER_MONTH, 1
+
+    # For longer reports, prorate by distinct calendar months
+    months = {(dt.year, dt.month) for dt in parsed}
     n_months = max(1, len(months))
     return SEAT_COST_PER_MONTH * n_months, n_months
 
@@ -1675,50 +1690,14 @@ REPO_URL = "https://github.com/microsoft/mycopilotworks"
 
 def _share_bar(target_date: str, goals: list, headline: str, total_human_h: float) -> str:
     """Summary/share hint strip injected just below the report header."""
-    import json as _json
-
-    n_goals     = len(goals)
-    total_tasks = sum(len(g.get("tasks", [])) for g in goals)
-    goal_lines  = "\n".join(f"  \u2022 {g.get('label') or g.get('title', '')}" for g in goals)
-    signature   = f"\n\n\u2014\n\U0001f4ca Get your own GitHub Copilot Impact Report\n{REPO_URL}"
-
-    share_text = (
-        f"{headline}\n\n"
-        f"This period: {n_goals} project{'s' if n_goals != 1 else ''} \u00b7 "
-        f"{total_tasks} tasks \u00b7 {_fmt_h(total_human_h)} professional effort equivalent\n\n"
-        f"Key deliverables:\n{goal_lines}"
-        f"{signature}"
-    )
-
-    email_subject = f"What I Did with GitHub Copilot \u2014 {target_date}"
-    js_subject    = _json.dumps(email_subject)
-    js_body       = _json.dumps(share_text)
-    js_teams      = _json.dumps(share_text)
-
     return f"""
   <tr>
     <td style="background:#ffffff;padding:7px 24px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']};
                border-bottom:1px solid {C['border']}">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-        <span style="font-size:10px;color:{C['muted']}">
-          Run with <code style="font-size:10px;background:#f6f8fa;padding:1px 4px;border-radius:3px">--email</code> to send this report via Outlook
-        </span>
-        <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
-          <button type="button"
-                  style="font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid {C['accent']};
-                         background:{C['accent']};color:#ffffff;cursor:pointer;white-space:nowrap"
-                  onclick="shareViaEmail({js_subject}, {js_body})">
-            Share via Email
-          </button>
-          <button id="teams-share-btn" type="button"
-                  style="font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid #6264a7;
-                         background:#6264a7;color:#ffffff;cursor:pointer;white-space:nowrap"
-                  onclick="shareViaTeams({js_teams})">
-            Share via Teams
-          </button>
-        </div>
-      </div>
+      <span style="font-size:10px;color:{C['muted']}">
+        Run with <code style="font-size:10px;background:#f6f8fa;padding:1px 4px;border-radius:3px">--email</code> to send this report via Outlook
+      </span>
     </td>
   </tr>"""
 
