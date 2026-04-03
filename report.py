@@ -233,9 +233,12 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
 
 
 
-def _what_i_work_on(goals: list, sessions: list) -> str:
+def _what_i_work_on(goals: list, sessions: list, project_label_map: dict = None) -> str:
     """Section: 'What Got Produced' — deliverables files categorized."""
     import re
+
+    if project_label_map is None:
+        project_label_map = {}
 
     file_categories = {
         "Scripts":        {"icon": "&#128187;", "extensions": {".py", ".js", ".ts", ".sh", ".ps1"}},
@@ -247,7 +250,8 @@ def _what_i_work_on(goals: list, sessions: list) -> str:
 
     all_files: dict = {}
     for s in sessions:
-        proj = s.get("project", "")
+        raw_proj = s.get("project", "")
+        proj = project_label_map.get(raw_proj, raw_proj)
         for f in s.get("code_changes", {}).get("filesModified", []):
             fname = f.replace("\\", "/").split("/")[-1]
             all_files.setdefault(fname, proj)
@@ -564,10 +568,13 @@ def _work_pattern(sessions: list) -> str:
   </tr>"""
 
 
-def _collaboration_intent(sessions: list) -> str:
+def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str:
     """Section: 'How I Collaborated' — intent donut chart with per-project breakdowns."""
     from harvest import aggregate_intents
     import harvest as _harvest
+
+    if project_label_map is None:
+        project_label_map = {}
 
     # Prefer intent metadata from `harvest` when available; fall back to empty mappings.
     _INTENT_COLORS = getattr(_harvest, "_INTENT_COLORS", {})
@@ -575,8 +582,31 @@ def _collaboration_intent(sessions: list) -> str:
 
     intent_data = aggregate_intents(sessions)
     counts = intent_data["counts"]
-    by_project = intent_data["by_project"]
+    by_project_raw = intent_data["by_project"]
     total = intent_data["total"]
+
+    # Remap raw project names to consistent goal labels;
+    # merge unmapped session projects into the closest goal by intent volume
+    goal_labels = set(project_label_map.values())
+    by_project = {}
+    unmapped_counts = {}
+    for raw_name, pcounts in by_project_raw.items():
+        display = project_label_map.get(raw_name, None)
+        if display:
+            if display in by_project:
+                for cat, n in pcounts.items():
+                    by_project[display][cat] = by_project[display].get(cat, 0) + n
+            else:
+                by_project[display] = dict(pcounts)
+        else:
+            # Accumulate unmapped sessions to merge into the largest goal
+            for cat, n in pcounts.items():
+                unmapped_counts[cat] = unmapped_counts.get(cat, 0) + n
+    # Fold unmapped counts into the largest goal (by total interactions)
+    if unmapped_counts and by_project:
+        largest = max(by_project, key=lambda k: sum(by_project[k].values()))
+        for cat, n in unmapped_counts.items():
+            by_project[largest][cat] = by_project[largest].get(cat, 0) + n
 
     if total == 0:
         return ""
@@ -925,6 +955,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
     if not goals:
         return ""
 
+    VISIBLE = 5
     total_h = sum(g.get("human_hours", 0) for g in goals)
     total_formula_h = 0.0
 
@@ -944,7 +975,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         ai_h       = _fmt_h(g.get("human_hours", 0))
         formula_h  = _fmt_h(fe["total"])
 
-        title = g.get("title", "")
+        title = g.get("label") or g.get("title", "")
         if len(title) > 40:
             title = title[:37] + "..."
 
@@ -964,6 +995,21 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
             f'max({_fmt_h(fe["tool_h"])}, {_fmt_h(fe["req_h"])}, {_fmt_h(fe["active_h"])})'
             f' + {_fmt_h(fe["lines_h"])} = <strong>{formula_h}</strong>'
         )
+
+        # Insert see-more boundary for >5 projects
+        if i == VISIBLE and len(goals) > VISIBLE:
+            n_extra = len(goals) - VISIBLE
+            rows += f"""
+        <tr id="evidence-more-toggle" style="cursor:pointer;background:{C['accent_lt']}"
+            onclick="var el=document.getElementById('evidence-extra-rows');
+                     var show=el.style.display==='none';
+                     el.style.display=show?'':'none';
+                     this.style.display='none';">
+          <td colspan="7" style="padding:6px 10px;text-align:center;font-size:11px;
+                     font-weight:600;color:{C['accent']}">
+            &#9660; Show {n_extra} more project{'s' if n_extra != 1 else ''}</td>
+        </tr>
+        </tbody><tbody id="evidence-extra-rows" style="display:none">"""
 
         rows += f"""
         <tr style="background:{bg}">
@@ -998,6 +1044,10 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
             <span style="color:{C['muted']}">{lines_m}</span></td>
         </tr>"""
+
+    # Close extra-rows tbody if we opened it
+    if len(goals) > VISIBLE:
+        rows += "</tbody>"
 
     # Total row
     rows += f"""
@@ -1464,8 +1514,8 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
         session_metrics = {}
 
     VISIBLE = 5
-    # Sort by hours descending so highest-impact projects appear first
-    sorted_goals = sorted(goals, key=lambda g: g.get("human_hours", 0), reverse=True)
+    # Goals arrive pre-sorted by hours descending from generate_html
+    sorted_goals = list(goals)
     n_extra      = max(0, len(sorted_goals) - VISIBLE)
 
     def _goal_row(i: int, g: dict) -> str:
@@ -1493,7 +1543,7 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
             <div style="font-size:12px;font-weight:600;color:{C['text']};line-height:1.35">
               <span id="{gid}-arrow" style="font-size:10px;color:{C['accent']};
                                             margin-right:5px">&#9654;</span>
-              {date_badge}{g.get('title', '')}
+              {date_badge}{g.get('label') or g.get('title', '')}
             </div>
             {f'<div style="margin-top:5px">{doc_html}</div>' if doc_html else ''}
           </td>
@@ -1613,7 +1663,7 @@ def _goal_detail_headers(goals: list, session_lookup: dict = None) -> str:
                   <span id="{gid}-arrow" style="font-size:11px;color:{C['accent']};
                                                  margin-right:6px">&#9654;</span>
                   <span style="font-size:13px;font-weight:600;color:{C['text']}">
-                    {g.get('title', '')}
+                    {g.get('label') or g.get('title', '')}
                   </span>
                   <span style="font-size:11px;color:{C['muted']};margin-left:8px">
                     {n} task{'s' if n != 1 else ''}
@@ -1704,6 +1754,8 @@ def _share_bar(target_date: str, goals: list, headline: str, total_human_h: floa
 
 def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
     goals      = analysis.get("goals", [])
+    # Sort goals once by hours descending so all sections are consistent
+    goals      = sorted(goals, key=lambda g: g.get("human_hours", 0), reverse=True)
     narrative  = analysis.get("day_narrative", "")
     headline   = analysis.get("headline", f"Daily Report — {target_date}")
     focus      = analysis.get("primary_focus", "")
@@ -1732,6 +1784,53 @@ def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
         session_lookup[s["project"]] = s
         last = s["project"].replace("\\", "/").split("/")[-1]
         session_lookup.setdefault(last, s)
+
+    # Build mapping from raw session project names to goal display labels
+    # so session-based sections (collaboration, deliverables) use consistent names
+    project_label_map = {}
+    for g in goals:
+        raw = g.get("project", "")
+        label = g.get("label") or g.get("title", "")
+        if raw and label:
+            project_label_map[raw] = label
+            last = raw.replace("\\", "/").split("/")[-1]
+            project_label_map.setdefault(last, label)
+    # Map unmapped session projects by fuzzy-matching goal projects (case-insensitive,
+    # hyphen/space normalized) so e.g. "Frontier Firm" matches "frontier-firm"
+    _norm = lambda s: s.lower().replace("-", " ").replace("_", " ").strip()
+    goal_norm_map = {_norm(g.get("project", "")): g for g in goals if g.get("project")}
+    # Also build a repo→goal map: if a goal's sessions share a git repo, map that repo name
+    repo_to_goal = {}
+    for g in goals:
+        gp = g.get("project", "")
+        if not gp:
+            continue
+        # Find sessions belonging to this goal's project
+        for s in sessions:
+            sp = s.get("project", "")
+            if sp == gp or _norm(sp) == _norm(gp):
+                for repo in s.get("git_repos", []):
+                    repo_short = repo.replace("\\", "/").split("/")[-1]
+                    repo_to_goal.setdefault(repo_short, g)
+    for s in sessions:
+        sp = s.get("project", "")
+        if sp and sp not in project_label_map:
+            normed = _norm(sp)
+            matched_goal = goal_norm_map.get(normed)
+            if not matched_goal:
+                # Try matching via git repo name
+                for repo in s.get("git_repos", []):
+                    repo_short = repo.replace("\\", "/").split("/")[-1]
+                    matched_goal = repo_to_goal.get(repo_short)
+                    if matched_goal:
+                        break
+                if not matched_goal:
+                    # Try matching session project name as a repo name
+                    matched_goal = repo_to_goal.get(sp)
+            if matched_goal:
+                label = matched_goal.get("label") or matched_goal.get("title", "")
+                if label:
+                    project_label_map[sp] = label
 
     js = """
 <script>
@@ -1900,12 +1999,12 @@ window.onload = function() {
   </tr>
 
   <!-- 2. WHAT GOT PRODUCED (deliverables + skills) -->
-  {_what_i_work_on(goals, sessions)}
+  {_what_i_work_on(goals, sessions, project_label_map)}
 
   {_skills_mobilized(goals)}
 
   <!-- 3. HOW I WORKED WITH COPILOT (intent) -->
-  {_collaboration_intent(sessions)}
+  {_collaboration_intent(sessions, project_label_map)}
 
   <!-- 4. WHEN I WORKED WITH COPILOT -->
   {_work_pattern(sessions)}
