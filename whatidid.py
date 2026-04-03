@@ -27,10 +27,19 @@ from datetime import date, timedelta
 from pathlib import Path
 
 # Force UTF-8 output on Windows to avoid cp1252 UnicodeEncodeError on emoji/symbols
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+def _ensure_utf8_stream(stream):
+    encoding = getattr(stream, "encoding", None)
+    if encoding and encoding.lower() == "utf-8":
+        return stream
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+        return stream
+    if hasattr(stream, "buffer"):
+        return io.TextIOWrapper(stream.buffer, encoding="utf-8", errors="replace")
+    return stream
+
+sys.stdout = _ensure_utf8_stream(sys.stdout)
+sys.stderr = _ensure_utf8_stream(sys.stderr)
 
 sys.path.insert(0, str(Path(__file__).parent))
 

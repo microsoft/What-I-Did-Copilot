@@ -585,28 +585,18 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
     by_project_raw = intent_data["by_project"]
     total = intent_data["total"]
 
-    # Remap raw project names to consistent goal labels;
-    # merge unmapped session projects into the closest goal by intent volume
-    goal_labels = set(project_label_map.values())
+    # Remap raw project names to consistent goal labels when possible.
+    # If no mapping exists for a project, preserve its raw name so the
+    # per-project breakdown is not dropped when `project_label_map` is empty
+    # or incomplete.
     by_project = {}
-    unmapped_counts = {}
     for raw_name, pcounts in by_project_raw.items():
-        display = project_label_map.get(raw_name, None)
-        if display:
-            if display in by_project:
-                for cat, n in pcounts.items():
-                    by_project[display][cat] = by_project[display].get(cat, 0) + n
-            else:
-                by_project[display] = dict(pcounts)
-        else:
-            # Accumulate unmapped sessions to merge into the largest goal
+        display = project_label_map.get(raw_name) or raw_name
+        if display in by_project:
             for cat, n in pcounts.items():
-                unmapped_counts[cat] = unmapped_counts.get(cat, 0) + n
-    # Fold unmapped counts into the largest goal (by total interactions)
-    if unmapped_counts and by_project:
-        largest = max(by_project, key=lambda k: sum(by_project[k].values()))
-        for cat, n in unmapped_counts.items():
-            by_project[largest][cat] = by_project[largest].get(cat, 0) + n
+                by_project[display][cat] = by_project[display].get(cat, 0) + n
+        else:
+            by_project[display] = dict(pcounts)
 
     if total == 0:
         return ""
@@ -996,23 +986,24 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
             f' + {_fmt_h(fe["lines_h"])} = <strong>{formula_h}</strong>'
         )
 
-        # Insert see-more boundary for >5 projects
+        # Insert see-more toggle row for >5 projects
         if i == VISIBLE and len(goals) > VISIBLE:
             n_extra = len(goals) - VISIBLE
             rows += f"""
         <tr id="evidence-more-toggle" style="cursor:pointer;background:{C['accent_lt']}"
-            onclick="var el=document.getElementById('evidence-extra-rows');
-                     var show=el.style.display==='none';
-                     el.style.display=show?'':'none';
+            onclick="var rows=document.getElementsByClassName('evidence-extra-row');
+                     var show=rows.length && rows[0].style.display==='none';
+                     for(var j=0;j<rows.length;j++){{rows[j].style.display=show?'':'none';}}
                      this.style.display='none';">
           <td colspan="7" style="padding:6px 10px;text-align:center;font-size:11px;
                      font-weight:600;color:{C['accent']}">
             &#9660; Show {n_extra} more project{'s' if n_extra != 1 else ''}</td>
-        </tr>
-        </tbody><tbody id="evidence-extra-rows" style="display:none">"""
+        </tr>"""
 
+        extra = len(goals) > VISIBLE and i >= VISIBLE
+        extra_attrs = f' class="evidence-extra-row" style="display:none;background:{bg}"' if extra else f' style="background:{bg}"'
         rows += f"""
-        <tr style="background:{bg}">
+        <tr{extra_attrs}>
           <td style="padding:6px 10px;border-bottom:1px solid {C['border']};vertical-align:top;width:22%"
               rowspan="2">
             <div style="font-size:11px;font-weight:600;color:{C['text']};line-height:1.3">{title}</div>
@@ -1034,7 +1025,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
             <div style="font-size:8px;color:{C['muted']};text-transform:uppercase;margin-top:1px">AI est.</div>
           </td>
         </tr>
-        <tr style="background:{bg}">
+        <tr{extra_attrs}>
           <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
             {_hl(fe["tool_h"])}</td>
           <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
@@ -1044,10 +1035,6 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
             <span style="color:{C['muted']}">{lines_m}</span></td>
         </tr>"""
-
-    # Close extra-rows tbody if we opened it
-    if len(goals) > VISIBLE:
-        rows += "</tbody>"
 
     # Total row
     rows += f"""
