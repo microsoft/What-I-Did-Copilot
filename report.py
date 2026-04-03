@@ -882,30 +882,44 @@ def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -
 # ── Deterministic effort formula ─────────────────────────────────────────────
 
 def _tier_tools(n: int) -> float:
+    """Tool invocations → expert human hours.
+    Each action (read file, edit, run command, search) averages 2-3 min for
+    a human. Diminishing returns at scale as many become quick reads."""
     if n <= 0:   return 0.0
-    if n <= 5:   return 0.25
-    if n <= 15:  return 0.5
-    if n <= 50:  return 0.75
-    if n <= 150: return 1.5
-    if n <= 400: return 3.0
-    return 5.0
+    if n <= 10:  return 0.5       # exploration / setup
+    if n <= 30:  return 1.5       # focused change (~3 min each)
+    if n <= 75:  return 3.0       # multi-file work (~2.4 min each)
+    if n <= 150: return 5.0       # substantial feature (~2 min each)
+    if n <= 300: return 8.0       # major implementation
+    if n <= 600: return 12.0      # full system build
+    return 16.0                    # very large project
 
 
 def _tier_reqs(n: int) -> float:
+    """Premium requests → expert human hours.
+    Each request = a research/thinking cycle: formulate problem, read docs,
+    try approaches, iterate. ~8-12 min per meaningful turn."""
     if n <= 0:   return 0.0
-    if n <= 5:   return 0.25
-    if n <= 20:  return 0.5
-    if n <= 50:  return 1.0
-    if n <= 100: return 2.0
-    return 3.0
+    if n <= 5:   return 0.5       # quick consultation
+    if n <= 15:  return 2.0       # research session
+    if n <= 40:  return 4.0       # deep work session
+    if n <= 80:  return 8.0       # full-day equivalent
+    if n <= 150: return 12.0      # multi-day research
+    return 16.0
 
 
 def _tier_lines(n: int) -> float:
+    """Lines added → additional coding effort on top of research/iteration.
+    Expert writes 100-150 LoC/hr including boilerplate and comments.
+    Partially overlaps with tool invocations (edits/creates), so effective
+    rate is ~200 LoC/hr when used as an additive component."""
     if n <= 0:   return 0.0
-    if n <= 25:  return 0.1
-    if n <= 100: return 0.25
-    if n <= 300: return 0.5
-    return 1.0
+    if n <= 50:  return 0.25      # config tweak
+    if n <= 150: return 0.75      # small feature
+    if n <= 300: return 1.5       # moderate module
+    if n <= 500: return 2.5       # major implementation
+    if n <= 800: return 4.0       # large feature
+    return round(n / 200, 1)      # continuous above 800
 
 
 def _tier_active(m: float) -> float:
@@ -1195,53 +1209,61 @@ def _signal_guide() -> str:
     tools = _signal_tier_table(
         "Tool Invocations", "&#128295;",
         "Each time Copilot performs a discrete action: read a file, edit code, run a command, "
-        "search, create a file. Higher counts indicate more complex, multi-step work.",
+        "search, create a file. A human expert averages 2-3 minutes per equivalent action.",
         [
-            ("1–5",    "0.25h", "Quick task &mdash; open a file, make one edit, done. "
+            ("1–10",   "0.5h",  "Quick task &mdash; open a few files, make an edit, run a test. "
                                 "<em>\"Fix this typo in config.yaml\"</em>"),
-            ("5–15",   "0.5h",  "Small focused change &mdash; read a few files, edit a function, run tests. "
+            ("11–30",  "1.5h",  "Focused change &mdash; read several files, edit a function, debug. "
                                 "<em>\"Add error handling to the upload endpoint\"</em>"),
-            ("15–50",  "0.75h", "Moderate multi-file work &mdash; touch 3-4 files, debug, iterate. "
+            ("31–75",  "3h",    "Multi-file work &mdash; touch many files, iterate on approach. "
                                 "<em>\"Refactor the auth module to use JWT\"</em>"),
-            ("50–150", "1.5h",  "Substantial feature &mdash; design + implement across a module with tests. "
+            ("76–150", "5h",    "Substantial feature &mdash; design + implement across a module with tests. "
                                 "<em>\"Build the report generation pipeline\"</em>"),
-            ("150–400","3h",    "Major implementation &mdash; full tool or feature from scratch with iteration. "
+            ("151–300","8h",    "Major implementation &mdash; full tool or feature from scratch with iteration. "
                                 "<em>\"Ship an executive deck builder from concept to working system\"</em>"),
-            ("400+",   "5h",    "System overhaul &mdash; extensive multi-session redesign across many files. "
-                                "<em>\"Redesign the entire report layout with branding and ROI\"</em>"),
+            ("301–600","12h",   "System build &mdash; extensive multi-session design across many files. "
+                                "<em>\"Build a complete analytics tool with harvester, analyser, and report\"</em>"),
+            ("600+",   "16h",   "Large project &mdash; comprehensive system overhaul or multi-day build. "
+                                "<em>\"Redesign the entire reporting system with new architecture\"</em>"),
         ]
     )
     reqs = _signal_tier_table(
         "Premium Requests", "&#9889;",
         "Opus/Sonnet-class model calls that consume your Copilot quota. Each represents a "
-        "round of deep AI reasoning. More requests = more back-and-forth collaboration.",
+        "round of deep AI reasoning &mdash; equivalent to a research/thinking cycle for a human (~8-12 min).",
         [
             ("0",      "0h",    "No AI reasoning &mdash; script execution or file operations only"),
-            ("1–5",    "0.25h", "Quick consultation &mdash; ask one question, get answer, done. "
+            ("1–5",    "0.5h",  "Quick consultation &mdash; ask one question, get answer, done. "
                                 "<em>\"What does this error mean?\"</em>"),
-            ("5–20",   "0.5h",  "Moderate back-and-forth &mdash; debug a problem, explore options. "
+            ("6–15",   "2h",    "Research session &mdash; explore options, debug a problem. "
                                 "<em>\"Why is this test failing? Try a different approach\"</em>"),
-            ("20–50",  "1h",    "Extended collaboration &mdash; iterative feature build with refinement. "
-                                "<em>\"Build this component, now adjust the styling, now add tests\"</em>"),
-            ("50–100", "2h",    "Deep work session &mdash; complex design + implementation + review. "
+            ("16–40",  "4h",    "Deep work session &mdash; iterative feature build with refinement. "
+                                "<em>\"Build this component, adjust styling, add tests\"</em>"),
+            ("41–80",  "8h",    "Full-day equivalent &mdash; complex design + implementation + review. "
                                 "<em>\"Architect the data pipeline and implement each stage\"</em>"),
-            ("100+",   "3h",    "Marathon partnership &mdash; sustained, intensive multi-hour collaboration. "
-                                "<em>\"Full system design through to deployment with 162 model calls\"</em>"),
+            ("81–150", "12h",   "Multi-day collaboration &mdash; sustained intensive design and delivery. "
+                                "<em>\"Full system design through to deployment with 120+ model calls\"</em>"),
+            ("150+",   "16h",   "Marathon partnership &mdash; extensive multi-day research and implementation"),
         ]
     )
     lines = _signal_tier_table(
         "Lines of Code", "&#128196;",
-        "Net code added to the project. Indicates the volume of deliverable output &mdash; "
-        "more lines generally means more development and review work for a human.",
+        "Net code added to the project. An expert writes 100-150 lines per hour including "
+        "boilerplate, comments, and config. Lines are additive to research effort since writing "
+        "code is work beyond the thinking and iteration captured by other signals.",
         [
             ("0",      "0h",    "Research or analysis only &mdash; investigation, planning, no code written"),
-            ("1–25",   "0.1h",  "Config tweak or small fix &mdash; change a setting, fix a one-liner"),
-            ("25–100", "0.25h", "Small feature &mdash; a new function, helper, or template. "
+            ("1–50",   "0.25h", "Config tweak or small fix &mdash; change a setting, fix a one-liner"),
+            ("51–150", "0.75h", "Small feature &mdash; a new function, helper, or template. "
                                 "<em>\"Add a utility function with error handling\"</em>"),
-            ("100–300","0.5h",  "Moderate development &mdash; a new module or significant feature. "
+            ("151–300","1.5h",  "Moderate development &mdash; a new module or significant feature. "
                                 "<em>\"Build the session harvester with event parsing\"</em>"),
-            ("300+",   "1h",    "Substantial build &mdash; major feature, new tool, or extensive refactor. "
-                                "<em>\"Ship 405 lines of presentation generation code\"</em>"),
+            ("301–500","2.5h",  "Substantial implementation &mdash; major feature with multiple components. "
+                                "<em>\"Implement the full report generation pipeline\"</em>"),
+            ("501–800","4h",    "Large build &mdash; complete tool or extensive refactor. "
+                                "<em>\"Ship 600 lines of presentation generation code\"</em>"),
+            ("800+",   "5h+",   "Major build &mdash; comprehensive system code from scratch. "
+                                "<em>\"Write 1000+ lines for a full analytics engine\"</em>"),
         ]
     )
     active = _signal_tier_table(
@@ -1264,8 +1286,8 @@ def _signal_guide() -> str:
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
                       color:{C['muted']};margin-bottom:4px">What each signal means</div>
           <div style="font-size:10px;color:{C['muted']};line-height:1.5;margin-bottom:4px">
-            Each session signal maps to a multiplier representing equivalent human effort. The AI
-            reads all signals together and assigns an estimate within the highest applicable range.
+            Each session signal maps to a multiplier representing equivalent human effort. The formula
+            takes the highest of tools, requests, and active time, then adds lines of code on top.
             <br><strong style="color:{C['text']}">Reading the table:</strong> find your value in the
             Range column &rarr; the Multiplier shows the hour contribution from that signal alone.
           </div>
