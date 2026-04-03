@@ -233,9 +233,12 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
 
 
 
-def _what_i_work_on(goals: list, sessions: list) -> str:
+def _what_i_work_on(goals: list, sessions: list, project_label_map: dict = None) -> str:
     """Section: 'What Got Produced' — deliverables files categorized."""
     import re
+
+    if project_label_map is None:
+        project_label_map = {}
 
     file_categories = {
         "Scripts":        {"icon": "&#128187;", "extensions": {".py", ".js", ".ts", ".sh", ".ps1"}},
@@ -247,7 +250,8 @@ def _what_i_work_on(goals: list, sessions: list) -> str:
 
     all_files: dict = {}
     for s in sessions:
-        proj = s.get("project", "")
+        raw_proj = s.get("project", "")
+        proj = project_label_map.get(raw_proj, raw_proj)
         for f in s.get("code_changes", {}).get("filesModified", []):
             fname = f.replace("\\", "/").split("/")[-1]
             all_files.setdefault(fname, proj)
@@ -564,10 +568,13 @@ def _work_pattern(sessions: list) -> str:
   </tr>"""
 
 
-def _collaboration_intent(sessions: list) -> str:
+def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str:
     """Section: 'How I Collaborated' — intent donut chart with per-project breakdowns."""
     from harvest import aggregate_intents
     import harvest as _harvest
+
+    if project_label_map is None:
+        project_label_map = {}
 
     # Prefer intent metadata from `harvest` when available; fall back to empty mappings.
     _INTENT_COLORS = getattr(_harvest, "_INTENT_COLORS", {})
@@ -575,8 +582,21 @@ def _collaboration_intent(sessions: list) -> str:
 
     intent_data = aggregate_intents(sessions)
     counts = intent_data["counts"]
-    by_project = intent_data["by_project"]
+    by_project_raw = intent_data["by_project"]
     total = intent_data["total"]
+
+    # Remap raw project names to consistent goal labels when possible.
+    # If no mapping exists for a project, preserve its raw name so the
+    # per-project breakdown is not dropped when `project_label_map` is empty
+    # or incomplete.
+    by_project = {}
+    for raw_name, pcounts in by_project_raw.items():
+        display = project_label_map.get(raw_name) or raw_name
+        if display in by_project:
+            for cat, n in pcounts.items():
+                by_project[display][cat] = by_project[display].get(cat, 0) + n
+        else:
+            by_project[display] = dict(pcounts)
 
     if total == 0:
         return ""
@@ -862,30 +882,44 @@ def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -
 # ── Deterministic effort formula ─────────────────────────────────────────────
 
 def _tier_tools(n: int) -> float:
+    """Tool invocations → expert human hours.
+    Each action (read file, edit, run command, search) averages 2-3 min for
+    a human. Diminishing returns at scale as many become quick reads."""
     if n <= 0:   return 0.0
-    if n <= 5:   return 0.25
-    if n <= 15:  return 0.5
-    if n <= 50:  return 0.75
-    if n <= 150: return 1.5
-    if n <= 400: return 3.0
-    return 5.0
+    if n <= 10:  return 0.5       # exploration / setup
+    if n <= 30:  return 1.5       # focused change (~3 min each)
+    if n <= 75:  return 3.0       # multi-file work (~2.4 min each)
+    if n <= 150: return 5.0       # substantial feature (~2 min each)
+    if n <= 300: return 8.0       # major implementation
+    if n <= 600: return 12.0      # full system build
+    return 16.0                    # very large project
 
 
 def _tier_reqs(n: int) -> float:
+    """Premium requests → expert human hours.
+    Each request = a research/thinking cycle: formulate problem, read docs,
+    try approaches, iterate. ~8-12 min per meaningful turn."""
     if n <= 0:   return 0.0
-    if n <= 5:   return 0.25
-    if n <= 20:  return 0.5
-    if n <= 50:  return 1.0
-    if n <= 100: return 2.0
-    return 3.0
+    if n <= 5:   return 0.5       # quick consultation
+    if n <= 15:  return 2.0       # research session
+    if n <= 40:  return 4.0       # deep work session
+    if n <= 80:  return 8.0       # full-day equivalent
+    if n <= 150: return 12.0      # multi-day research
+    return 16.0
 
 
 def _tier_lines(n: int) -> float:
+    """Lines added → additional coding effort on top of research/iteration.
+    Expert writes 100-150 LoC/hr including boilerplate and comments.
+    Partially overlaps with tool invocations (edits/creates), so effective
+    rate is ~200 LoC/hr when used as an additive component."""
     if n <= 0:   return 0.0
-    if n <= 25:  return 0.1
-    if n <= 100: return 0.25
-    if n <= 300: return 0.5
-    return 1.0
+    if n <= 50:  return 0.25      # config tweak
+    if n <= 150: return 0.75      # small feature
+    if n <= 300: return 1.5       # moderate module
+    if n <= 500: return 2.5       # major implementation
+    if n <= 800: return 4.0       # large feature
+    return round(n / 200, 1)      # continuous above 800
 
 
 def _tier_active(m: float) -> float:
@@ -925,6 +959,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
     if not goals:
         return ""
 
+    VISIBLE = 5
     total_h = sum(g.get("human_hours", 0) for g in goals)
     total_formula_h = 0.0
 
@@ -944,7 +979,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         ai_h       = _fmt_h(g.get("human_hours", 0))
         formula_h  = _fmt_h(fe["total"])
 
-        title = g.get("title", "")
+        title = g.get("label") or g.get("title", "")
         if len(title) > 40:
             title = title[:37] + "..."
 
@@ -965,8 +1000,24 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
             f' + {_fmt_h(fe["lines_h"])} = <strong>{formula_h}</strong>'
         )
 
+        # Insert see-more toggle row for >5 projects
+        if i == VISIBLE and len(goals) > VISIBLE:
+            n_extra = len(goals) - VISIBLE
+            rows += f"""
+        <tr id="evidence-more-toggle" style="cursor:pointer;background:{C['accent_lt']}"
+            onclick="var rows=document.getElementsByClassName('evidence-extra-row');
+                     var show=rows.length && rows[0].style.display==='none';
+                     for(var j=0;j<rows.length;j++){{rows[j].style.display=show?'':'none';}}
+                     this.style.display='none';">
+          <td colspan="7" style="padding:6px 10px;text-align:center;font-size:11px;
+                     font-weight:600;color:{C['accent']}">
+            &#9660; Show {n_extra} more project{'s' if n_extra != 1 else ''}</td>
+        </tr>"""
+
+        extra = len(goals) > VISIBLE and i >= VISIBLE
+        extra_attrs = f' class="evidence-extra-row" style="display:none;background:{bg}"' if extra else f' style="background:{bg}"'
         rows += f"""
-        <tr style="background:{bg}">
+        <tr{extra_attrs}>
           <td style="padding:6px 10px;border-bottom:1px solid {C['border']};vertical-align:top;width:22%"
               rowspan="2">
             <div style="font-size:11px;font-weight:600;color:{C['text']};line-height:1.3">{title}</div>
@@ -988,7 +1039,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
             <div style="font-size:8px;color:{C['muted']};text-transform:uppercase;margin-top:1px">AI est.</div>
           </td>
         </tr>
-        <tr style="background:{bg}">
+        <tr{extra_attrs}>
           <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
             {_hl(fe["tool_h"])}</td>
           <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
@@ -1158,53 +1209,61 @@ def _signal_guide() -> str:
     tools = _signal_tier_table(
         "Tool Invocations", "&#128295;",
         "Each time Copilot performs a discrete action: read a file, edit code, run a command, "
-        "search, create a file. Higher counts indicate more complex, multi-step work.",
+        "search, create a file. A human expert averages 2-3 minutes per equivalent action.",
         [
-            ("1–5",    "0.25h", "Quick task &mdash; open a file, make one edit, done. "
+            ("1–10",   "0.5h",  "Quick task &mdash; open a few files, make an edit, run a test. "
                                 "<em>\"Fix this typo in config.yaml\"</em>"),
-            ("5–15",   "0.5h",  "Small focused change &mdash; read a few files, edit a function, run tests. "
+            ("11–30",  "1.5h",  "Focused change &mdash; read several files, edit a function, debug. "
                                 "<em>\"Add error handling to the upload endpoint\"</em>"),
-            ("15–50",  "0.75h", "Moderate multi-file work &mdash; touch 3-4 files, debug, iterate. "
+            ("31–75",  "3h",    "Multi-file work &mdash; touch many files, iterate on approach. "
                                 "<em>\"Refactor the auth module to use JWT\"</em>"),
-            ("50–150", "1.5h",  "Substantial feature &mdash; design + implement across a module with tests. "
+            ("76–150", "5h",    "Substantial feature &mdash; design + implement across a module with tests. "
                                 "<em>\"Build the report generation pipeline\"</em>"),
-            ("150–400","3h",    "Major implementation &mdash; full tool or feature from scratch with iteration. "
+            ("151–300","8h",    "Major implementation &mdash; full tool or feature from scratch with iteration. "
                                 "<em>\"Ship an executive deck builder from concept to working system\"</em>"),
-            ("400+",   "5h",    "System overhaul &mdash; extensive multi-session redesign across many files. "
-                                "<em>\"Redesign the entire report layout with branding and ROI\"</em>"),
+            ("301–600","12h",   "System build &mdash; extensive multi-session design across many files. "
+                                "<em>\"Build a complete analytics tool with harvester, analyser, and report\"</em>"),
+            ("600+",   "16h",   "Large project &mdash; comprehensive system overhaul or multi-day build. "
+                                "<em>\"Redesign the entire reporting system with new architecture\"</em>"),
         ]
     )
     reqs = _signal_tier_table(
         "Premium Requests", "&#9889;",
         "Opus/Sonnet-class model calls that consume your Copilot quota. Each represents a "
-        "round of deep AI reasoning. More requests = more back-and-forth collaboration.",
+        "round of deep AI reasoning &mdash; equivalent to a research/thinking cycle for a human (~8-12 min).",
         [
             ("0",      "0h",    "No AI reasoning &mdash; script execution or file operations only"),
-            ("1–5",    "0.25h", "Quick consultation &mdash; ask one question, get answer, done. "
+            ("1–5",    "0.5h",  "Quick consultation &mdash; ask one question, get answer, done. "
                                 "<em>\"What does this error mean?\"</em>"),
-            ("5–20",   "0.5h",  "Moderate back-and-forth &mdash; debug a problem, explore options. "
+            ("6–15",   "2h",    "Research session &mdash; explore options, debug a problem. "
                                 "<em>\"Why is this test failing? Try a different approach\"</em>"),
-            ("20–50",  "1h",    "Extended collaboration &mdash; iterative feature build with refinement. "
-                                "<em>\"Build this component, now adjust the styling, now add tests\"</em>"),
-            ("50–100", "2h",    "Deep work session &mdash; complex design + implementation + review. "
+            ("16–40",  "4h",    "Deep work session &mdash; iterative feature build with refinement. "
+                                "<em>\"Build this component, adjust styling, add tests\"</em>"),
+            ("41–80",  "8h",    "Full-day equivalent &mdash; complex design + implementation + review. "
                                 "<em>\"Architect the data pipeline and implement each stage\"</em>"),
-            ("100+",   "3h",    "Marathon partnership &mdash; sustained, intensive multi-hour collaboration. "
-                                "<em>\"Full system design through to deployment with 162 model calls\"</em>"),
+            ("81–150", "12h",   "Multi-day collaboration &mdash; sustained intensive design and delivery. "
+                                "<em>\"Full system design through to deployment with 120+ model calls\"</em>"),
+            ("150+",   "16h",   "Marathon partnership &mdash; extensive multi-day research and implementation"),
         ]
     )
     lines = _signal_tier_table(
         "Lines of Code", "&#128196;",
-        "Net code added to the project. Indicates the volume of deliverable output &mdash; "
-        "more lines generally means more development and review work for a human.",
+        "Net code added to the project. An expert writes 100-150 lines per hour including "
+        "boilerplate, comments, and config. Lines are additive to research effort since writing "
+        "code is work beyond the thinking and iteration captured by other signals.",
         [
             ("0",      "0h",    "Research or analysis only &mdash; investigation, planning, no code written"),
-            ("1–25",   "0.1h",  "Config tweak or small fix &mdash; change a setting, fix a one-liner"),
-            ("25–100", "0.25h", "Small feature &mdash; a new function, helper, or template. "
+            ("1–50",   "0.25h", "Config tweak or small fix &mdash; change a setting, fix a one-liner"),
+            ("51–150", "0.75h", "Small feature &mdash; a new function, helper, or template. "
                                 "<em>\"Add a utility function with error handling\"</em>"),
-            ("100–300","0.5h",  "Moderate development &mdash; a new module or significant feature. "
+            ("151–300","1.5h",  "Moderate development &mdash; a new module or significant feature. "
                                 "<em>\"Build the session harvester with event parsing\"</em>"),
-            ("300+",   "1h",    "Substantial build &mdash; major feature, new tool, or extensive refactor. "
-                                "<em>\"Ship 405 lines of presentation generation code\"</em>"),
+            ("301–500","2.5h",  "Substantial implementation &mdash; major feature with multiple components. "
+                                "<em>\"Implement the full report generation pipeline\"</em>"),
+            ("501–800","4h",    "Large build &mdash; complete tool or extensive refactor. "
+                                "<em>\"Ship 600 lines of presentation generation code\"</em>"),
+            ("800+",   "5h+",   "Major build &mdash; comprehensive system code from scratch. "
+                                "<em>\"Write 1000+ lines for a full analytics engine\"</em>"),
         ]
     )
     active = _signal_tier_table(
@@ -1227,8 +1286,8 @@ def _signal_guide() -> str:
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
                       color:{C['muted']};margin-bottom:4px">What each signal means</div>
           <div style="font-size:10px;color:{C['muted']};line-height:1.5;margin-bottom:4px">
-            Each session signal maps to a multiplier representing equivalent human effort. The AI
-            reads all signals together and assigns an estimate within the highest applicable range.
+            Each session signal maps to a multiplier representing equivalent human effort. The formula
+            takes the highest of tools, requests, and active time, then adds lines of code on top.
             <br><strong style="color:{C['text']}">Reading the table:</strong> find your value in the
             Range column &rarr; the Multiplier shows the hour contribution from that signal alone.
           </div>
@@ -1464,8 +1523,8 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
         session_metrics = {}
 
     VISIBLE = 5
-    # Sort by hours descending so highest-impact projects appear first
-    sorted_goals = sorted(goals, key=lambda g: g.get("human_hours", 0), reverse=True)
+    # Goals arrive pre-sorted by hours descending from generate_html
+    sorted_goals = list(goals)
     n_extra      = max(0, len(sorted_goals) - VISIBLE)
 
     def _goal_row(i: int, g: dict) -> str:
@@ -1493,7 +1552,7 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
             <div style="font-size:12px;font-weight:600;color:{C['text']};line-height:1.35">
               <span id="{gid}-arrow" style="font-size:10px;color:{C['accent']};
                                             margin-right:5px">&#9654;</span>
-              {date_badge}{g.get('title', '')}
+              {date_badge}{g.get('label') or g.get('title', '')}
             </div>
             {f'<div style="margin-top:5px">{doc_html}</div>' if doc_html else ''}
           </td>
@@ -1613,7 +1672,7 @@ def _goal_detail_headers(goals: list, session_lookup: dict = None) -> str:
                   <span id="{gid}-arrow" style="font-size:11px;color:{C['accent']};
                                                  margin-right:6px">&#9654;</span>
                   <span style="font-size:13px;font-weight:600;color:{C['text']}">
-                    {g.get('title', '')}
+                    {g.get('label') or g.get('title', '')}
                   </span>
                   <span style="font-size:11px;color:{C['muted']};margin-left:8px">
                     {n} task{'s' if n != 1 else ''}
@@ -1704,6 +1763,8 @@ def _share_bar(target_date: str, goals: list, headline: str, total_human_h: floa
 
 def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
     goals      = analysis.get("goals", [])
+    # Sort goals once by hours descending so all sections are consistent
+    goals      = sorted(goals, key=lambda g: g.get("human_hours", 0), reverse=True)
     narrative  = analysis.get("day_narrative", "")
     headline   = analysis.get("headline", f"Daily Report — {target_date}")
     focus      = analysis.get("primary_focus", "")
@@ -1732,6 +1793,53 @@ def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
         session_lookup[s["project"]] = s
         last = s["project"].replace("\\", "/").split("/")[-1]
         session_lookup.setdefault(last, s)
+
+    # Build mapping from raw session project names to goal display labels
+    # so session-based sections (collaboration, deliverables) use consistent names
+    project_label_map = {}
+    for g in goals:
+        raw = g.get("project", "")
+        label = g.get("label") or g.get("title", "")
+        if raw and label:
+            project_label_map[raw] = label
+            last = raw.replace("\\", "/").split("/")[-1]
+            project_label_map.setdefault(last, label)
+    # Map unmapped session projects by fuzzy-matching goal projects (case-insensitive,
+    # hyphen/space normalized) so e.g. "Frontier Firm" matches "frontier-firm"
+    _norm = lambda s: s.lower().replace("-", " ").replace("_", " ").strip()
+    goal_norm_map = {_norm(g.get("project", "")): g for g in goals if g.get("project")}
+    # Also build a repo→goal map: if a goal's sessions share a git repo, map that repo name
+    repo_to_goal = {}
+    for g in goals:
+        gp = g.get("project", "")
+        if not gp:
+            continue
+        # Find sessions belonging to this goal's project
+        for s in sessions:
+            sp = s.get("project", "")
+            if sp == gp or _norm(sp) == _norm(gp):
+                for repo in s.get("git_repos", []):
+                    repo_short = repo.replace("\\", "/").split("/")[-1]
+                    repo_to_goal.setdefault(repo_short, g)
+    for s in sessions:
+        sp = s.get("project", "")
+        if sp and sp not in project_label_map:
+            normed = _norm(sp)
+            matched_goal = goal_norm_map.get(normed)
+            if not matched_goal:
+                # Try matching via git repo name
+                for repo in s.get("git_repos", []):
+                    repo_short = repo.replace("\\", "/").split("/")[-1]
+                    matched_goal = repo_to_goal.get(repo_short)
+                    if matched_goal:
+                        break
+                if not matched_goal:
+                    # Try matching session project name as a repo name
+                    matched_goal = repo_to_goal.get(sp)
+            if matched_goal:
+                label = matched_goal.get("label") or matched_goal.get("title", "")
+                if label:
+                    project_label_map[sp] = label
 
     js = """
 <script>
@@ -1900,12 +2008,12 @@ window.onload = function() {
   </tr>
 
   <!-- 2. WHAT GOT PRODUCED (deliverables + skills) -->
-  {_what_i_work_on(goals, sessions)}
+  {_what_i_work_on(goals, sessions, project_label_map)}
 
   {_skills_mobilized(goals)}
 
   <!-- 3. HOW I WORKED WITH COPILOT (intent) -->
-  {_collaboration_intent(sessions)}
+  {_collaboration_intent(sessions, project_label_map)}
 
   <!-- 4. WHEN I WORKED WITH COPILOT -->
   {_work_pattern(sessions)}

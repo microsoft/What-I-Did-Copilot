@@ -280,29 +280,31 @@ RULE 3 — EFFORT ESTIMATES (calibrated)
 ═══════════════════════════════════════════
 
 human_hours = what a skilled professional would need WITHOUT Copilot assistance.
-BE CONSERVATIVE — underestimate rather than overestimate. Credibility matters more than impressive numbers.
+Estimate realistically — what would an expert actually bill for this work?
 Use this calibration scale — match the task to the closest anchor:
 
-  0.25h  — Trivial: install a package, run a CLI command, toggle a config, copy files
-  0.5h   — Simple: minor code edit, format/style tweak, rename, small config change, run existing script
+  0.25h  — Trivial: install a package, run a CLI command, toggle a config, copy files, push to git
+  0.5h   — Simple: minor code edit, format/style tweak, rename, small config change, answer a question
   0.75h  — Light: write a helper function, fix a known bug, small template change
   1.0-1.5h — Moderate: implement a small feature, debug an unknown issue, draft a short document
-  2-3h   — Substantial: design + implement a feature, write a detailed report, complex analysis
-  4-6h   — Major: architect a new system, build a complete tool from scratch, comprehensive research
+  2-3h   — Substantial: design + implement a feature, write a detailed report, complex data analysis
+  4-8h   — Major: architect a new module, build a complete tool, comprehensive multi-step research
+  8-16h  — Large: build a full system from scratch, multi-day design-implement-test cycle, extensive refactor
 
-MOST TASKS SHOULD BE 0.25-1.0h. Only genuinely complex work exceeds 1.5h.
+Trivial/mechanical tasks (installing, deploying, git operations, answering questions) → 0.25-0.5h max.
+Complex tasks involving DESIGN, ANALYSIS, NOVEL CODING, or MULTI-STEP IMPLEMENTATION should scale up
+based on the quantitative signals below. An expert human writing 500 lines of production code needs
+4+ hours; researching and iterating through 100+ premium requests is a full workday.
 
 USE THESE QUANTITATIVE SIGNALS to calibrate estimates:
 - Premium requests per session indicate complexity: 1-5 = trivial, 5-20 = moderate, 20-50 = substantial, 50+ = major
-- Tool invocations: 1-5 = simple task, 5-15 = moderate, 15+ = complex multi-step work
-- Code impact: <50 lines = minor, 50-200 = moderate, 200+ = substantial development
-- If a session used <10 premium requests total, ALL tasks in that session combined should be ≤1.5h
-- If total tokens < 50,000, the work was likely straightforward — cap at 2h total
+- Tool invocations: 1-10 = simple, 10-30 = moderate, 30-75 = substantial, 75-150 = major, 150+ = large
+- Code impact (lines added): <50 = minor, 50-150 = moderate, 150-300 = substantial, 300+ = major development
+- Expert human writes 100-150 lines of code per hour (including boilerplate, comments, config)
+- If a session used <5 premium requests AND <10 tool invocations, keep tasks capped at 1h total
 
 IMPORTANT RULES:
 - Mechanical execution (installing, deploying, running existing code, copying files) → 0.25-0.5h max
-- Only tasks involving THINKING, DESIGN, ANALYSIS, or NOVEL CODING deserve estimates above 1h
-- "Installing X from GitHub" is 15 minutes (0.25h), not hours — even with troubleshooting
 - Each number must be nearest 0.25h (not just 0.5h increments)
 - goal.human_hours must exactly equal the sum of its task hours
 
@@ -608,31 +610,39 @@ def _infer_skills(text: str, tools: list) -> tuple:
 def _conservative_hours(text: str, tools: list, premium_reqs: int = 0, tokens_total: int = 0) -> float:
     """Calibrated effort estimate matching the AI prompt's anchor scale."""
     n, t = len(tools), text.lower()
-    # Keyword checks first so trivial execution tasks aren't over-counted even with few tool calls
+    # Trivial mechanical tasks — always capped
     if any(_word(w, t) for w in ("install", "deploy", "push", "run", "config", "setup")):
-        return 0.25
+        return 0.5 if n > 5 else 0.25
     if any(_word(w, t) for w in ("update", "change", "small", "quick", "rename", "tweak")):
         return 0.5
-    # If very few tools and no specific keyword matched above, treat as small change
+    # Very simple interactions
     if n <= 1:
         return 0.25
     if n <= 3:
         return 0.5
-    # Bug fix scales with complexity
+    # Bug fix — scales with complexity
     if any(_word(w, t) for w in ("fix", "debug", "error", "bug")):
-        return 1.5 if n > 10 else 1.0
-    # Substantial development
-    if any(_word(w, t) for w in ("implement", "build", "create", "write", "code")) and n > 15:
-        return 4.0
+        if n > 30:   return 3.0
+        if n > 10:   return 1.5
+        return 1.0
+    # Substantial development — scales with tool count
     if any(_word(w, t) for w in ("implement", "build", "create", "write", "code")):
-        return 2.0
+        if n > 50:   return 6.0
+        if n > 30:   return 4.0
+        if n > 15:   return 2.5
+        return 1.5
     # Design / planning
     if any(_word(w, t) for w in ("plan", "design", "architect")):
+        if n > 20:   return 3.0
         return 1.5
-    # Analysis
+    # Analysis / research
     if any(_word(w, t) for w in ("analyze", "research", "investigate", "report")):
+        if n > 20:   return 3.0
         return 1.5
-    return 1.0
+    # Default — scale with tool count
+    if n > 30:   return 2.0
+    if n > 10:   return 1.0
+    return 0.75
 
 
 def _summarize_message(text: str, tools: list) -> str:

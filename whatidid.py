@@ -18,12 +18,28 @@ Lookback shortcuts: 7D, 14D, 30D, 60D, 90D (days back from today)
 Triggered as a Copilot skill via /whatididghcp
 """
 import argparse
+import io
 import json as _json
 import re as _re
 import subprocess
 import sys
 from datetime import date, timedelta
 from pathlib import Path
+
+# Force UTF-8 output on Windows to avoid cp1252 UnicodeEncodeError on emoji/symbols
+def _ensure_utf8_stream(stream):
+    encoding = getattr(stream, "encoding", None)
+    if encoding and encoding.lower() == "utf-8":
+        return stream
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+        return stream
+    if hasattr(stream, "buffer"):
+        return io.TextIOWrapper(stream.buffer, encoding="utf-8", errors="replace")
+    return stream
+
+sys.stdout = _ensure_utf8_stream(sys.stdout)
+sys.stderr = _ensure_utf8_stream(sys.stderr)
 
 sys.path.insert(0, str(Path(__file__).parent))
 
