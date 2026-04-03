@@ -13,9 +13,14 @@
 
 ---
 
+> **"In March, Copilot delivered $4,380 worth of professional services for a $39/mo seat — a 112× return on investment."**
+> — *Real output from this tool*
+
 *"Where did the tokens go? What am I actually building with Copilot? Am I accessing skills I didn't have before?"*
 
 If you can't answer these confidently, you're not alone. Most developers know Copilot helps — but can't show *how much*, *at what*, or *why it matters*. This tool turns your local session logs into a single report that makes the invisible visible — what got built, what skills were augmented, and what it would have cost to do it alone.
+
+**Built for anyone who works with Copilot** — developers, PMs, analysts, vibe coders, and anyone building with AI. Use it to recap what you created, share progress with your team and manager, or generate evidence for performance reviews. If Copilot helped you build it, this tool makes sure the story gets told.
 
 ### ✅ What Got Accomplished — and the Leverage Behind It
 Every project broken down into tasks with **human effort equivalents** — see that a 10-minute Copilot session replaced 3 hours of manual work. The ROI banner distills it to one number: how many multiples of your $39/mo seat Copilot delivered in professional services value.
@@ -48,18 +53,18 @@ Collapsible estimation detail showing the quantitative signals behind every effo
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/microsoft/mycopilotworks.git
-cd mycopilotworks
+git clone https://github.com/microsoft/What-I-Did-Copilot.git
+cd What-I-Did-Copilot
 ```
 
 ### 2. Open in GitHub Copilot CLI or VS Code
    
 ```bash
 # Option A: Open in VS Code with Copilot
-code mycopilotworks
+code What-I-Did-Copilot
    
 # Option B: Use GitHub Copilot in the terminal
-cd mycopilotworks
+cd What-I-Did-Copilot
 gh copilot
 ```
 
@@ -95,7 +100,7 @@ python whatidid.py --refresh
 Add this to your PowerShell profile (`$PROFILE`) so you can run `whatidid` from anywhere:
 
 ```powershell
-function whatidid { python "C:/path/to/mycopilotworks/whatidid.py" @args }
+function whatidid { python "C:/path/to/What-I-Did-Copilot/whatidid.py" @args }
 ```
 
 Then:
@@ -134,10 +139,18 @@ See [docs/architecture.md](docs/architecture.md) for session file formats, token
 
 No `pip install` needed — the core report generator (`harvest.py`, `analyze.py`, `report.py`, `whatidid.py`) uses only the Python standard library + GitHub Models API.
 
-## 🤝 Copilot CLI Skill
+## 🤝 Copilot Agent
 
-This tool can also be invoked as a [GitHub Copilot CLI](https://githubnext.com/projects/copilot-cli) skill. See [skill/SKILL.md](skill/SKILL.md) for the skill definition.
+This tool ships as a **Copilot CLI agent**. Anyone who clones the repo gets it automatically — run `/agent` in Copilot CLI and select `whatidid`, or just ask naturally:
+
+> "What did I build this week?"
+
+See [`.github/agents/whatidid.agent.md`](.github/agents/whatidid.agent.md) for the agent definition.
 
 ## 📄 License
 
 MIT
+
+---
+
+<sub>**Keywords:** GitHub Copilot ROI, Copilot usage report, Copilot activity tracker, AI productivity metrics, token usage analysis, Copilot impact measurement, developer productivity, AI-assisted development analytics</sub>
