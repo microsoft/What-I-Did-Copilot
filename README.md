@@ -20,7 +20,7 @@
 
 If you can't answer these confidently, you're not alone. Most developers know Copilot helps — but can't show *how much*, *at what*, or *why it matters*. This tool turns your local session logs into a single report that makes the invisible visible — what got built, what skills were augmented, and what it would have cost to do it alone.
 
-**Built for:** Individual developers who want to understand their own AI leverage, and engineering leaders who need evidence that Copilot seats are delivering real ROI. Works with **Copilot CLI** and **VS Code agent mode** sessions.
+**Built for anyone who works with Copilot** — developers, PMs, analysts, vibe coders, and anyone building with AI. Use it to recap what you created, share progress with your team and manager, or generate evidence for performance reviews. If Copilot helped you build it, this tool makes sure the story gets told.
 
 ### ✅ What Got Accomplished — and the Leverage Behind It
 Every project broken down into tasks with **human effort equivalents** — see that a 10-minute Copilot session replaced 3 hours of manual work. The ROI banner distills it to one number: how many multiples of your $39/mo seat Copilot delivered in professional services value.
