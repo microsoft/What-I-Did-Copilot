@@ -544,7 +544,7 @@ def main():
         print(f"  Re-run with --refresh when the GitHub Models API is available for accurate results.")
 
     from report import generate_html
-    html = generate_html(report_label, analysis, all_sessions)
+    html = generate_html(report_label, analysis, all_sessions, max_width=960)
 
     _save_and_open(html, report_label)
 
@@ -559,9 +559,11 @@ def main():
         else:
             to_email = args.email
         if to_email:
+            # Generate a narrower version for email clients (Outlook, Gmail)
+            email_html = generate_html(report_label, analysis, all_sessions, max_width=700)
             subject = f"My GitHub Copilot Impact | {report_label.replace('_', ' ')}"
             print(f"  Sending email to: {to_email} ...", end="", flush=True)
-            ok = _send_outlook_email(subject, html, to_email)
+            ok = _send_outlook_email(subject, email_html, to_email)
             print(" sent." if ok else " failed.")
 
     print("\nDone.")

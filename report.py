@@ -1761,7 +1761,8 @@ def _share_bar(target_date: str, goals: list, headline: str, total_human_h: floa
   </tr>"""
 
 
-def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
+def generate_html(target_date: str, analysis: dict, sessions: list,
+                  max_width: int = 960) -> str:
     goals      = analysis.get("goals", [])
     # Sort goals once by hours descending so all sections are consistent
     goals      = sorted(goals, key=lambda g: g.get("human_hours", 0), reverse=True)
@@ -1950,7 +1951,7 @@ window.onload = function() {
 
 <table width="100%" cellpadding="0" cellspacing="0" style="background:{C['bg']};padding:24px 16px">
 <tr><td align="center">
-<table width="700" cellpadding="0" cellspacing="0" style="max-width:700px;width:100%">
+<table width="{max_width}" cellpadding="0" cellspacing="0" style="max-width:{max_width}px;width:100%">
 
   <!-- HEADER -->
   <tr>
