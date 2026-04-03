@@ -1685,7 +1685,7 @@ def _task_rows(tasks: list) -> str:
     return rows
 
 
-REPO_URL = "https://github.com/microsoft/mycopilotworks"
+REPO_URL = "https://github.com/microsoft/What-I-Did-Copilot"
 
 
 def _share_bar(target_date: str, goals: list, headline: str, total_human_h: float) -> str:
@@ -1940,11 +1940,11 @@ window.onload = function() {
       <div style="font-size:11px;color:rgba(255,255,255,0.55);margin-bottom:8px">
         One command. Every session. A complete story of your AI-assisted work.
       </div>
-      <a href="https://github.com/microsoft/mycopilotworks"
+      <a href="https://github.com/microsoft/What-I-Did-Copilot"
          style="display:inline-block;background:{C['accent']};color:#ffffff;
                 font-size:11px;font-weight:700;text-decoration:none;
                 padding:6px 16px;border-radius:6px;letter-spacing:0.3px">
-        &#128279; github.com/microsoft/mycopilotworks
+        &#128279; github.com/microsoft/What-I-Did-Copilot
       </a>
       <div style="font-size:10px;color:rgba(255,255,255,0.25);margin-top:10px">
         {target_date} &nbsp;·&nbsp; GitHub Copilot Impact Report

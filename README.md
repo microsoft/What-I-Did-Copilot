@@ -53,18 +53,18 @@ Collapsible estimation detail showing the quantitative signals behind every effo
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/microsoft/mycopilotworks.git
-cd mycopilotworks
+git clone https://github.com/microsoft/What-I-Did-Copilot.git
+cd What-I-Did-Copilot
 ```
 
 ### 2. Open in GitHub Copilot CLI or VS Code
    
 ```bash
 # Option A: Open in VS Code with Copilot
-code mycopilotworks
+code What-I-Did-Copilot
    
 # Option B: Use GitHub Copilot in the terminal
-cd mycopilotworks
+cd What-I-Did-Copilot
 gh copilot
 ```
 
@@ -100,7 +100,7 @@ python whatidid.py --refresh
 Add this to your PowerShell profile (`$PROFILE`) so you can run `whatidid` from anywhere:
 
 ```powershell
-function whatidid { python "C:/path/to/mycopilotworks/whatidid.py" @args }
+function whatidid { python "C:/path/to/What-I-Did-Copilot/whatidid.py" @args }
 ```
 
 Then:

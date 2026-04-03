@@ -5,21 +5,21 @@ description: "Generate a daily analytics report of what GitHub Copilot helped ac
 
 # whatidid — Copilot Impact Report
 
-This skill lives in the `mycopilotworks` repo. Locate the repo on the user's machine before running.
+This skill lives in the `What-I-Did-Copilot` repo. Locate the repo on the user's machine before running.
 
 ## Find the repo
 
 ```bash
 # Check common locations
-for dir in "$HOME/mycopilotworks" "$HOME/Github Copilot/whatididghcp" "$HOME/repos/mycopilotworks"; do
+for dir in "$HOME/What-I-Did-Copilot" "$HOME/Github Copilot/whatididghcp" "$HOME/repos/What-I-Did-Copilot"; do
   [ -f "$dir/whatidid.py" ] && echo "$dir" && break
 done
 ```
 
 If not found, clone it:
 ```bash
-git clone https://github.com/microsoft/mycopilotworks.git
-cd mycopilotworks
+git clone https://github.com/microsoft/What-I-Did-Copilot.git
+cd What-I-Did-Copilot
 ```
 
 ## Generate the report
