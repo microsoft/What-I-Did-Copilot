@@ -13,9 +13,14 @@
 
 ---
 
+> **"In March, Copilot delivered $4,380 worth of professional services for a $39/mo seat — a 112× return on investment."**
+> — *Real output from this tool*
+
 *"Where did the tokens go? What am I actually building with Copilot? Am I accessing skills I didn't have before?"*
 
 If you can't answer these confidently, you're not alone. Most developers know Copilot helps — but can't show *how much*, *at what*, or *why it matters*. This tool turns your local session logs into a single report that makes the invisible visible — what got built, what skills were augmented, and what it would have cost to do it alone.
+
+**Built for:** Individual developers who want to understand their own AI leverage, and engineering leaders who need evidence that Copilot seats are delivering real ROI. Works with **Copilot CLI** and **VS Code agent mode** sessions.
 
 ### ✅ What Got Accomplished — and the Leverage Behind It
 Every project broken down into tasks with **human effort equivalents** — see that a 10-minute Copilot session replaced 3 hours of manual work. The ROI banner distills it to one number: how many multiples of your $39/mo seat Copilot delivered in professional services value.
@@ -134,10 +139,18 @@ See [docs/architecture.md](docs/architecture.md) for session file formats, token
 
 No `pip install` needed — the core report generator (`harvest.py`, `analyze.py`, `report.py`, `whatidid.py`) uses only the Python standard library + GitHub Models API.
 
-## 🤝 Copilot CLI Skill
+## 🤝 Copilot Agent
 
-This tool can also be invoked as a [GitHub Copilot CLI](https://githubnext.com/projects/copilot-cli) skill. See [skill/SKILL.md](skill/SKILL.md) for the skill definition.
+This tool ships as a **Copilot CLI agent**. Anyone who clones the repo gets it automatically — run `/agent` in Copilot CLI and select `whatidid`, or just ask naturally:
+
+> "What did I build this week?"
+
+See [`.github/agents/whatidid.agent.md`](.github/agents/whatidid.agent.md) for the agent definition.
 
 ## 📄 License
 
 MIT
+
+---
+
+<sub>**Keywords:** GitHub Copilot ROI, Copilot usage report, Copilot activity tracker, AI productivity metrics, token usage analysis, Copilot impact measurement, developer productivity, AI-assisted development analytics</sub>
