@@ -930,9 +930,11 @@ def _tier_active(m: float) -> float:
 
 
 def compute_formula_estimate(metrics: dict) -> dict:
-    """Deterministic effort estimate: max(tools, requests, active) + lines.
+    """Deterministic effort estimate with complexity multipliers.
 
-    Returns dict with per-signal multipliers and final estimate.
+    Formula: (max(tools, requests, active) × iteration_factor × scope_factor) + lines
+    Multipliers based on research (Alaswad et al. 2026): iteration depth and
+    scope breadth are independent complexity drivers beyond raw volume.
     """
     tool_h   = _tier_tools(metrics.get("tool_invocations", 0))
     req_h    = _tier_reqs(metrics.get("premium_requests", 0))
@@ -940,16 +942,35 @@ def compute_formula_estimate(metrics: dict) -> dict:
     lines_h  = _tier_lines(metrics.get("lines_added", 0))
 
     base = max(tool_h, req_h, active_h)
-    total = base + lines_h
-    total = max(total, 0.25)           # Floor at 0.25h
+
+    # Iteration complexity: many conversation turns or high re-edit depth
+    # indicates debugging/refinement — the task was harder than raw counts suggest
+    turns = metrics.get("conversation_turns", 0)
+    iter_depth = metrics.get("iteration_depth", 0)
+    iteration_factor = 1.0
+    if turns > 20:  iteration_factor += 0.1
+    if turns > 50:  iteration_factor += 0.1
+    if iter_depth > 5:  iteration_factor += 0.1
+    if iter_depth > 15: iteration_factor += 0.1
+
+    # Scope breadth: more files touched = integration/coordination overhead
+    files = metrics.get("files_touched_count", 0)
+    scope_factor = 1.0
+    if files > 5:  scope_factor += 0.1
+    if files > 15: scope_factor += 0.1
+
+    total = (base * iteration_factor * scope_factor) + lines_h
+    total = max(total, 0.25)
 
     return {
-        "tool_h":   tool_h,
-        "req_h":    req_h,
-        "active_h": active_h,
-        "lines_h":  lines_h,
-        "base":     base,
-        "total":    round(total * 4) / 4,  # Nearest 0.25h
+        "tool_h":           tool_h,
+        "req_h":            req_h,
+        "active_h":         active_h,
+        "lines_h":          lines_h,
+        "base":             base,
+        "iteration_factor": iteration_factor,
+        "scope_factor":     scope_factor,
+        "total":            round(total * 4) / 4,
     }
 
 

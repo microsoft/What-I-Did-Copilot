@@ -128,6 +128,8 @@ whatidid --14D --email
 
 See [docs/architecture.md](docs/architecture.md) for session file formats, token cost model, and leverage calculation details.
 
+See [docs/effort-estimation-methodology.md](docs/effort-estimation-methodology.md) for the research basis, signal definitions, and calibration logic behind effort estimates.
+
 ## 📋 Requirements
 
 | Requirement | Why |
