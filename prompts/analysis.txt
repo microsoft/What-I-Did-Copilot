@@ -33,21 +33,38 @@ DEFAULT RULE: When in doubt, MERGE. Too few goals is better than too many.
 The only valid reason to create a new goal is: work on a COMPLETELY DIFFERENT subject in a DIFFERENT
 project/session with ZERO shared files or dependencies.
 
-GOOD GOAL TITLES (business outcome, verb-first, based on the MOST SUBSTANTIAL work done):
-  "Built a daily Copilot activity analytics tool with branded HTML reports"
-  "Shipped a daily work digest tool from concept to working system"
-  "Provided strategic rewrite recommendations for the presentation"
-  "Diagnosed and resolved checkout regression in production"
+ROOT/HOME FOLDER EXCEPTION: If a session's PROJECT is a user home directory (e.g. "shahegde",
+"username", or a path like /Users/name or C:\Users\name), the user was likely doing ad-hoc work
+that does NOT belong to a single project. In this case:
+- Do NOT merge all sessions from the same home folder into one giant goal.
+- Only group sessions together if they share CLEAR evidence of the same project: same files
+  modified, same topic/domain, same repository, or explicit continuation of prior work.
+- Separate ad-hoc tasks (e.g. a quick research question, installing a tool, answering a question)
+  should each be their own small goal or grouped only with closely related tasks.
+- Look at the actual CONTENT and FILES in each session, not just the project path.
 
-BAD GOAL TITLES (too granular, based on first message instead of overall outcome):
+GOOD GOAL TITLES (business outcome, verb-first, INCLUDE the project/repo/tool name):
+  "Built a daily Copilot activity analytics tool with branded HTML reports"
+  "Shipped the What-I-Did-Copilot reporting tool from concept to working system"
+  "Provided strategic rewrite recommendations for the DPG-AI-Skilling presentation"
+  "Diagnosed and resolved checkout regression in the Contoso API"
+
+BAD GOAL TITLES (too granular, or missing project context):
   "Set up authentication"        ← part of a larger goal
-  "Built report generator"       ← a task within a goal
+  "Built report generator"       ← which report generator? Name the project
+  "Updated README"               ← which README? Include the repo/project name
   "Initialized git repository"   ← setup step, not the goal itself
-  "Prepared directory for checkin" ← describes first action, not the outcome
+  "Improved documentation"       ← too vague — documentation for what?
 
 TITLE RULE: The goal title must describe the PRIMARY DELIVERABLE, not the first thing done.
 If a session starts with "prepare for github" but spends 80% of time building a report tool,
 the title should be about the report tool, not the git setup.
+
+LABEL RULE: The label must include enough context to identify the project. Use the repo name,
+the primary file/tool being worked on, or the product name. Someone reading just the labels
+should know WHICH project each line refers to.
+  GOOD: "What-I-Did-Copilot reporting tool", "Frontier Firm report", "DPG-AI-Skilling deck"
+  BAD:  "Report improvements", "Updated README", "Code refactor", "Documentation"
 
 ═══════════════════════════════════════════
 RULE 2 — LANGUAGE
@@ -135,8 +152,8 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
   "day_narrative": "Exactly 2 sentences. What was accomplished and why it matters. Confident tone, plain English.",
   "goals": [
     {{
-      "title": "Business outcome title (verb-first)",
-      "label": "2-5 word noun phrase naming the deliverable (used as bold heading in summary list)",
+      "title": "Business outcome title (verb-first, MUST include the project/repo/tool name)",
+      "label": "2-5 word noun phrase identifying the deliverable AND which project (e.g. 'What-I-Did-Copilot reporting tool', 'Frontier Firm analysis report')",
       "summary": "1 sentence, max 20 words. What exists now that didn't before. Confident tone.",
       "human_hours": <sum of task hours>,
       "project": "exact project name from the SESSION header",

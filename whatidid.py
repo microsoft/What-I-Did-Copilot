@@ -106,18 +106,56 @@ def _normalize_project(name: str) -> str:
     return name.replace("\\", "/").split("/")[-1].lower().strip().replace(" ", "-")
 
 
-def _merge_related_goals(goals: list) -> list:
+def _is_home_folder_project(name: str) -> bool:
+    """Detect if a project name looks like a user home directory (ad-hoc work)."""
+    norm = name.replace("\\", "/").strip("/")
+    parts = norm.split("/")
+    # Matches: "username", "Users/username", "home/username", "C:/Users/username"
+    if len(parts) == 1 and not any(c in parts[0] for c in ".-_") and len(parts[0]) < 20:
+        # Single short word with no separators — likely a username
+        return True
+    for i, p in enumerate(parts):
+        if p.lower() in ("users", "home") and i + 1 < len(parts):
+            # The segment after "Users" or "home" is the username root
+            if parts[i + 1].replace("\\", "/").split("/")[-1] == _normalize_project(name):
+                return True
+    return False
+
+
+def _merge_related_goals(goals: list, project_canonical: dict = None) -> list:
     """Group goals from the same project across different days into single entries.
 
-    Goals are considered related when they share the same normalized project name.
+    Goals are considered related when they share the same normalized project name
+    (or are linked via shared git repos through project_canonical).
     Merged goals combine all tasks, sum hours, and show the date range.
+
+    EXCEPTION: Goals from home/root folders (ad-hoc work) are only merged if they
+    share the same label — the user may be doing unrelated tasks from their home dir.
     """
     from collections import OrderedDict
+
+    if project_canonical is None:
+        project_canonical = {}
 
     groups: OrderedDict = OrderedDict()
     for g in goals:
         proj = g.get("project", "")
-        key = _normalize_project(proj) if proj else f"_unnamed_{id(g)}"
+        norm = _normalize_project(proj) if proj else ""
+
+        # Apply repo-based equivalence (e.g. whatididghcp ↔ what-i-did-copilot)
+        canon = project_canonical.get(norm, norm)
+
+        # For home folder projects WITHOUT repo evidence, use label as the grouping
+        # key so unrelated ad-hoc tasks stay separate. But if the canonical map links
+        # this project to others via a shared repo, always merge by canonical name.
+        has_repo_evidence = norm in project_canonical
+        if canon and _is_home_folder_project(proj) and not has_repo_evidence:
+            label = (g.get("label") or g.get("title", "")).strip().lower()
+            key = f"_home_{canon}_{label}" if label else f"_unnamed_{id(g)}"
+        elif canon:
+            key = canon
+        else:
+            key = f"_unnamed_{id(g)}"
 
         if key in groups:
             merged = groups[key]
@@ -199,9 +237,25 @@ def _merge_analyses(day_analyses: list) -> dict:
 
     active_dates = sorted({d for d, _, _ in day_analyses})
 
+    # Build project equivalence map from git repos: different folder names
+    # for the same repo should merge (e.g. "whatididghcp" ↔ "What-I-Did-Copilot")
+    _repo_to_projects: dict = {}  # repo_name → set of project names
+    for s in all_sessions:
+        sp = s.get("project", "")
+        for repo in s.get("git_repos", []):
+            repo_short = repo.replace("\\", "/").split("/")[-1].lower()
+            _repo_to_projects.setdefault(repo_short, set()).add(_normalize_project(sp))
+    # Map each project to a canonical name (first seen) via shared repo
+    project_canonical: dict = {}
+    for repo, projs in _repo_to_projects.items():
+        if len(projs) > 1:
+            canonical = sorted(projs)[0]  # deterministic: alphabetically first
+            for p in projs:
+                project_canonical[p] = canonical
+
     # Merge goals from the same project across days into single entries
     if len(active_dates) > 1:
-        all_goals = _merge_related_goals(all_goals)
+        all_goals = _merge_related_goals(all_goals, project_canonical)
 
         # Create aggregated session_metrics for merged goals that span multiple days
         for g in all_goals:
@@ -213,14 +267,31 @@ def _merge_analyses(day_analyses: list) -> dict:
             # Sum metrics across all dates for this project
             agg = {"tokens": 0, "tool_invocations": 0, "premium_requests": 0,
                    "lines_added": 0, "lines_removed": 0, "active_minutes": 0,
-                   "wall_clock_minutes": 0, "sessions": 0}
+                   "wall_clock_minutes": 0, "sessions": 0,
+                   "conversation_turns": 0, "reads": 0, "edits": 0, "runs": 0,
+                   "files_touched_count": 0, "_total_file_edits": 0, "_total_files_edited": 0}
+            # Find all project names that are equivalent via repo mapping
+            equiv_names = {proj, norm}
+            canon = project_canonical.get(norm, norm)
+            for p, c in project_canonical.items():
+                if c == canon:
+                    equiv_names.add(p)
             for d in all_dates:
-                for try_key in [d + "|" + proj, d + "|" + norm]:
-                    m = merged_session_metrics.get(try_key, {})
-                    if m:
-                        for k in agg:
-                            agg[k] += m.get(k, 0)
+                found = False
+                for pname in equiv_names:
+                    for try_key in [d + "|" + pname]:
+                        m = merged_session_metrics.get(try_key, {})
+                        if m:
+                            for k in agg:
+                                agg[k] += m.get(k, 0)
+                            found = True
+                            break
+                    if found:
                         break
+            # Compute aggregate iteration depth from totals
+            total_e = agg.pop("_total_file_edits", 0)
+            total_f = agg.pop("_total_files_edited", 0)
+            agg["iteration_depth"] = round(total_e / max(total_f, 1), 1)
             # Store aggregated metrics under the earliest date key
             merged_session_metrics[all_dates[0] + "|" + proj] = agg
             merged_session_metrics[all_dates[0] + "|" + norm] = agg
