@@ -127,6 +127,17 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
     lines_removed   = analysis.get("lines_removed", 0)
     active_days     = max(1, len(analysis.get("active_dates", ["x"])))
 
+    # Total active engagement time across all sessions
+    total_active_min = sum(
+        m.get("active_minutes", 0)
+        for m in analysis.get("session_metrics", {}).values()
+        if not isinstance(m, str)
+    )
+    if total_active_min >= 60:
+        active_sub = f"{total_active_min / 60:.1f}h active time"
+    else:
+        active_sub = f"{total_active_min:.0f}m active time"
+
     h_str = _fmt_h(total_human_h)
     days_label = f"{active_days}"
 
@@ -155,7 +166,7 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
                     f'return false;">see evidence &#9656;</a>')}
           {_kpi_card(code_val, "Lines of Code<br>Added", code_sub)}
           {_kpi_card(pr_commit_val, "PRs<br>Merged", pr_commit_sub)}
-          {_kpi_card(days_label, "Active Days", "")}
+          {_kpi_card(days_label, "Active Days", active_sub)}
         </tr>
       </table>
     </td>
@@ -1351,13 +1362,13 @@ def _signal_guide() -> str:
     signal_rows = ""
     for signal, icon, rate, tiers in [
         ("Tool invocations", "&#128295;", "weighted by type",
-         "reads×0.5m &nbsp; edits×4m &nbsp; runs×1.5m &nbsp; overhead×0m &nbsp; <em>(falls back to 1.5m/action if no breakdown)</em>"),
-        ("Conversation turns", "&#128172;", "~12-15 min/turn",
-         "1-3→0.5h &nbsp; 4-8→1.5h &nbsp; 9-15→3h &nbsp; 16-30→5h &nbsp; 31-60→8h &nbsp; 61+→12h+"),
-        ("Active time", "&#9201;", "×4 multiplier",
-         "active_minutes × 4 ÷ 60 &nbsp; (human needs ~4× longer without AI)"),
+         "reads&times;0.3m &nbsp; edits&times;1.5m &nbsp; runs&times;0.75m &nbsp; overhead&times;0m &nbsp; <em>(expert is more deliberate than AI)</em>"),
+        ("Conversation turns", "&#128172;", "~5-7 min/turn",
+         "Substantive only (trivial filtered). 1-3&rarr;0.25h &nbsp; 4-8&rarr;0.75h &nbsp; 9-15&rarr;1.5h &nbsp; 16-30&rarr;3h &nbsp; 31-60&rarr;5h &nbsp; 61+&rarr;8h+"),
+        ("Active time", "&#9201;", "&times;3 multiplier",
+         "active_minutes &times; 3 &divide; 60 &nbsp; (midpoint of 1.4&ndash;4&times; research range)"),
         ("Lines of code", "&#128196;", "100-150 LoC/hr",
-         "1-50→0.25h &nbsp; 51-150→0.75h &nbsp; 151-300→1.5h &nbsp; 301-500→2.5h &nbsp; 500+→4h+ &nbsp; <em>(additive)</em>"),
+         "1-50&rarr;0.25h &nbsp; 51-150&rarr;0.75h &nbsp; 151-300&rarr;1.5h &nbsp; 301-500&rarr;2.5h &nbsp; 500+&rarr;4h+ &nbsp; <em>(additive)</em>"),
     ]:
         signal_rows += (
             f'<tr>'
@@ -1392,17 +1403,17 @@ def _signal_guide() -> str:
         <div style="margin-top:14px;padding:10px 12px;background:{C['subtle']};
                     border:1px solid {C['border']};border-radius:6px">
           <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
-                      color:{C['accent']};margin-bottom:6px">&#128270; Example: 150 tools (45 reads, 40 edits, 25 runs, 40 other), 25 turns,
-            45m active, +320 lines, 6 files, 8.2 edits/file</div>
+                      color:{C['accent']};margin-bottom:6px">&#128270; Example: 150 tools (45 reads, 40 edits, 25 runs, 40 other),
+            22 substantive turns (of 25 total), 45m active, +320 lines, 6 files, 8.2 edits/file</div>
           <div style="font-family:monospace;font-size:10px;line-height:1.7;color:{C['text']}">
-            Tools: 45&times;0.5 + 40&times;4 + 25&times;1.5 + 40&times;0 = 22+160+38 = 220min = <strong>3.7h</strong><br>
-            Turns: 25 &rarr; <strong>5h</strong><br>
-            Active: 45m &times; 4 = <strong>3h</strong><br>
-            Base = max(3.7, 5, 3) = <strong style="color:{C['accent']}">5h</strong> (turns wins)<br>
+            Tools: 45&times;0.3 + 40&times;1.5 + 25&times;0.75 = 13.5+60+18.8 = 92min = <strong>1.5h</strong><br>
+            Turns: 22 substantive &rarr; <strong>3h</strong><br>
+            Active: 45m &times; 3 = <strong>2.2h</strong><br>
+            Base = max(1.5, 3, 2.2) = <strong style="color:{C['accent']}">3h</strong> (turns wins)<br>
             Multipliers: turns&gt;15 (+15%) &middot; iter&gt;5 (+15%) &middot; files&gt;3 (+10%)
-            = <strong>1.15 &times; 1.15 &times; 1.1 &asymp; 1.45&times;</strong><br>
+            = 1.15 &times; 1.15 &times; 1.1 = 1.45&times; &rarr; <strong>capped at 1.5&times;</strong><br>
             Lines: 320 &rarr; <strong>1.5h</strong> (additive)<br>
-            <strong style="color:{C['accent']}">Total = (5h &times; 1.45) + 1.5h = 7.25 + 1.5 = 8.75h</strong>
+            <strong style="color:{C['accent']}">Total = (3h &times; 1.45) + 1.5h = 4.35 + 1.5 = 5.75h</strong>
           </div>
         </div>"""
 

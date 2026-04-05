@@ -58,8 +58,8 @@ iteration. No single number drives the estimate alone.
   GitHub Copilot completed a programming task **55.8% faster** on average.
 
 **Our response:** `active_minutes × 4 / 60` converts the user's engagement time to
-human-equivalent hours. The 4× multiplier sits at the upper end of observed speed-ups
-because Copilot handles the easier portions while the human retains the harder parts.
+human-equivalent hours. The 3× multiplier is the midpoint of observed speed-ups
+(Cambon et al. found 1.4–4×), balancing conservative and aggressive estimates.
 
 
 ### 2.3 "78% of 'complex' tasks done in <25% effort; 22% of 'simple' tasks took >180%" → Task-type classification with caps
@@ -164,18 +164,20 @@ tool invocations).
   effort spent on **debugging and validating AI-generated code remained high**.
 
 **Our response:** `_tier_turns()` is the primary interaction signal, replacing
-premium requests. Each turn represents a full cognitive cycle: formulate the
-problem, evaluate the response, decide next steps (~5–10 min per turn):
+premium requests. Only **substantive turns** count — trivial confirmations like
+"yes", "commit", "looks good" (under 20 characters) are filtered out, as they
+represent ~8-50% of all turns but near-zero human thinking effort. Each
+substantive turn represents ~5–7 min of thinking:
 
-| Turns | Formula hours | Typical scenario |
-|-------|---------------|------------------|
+| Substantive Turns | Formula hours | Typical scenario |
+|-------------------|---------------|------------------|
 | 1–3 | 0.25h | Quick Q&A |
 | 4–8 | 0.75h | Focused task |
 | 9–15 | 1.5h | Working session |
 | 16–30 | 3h | Extended session |
 | 31–60 | 5h | Deep collaboration |
 | 61–100 | 8h | Full-day partnership |
-| 100+ | 12h | Marathon session |
+| 100+ | 10h | Marathon session |
 
 ---
 
@@ -201,21 +203,24 @@ effort in LLM-assisted work:
 
 ```
 Step 1 — Primary signals (take the strongest):
-    tool_h   = weighted_tools(reads × 0.5min + edits × 4min + runs × 1.5min) ÷ 60
-               (falls back to tools × 1.5min ÷ 60 when breakdown unavailable)
-    turns_h  = tier_turns(conversation_turns)
-    active_h = active_minutes × 4 ÷ 60
+    tool_h   = weighted_tools(reads × 0.3min + edits × 1.5min + runs × 0.75min) ÷ 60
+               (expert makes fewer, more deliberate actions than AI's iterative approach)
+               (falls back to tools × 0.8min ÷ 60 when breakdown unavailable)
+    turns_h  = tier_turns(substantive_turns)
+               (trivial turns like 'yes', 'commit', 'looks good' are filtered out)
+    active_h = active_minutes × 3 ÷ 60
+               (3× is the midpoint of the 1.4–4× research range)
 
-    if conversation_turns > 0:
+    if substantive_turns > 0:
         base = max(tool_h, turns_h, active_h)
     else:
         req_h = tier_reqs(premium_requests)     # fallback for older sessions
         base  = max(tool_h, req_h, active_h)
 
-Step 2 — Complexity multipliers:
+Step 2 — Complexity multipliers (capped at 1.5× combined):
     iteration_factor = 1.0
-        + 0.15 if turns > 15
-        + 0.20 if turns > 40
+        + 0.15 if substantive_turns > 15
+        + 0.20 if substantive_turns > 40
         + 0.15 if iteration_depth > 5
         + 0.20 if iteration_depth > 12
 
@@ -223,13 +228,18 @@ Step 2 — Complexity multipliers:
         + 0.10 if files_touched > 3
         + 0.20 if files_touched > 10
 
+    combined = min(iteration_factor × scope_factor, 1.5)
+
 Step 3 — Lines of code (additive):
     lines_h = tier_lines(lines_added)
 
 Step 4 — Total:
-    total = (base × iteration_factor × scope_factor) + lines_h
+    total = (base × combined) + lines_h
     total = max(total, 0.25)                          # floor
     total = round to nearest 0.25h
+
+For multi-day merged goals: compute per-day, then sum
+    (matches how the AI analyzes each day independently)
 ```
 
 ### 4.2 Worked example
@@ -286,6 +296,8 @@ that either the AI missed something or the formula's tiers need recalibration.
 | Trivial sessions (<5 reqs AND <10 tools) → capped at 1h total | The work was inherently lightweight regardless of other signals. |
 | No single task exceeds 8h | If the work is that large, it should be split into sub-tasks for granularity. |
 | Premium reqs capped at 10× conversation turns | Excess reqs are automated completions, not human thinking (Ziegler et al. 2024). |
+| Combined complexity multiplier capped at 1.5× | Prevents compounding on large aggregated goals where all thresholds trigger simultaneously. |
+| Multi-day goals: formula computed per-day, then summed | Matches how the AI analyses each day independently. Prevents metrics accumulation from inflating multipliers. |
 
 ---
 
