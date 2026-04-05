@@ -16,19 +16,27 @@ from harvest import compute_active_minutes, compute_elapsed_minutes
 API_URL = "https://models.github.ai/inference/chat/completions"
 MODEL   = "openai/gpt-4o-mini"
 
-DOMAIN_SKILLS = (
-    "System Architecture", "Product Planning", "Requirements Analysis",
-    "Technical Research", "Data Analysis", "Statistical Modelling",
-    "UX Design", "Product Management", "Project Management",
-    "Technical Writing", "Documentation", "Stakeholder Communication",
-    "Prompt Engineering", "Security Review", "Code Review",
-)
-TECH_SKILLS = (
-    "Python", "JavaScript", "TypeScript", "Bash/Shell",
-    "HTML/CSS", "SQL", "API Integration", "DevOps/CI-CD",
-    "Cloud Infrastructure", "Database Design", "Machine Learning",
-    "Data Engineering", "Debugging", "Refactoring", "Frontend Development",
-)
+def _load_taxonomy() -> tuple:
+    """Load domain and tech skill lists from prompts/skills_taxonomy.txt."""
+    path = Path(__file__).parent / "prompts" / "skills_taxonomy.txt"
+    domain, tech = [], []
+    section = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line == "[domain_skills]":
+            section = "domain"
+        elif line == "[tech_skills]":
+            section = "tech"
+        elif section == "domain":
+            domain.append(line)
+        elif section == "tech":
+            tech.append(line)
+    return tuple(domain), tuple(tech)
+
+
+DOMAIN_SKILLS, TECH_SKILLS = _load_taxonomy()
 
 
 def _get_github_token() -> str:

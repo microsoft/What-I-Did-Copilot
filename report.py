@@ -2056,6 +2056,18 @@ window.onload = function() {
 
   {_share_bar(target_date, goals, headline, total_human_h)}
 
+  <!-- PRIVACY -->
+  <tr>
+    <td style="background:{C['card']};padding:6px 24px;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div style="font-size:9px;color:{C['muted']};text-align:center">
+        &#128274; <strong style="color:{C['text']}">Your data, private to you.</strong>
+        Generated locally from your Copilot session logs &mdash; no telemetry, no cloud uploads.
+        No one has access to this unless you share it.
+      </div>
+    </td>
+  </tr>
+
   {heuristic_banner}
 
   <!-- ACT 1: THE STORY -->
@@ -2124,19 +2136,6 @@ window.onload = function() {
       <div id="evidence-tasks" style="display:none">
         {_estimation_waterfall_inner(goals, analysis)}
         {_signal_guide()}
-      </div>
-    </td>
-  </tr>
-
-  <!-- PRIVACY -->
-  <tr>
-    <td style="background:{C['card']};padding:10px 24px;
-               border-left:1px solid {C['border']};border-right:1px solid {C['border']};
-               text-align:center">
-      <div style="font-size:10px;color:{C['muted']};line-height:1.5">
-        &#128274; <strong style="color:{C['text']}">Your data, private to you.</strong>
-        This report was generated locally from your Copilot session logs.
-        No telemetry, no cloud uploads. No one has access to this unless you share it.
       </div>
     </td>
   </tr>

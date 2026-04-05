@@ -1,0 +1,19 @@
+# Intent Classification
+# Regex patterns that classify each user message into a collaboration intent category.
+# Used by the "How I Collaborated" donut chart in the report.
+#
+# Format: category | color | regex pattern
+# Split on first 2 pipes only (regex patterns contain | characters).
+# The regex is applied to the first 300 characters of each user message.
+# If no pattern matches, the message defaults to "Building".
+
+Building      | #0078d4 | \b(create|add|generate|implement|write|make|build|produce|include|set up|initialize|scaffold|install|open it|rerun|run)\b
+Investigating | #e65100 | \b(examine|why does|why is|what.s going on|debug|diagnose|analyze what|look at this|can you examine|what.s wrong|trace|root cause|broken|fails|failing|error|identical.+different)\b
+Designing     | #7b1fa2 | \b(redesign|prominent|visual|layout|style|look like|look more|distinction|spacing|story|compelling|section|appearance|prototype|mockup|wireframe|branding|banner)\b
+Researching   | #1a7f37 | \b(what.s the|how does|how do|are there|can i do|do they|what can|what would|how come|cost|limit|explain|compare|difference|option)\b
+Iterating     | #0969da | \b(adjust|simplify|change the|not impressed|didn.t like|better|improve|also like|refine|tweak|move this|swap|resize|reorder|reduce|remove the)\b
+Shipping      | #cf222e | \b(commit|push|pr\b|pull request|merge|deploy|ship|tag|release|check.?in)\b
+Planning      | #8250df | \b(plan|propose|approach|strategy|stages|phases|priority|before that|options|go ahead|wait for)\b
+Testing       | #1a7f37 | \b(test|verify|validate|check if|smoke|does it work|try it|confirm)\b
+Configuring   | #6a737d | \b(config|setup|auth|login|permission|access|credential|settings|env|alias|profile)\b
+Navigating    | #bf8700 | \b(find|search|where is|show me|list|fetch|locate|get the latest|look for)\b
