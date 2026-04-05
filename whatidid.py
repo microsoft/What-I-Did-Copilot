@@ -267,25 +267,32 @@ def _merge_analyses(day_analyses: list) -> dict:
     if len(active_dates) > 1:
         all_goals = _merge_related_goals(all_goals, project_canonical, all_sessions)
 
-        # Create aggregated session_metrics for merged goals that span multiple days
+        # Create aggregated session_metrics for merged goals that span multiple days.
+        # IMPORTANT: compute formula per-day then sum (matching AI's per-day approach)
+        # rather than aggregating raw metrics then computing once (which inflates
+        # multipliers since all thresholds trigger on large cumulative numbers).
+        from report import compute_formula_estimate as _cfe
         for g in all_goals:
             all_dates = g.get("_all_dates", [g.get("date", "")])
             if len(all_dates) <= 1:
                 continue
             proj = g.get("project", "")
             norm = _normalize_project(proj)
-            # Sum metrics across all dates for this project
-            agg = {"tokens": 0, "tool_invocations": 0, "premium_requests": 0,
-                   "lines_added": 0, "lines_removed": 0, "active_minutes": 0,
-                   "wall_clock_minutes": 0, "sessions": 0,
-                   "conversation_turns": 0, "reads": 0, "edits": 0, "runs": 0,
-                   "files_touched_count": 0, "_total_file_edits": 0, "_total_files_edited": 0}
             # Find all project names that are equivalent via repo mapping
             equiv_names = {proj, norm}
             canon = project_canonical.get(norm, norm)
             for p, c in project_canonical.items():
                 if c == canon:
                     equiv_names.add(p)
+
+            # Sum raw metrics for display, but compute formula per-day
+            agg = {"tokens": 0, "tool_invocations": 0, "premium_requests": 0,
+                   "lines_added": 0, "lines_removed": 0, "active_minutes": 0,
+                   "wall_clock_minutes": 0, "sessions": 0,
+                   "conversation_turns": 0, "substantive_turns": 0,
+                   "reads": 0, "edits": 0, "runs": 0,
+                   "files_touched_count": 0, "_total_file_edits": 0, "_total_files_edited": 0}
+            per_day_formula_total = 0.0
             for d in all_dates:
                 found = False
                 for pname in equiv_names:
@@ -294,6 +301,7 @@ def _merge_analyses(day_analyses: list) -> dict:
                         if m:
                             for k in agg:
                                 agg[k] += m.get(k, 0)
+                            per_day_formula_total += _cfe(m)["total"]
                             found = True
                             break
                     if found:
@@ -302,6 +310,8 @@ def _merge_analyses(day_analyses: list) -> dict:
             total_e = agg.pop("_total_file_edits", 0)
             total_f = agg.pop("_total_files_edited", 0)
             agg["iteration_depth"] = round(total_e / max(total_f, 1), 1)
+            # Store the per-day formula sum so the evidence table can use it
+            agg["_per_day_formula_total"] = round(per_day_formula_total * 4) / 4
             # Store aggregated metrics under the earliest date key
             merged_session_metrics[all_dates[0] + "|" + proj] = agg
             merged_session_metrics[all_dates[0] + "|" + norm] = agg

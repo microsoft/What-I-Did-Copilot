@@ -306,6 +306,17 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
         # New signals: conversation turns, tool types, files, iteration depth
         user_msgs = [m for m in s["messages"] if m["role"] == "user"]
         conv_turns = len(user_msgs)
+
+        # Classify turns: substantive (real instructions) vs trivial (confirmations)
+        _trivial_rx = re.compile(
+            r'^(yes|no|ok|okay|sure|thanks|thank you|perfect|great|good|looks good|'
+            r'go ahead|do it|please|correct|exactly|right|got it|nice|awesome|'
+            r'commit|push|open|lgtm|ship it|done|\d)\s*[.!?]*$', re.I)
+        substantive = 0
+        for um in user_msgs:
+            first_line = um["text"].strip().split("\n")[0].strip()
+            if len(first_line) >= 20 and not _trivial_rx.match(first_line):
+                substantive += 1
         files_touched = list(set(
             cc.get("filesModified", []) + s.get("files_touched", [])
         ))
@@ -344,6 +355,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
             m["wall_clock_minutes"] += wall_min
             m["sessions"]         += 1
             m["conversation_turns"] += conv_turns
+            m["substantive_turns"] += substantive
             m["reads"]            += reads
             m["edits"]            += edits
             m["runs"]             += runs
@@ -371,6 +383,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
                 "wall_clock_minutes": wall_min,
                 "sessions":          1,
                 "conversation_turns": conv_turns,
+                "substantive_turns": substantive,
                 "reads":             reads,
                 "edits":             edits,
                 "runs":              runs,

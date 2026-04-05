@@ -886,21 +886,21 @@ def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -
 
 def _tier_tools(n: int, reads: int = 0, edits: int = 0, runs: int = 0) -> float:
     """Tool invocations → expert human hours.
-    When tool type breakdown is available, weights by action type:
-      reads (file reads, searches) ≈ 0.5 min — quick glances
-      edits (file edits, creates)  ≈ 4 min — substantive code work
-      runs  (commands, tests)      ≈ 1.5 min — execution + verify
+    Weighted by action type. An expert human would accomplish the same outcome
+    in fewer actions than Copilot's iterative approach, so per-action weights
+    reflect a deliberate expert, not a 1:1 mapping of AI actions to human actions.
+      reads (file views, searches) ≈ 0.3 min — quick scan
+      edits (file edits, creates)  ≈ 1.5 min — expert makes fewer, targeted edits
+      runs  (commands, tests)      ≈ 0.75 min — execution + glance at result
       other (agent overhead)       ≈ 0 min — not human work
-    Falls back to 1.5 min/action flat rate when breakdown unavailable.
-    (Ziegler et al. 2024: not all AI actions represent equal human effort)"""
+    (Ziegler et al. 2024; Cambon et al. 2023: AI iterates more than a human expert)"""
     if n <= 0:
         return 0.0
     if reads + edits + runs > 0:
-        weighted_min = reads * 0.5 + edits * 4 + runs * 1.5
+        weighted_min = reads * 0.3 + edits * 1.5 + runs * 0.75
         return max(round(weighted_min / 60, 1), 0.25)
-    # Fallback: flat rate when breakdown not available (~1.5 min/action avg,
-    # discounted from 2-3 min to account for ~35% overhead/reads)
-    return max(round(n * 1.5 / 60, 1), 0.25)
+    # Fallback: ~0.8 min/action average when breakdown unavailable
+    return max(round(n * 0.8 / 60, 1), 0.25)
 
 
 def _tier_reqs(n: int, turns: int = 0) -> float:
@@ -924,18 +924,17 @@ def _tier_reqs(n: int, turns: int = 0) -> float:
 
 def _tier_turns(n: int) -> float:
     """Conversation turns → expert human hours.
-    Each turn represents a user-initiated interaction: formulating a question,
-    reviewing the response, deciding next steps. ~12-15 min per turn for
-    substantive work (research shows prompt dialogues + evaluation take
-    meaningful cognitive effort — Chen et al. 2023, Vaithilingam et al. 2022)."""
+    Each turn represents a user-initiated interaction. Many turns are quick
+    directives ('commit', 'looks good', 'open it') not deep thinking.
+    Average ~5-7 min/turn — some quick, some substantive."""
     if n <= 0:   return 0.0
-    if n <= 3:   return 0.5       # quick Q&A
-    if n <= 8:   return 1.5       # focused task
-    if n <= 15:  return 3.0       # working session
-    if n <= 30:  return 5.0       # extended session
-    if n <= 60:  return 8.0       # deep collaboration (full day)
-    if n <= 100: return 12.0      # multi-day partnership
-    return 16.0
+    if n <= 3:   return 0.25      # quick Q&A
+    if n <= 8:   return 0.75      # focused task
+    if n <= 15:  return 1.5       # working session
+    if n <= 30:  return 3.0       # extended session
+    if n <= 60:  return 5.0       # deep collaboration
+    if n <= 100: return 8.0       # full-day partnership
+    return 10.0
 
 
 def _tier_lines(n: int) -> float:
@@ -954,9 +953,9 @@ def _tier_lines(n: int) -> float:
 
 def _tier_active(m: float) -> float:
     """Active engagement multiplier — a human without AI would need roughly
-    4× the active collaboration time, accounting for the specialist skills
-    Copilot augments."""
-    return round(m * 4 / 60, 1)  # 4× active minutes, converted to hours
+    3× the active collaboration time. Uses the midpoint of the 1.4–4× range
+    from Microsoft studies (Cambon et al. 2023, Peng et al. 2023)."""
+    return round(m * 3 / 60, 1)
 
 
 def compute_formula_estimate(metrics: dict) -> dict:
@@ -968,7 +967,7 @@ def compute_formula_estimate(metrics: dict) -> dict:
     automated completions. Turns are the cleaner signal for human interaction depth.
     Multipliers from Alaswad et al. 2026: iteration depth and scope breadth.
     """
-    turns    = metrics.get("conversation_turns", 0)
+    turns    = metrics.get("substantive_turns", 0) or metrics.get("conversation_turns", 0)
     tool_h   = _tier_tools(metrics.get("tool_invocations", 0),
                            metrics.get("reads", 0),
                            metrics.get("edits", 0),
@@ -1005,7 +1004,27 @@ def compute_formula_estimate(metrics: dict) -> dict:
     if files > 3:  scope_factor += 0.10
     if files > 10: scope_factor += 0.20
 
-    total = (base * iteration_factor * scope_factor) + lines_h
+    # For multi-day merged goals, use pre-computed per-day formula sum
+    # (avoids inflating multipliers on aggregated metrics)
+    per_day_total = metrics.get("_per_day_formula_total")
+    if per_day_total is not None:
+        return {
+            "tool_h":           tool_h,
+            "turns_h":          turns_h,
+            "req_h":            req_h,
+            "active_h":         active_h,
+            "lines_h":          lines_h,
+            "base":             base,
+            "iteration_factor": iteration_factor,
+            "scope_factor":     scope_factor,
+            "combined_mult":    min(iteration_factor * scope_factor, 1.5),
+            "total":            per_day_total,
+        }
+
+    # Cap combined multiplier at 1.5×
+    combined = min(iteration_factor * scope_factor, 1.5)
+
+    total = (base * combined) + lines_h
     total = max(total, 0.25)
 
     return {
@@ -1017,6 +1036,7 @@ def compute_formula_estimate(metrics: dict) -> dict:
         "base":             base,
         "iteration_factor": iteration_factor,
         "scope_factor":     scope_factor,
+        "combined_mult":    combined,
         "total":            round(total * 4) / 4,
     }
 
