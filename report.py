@@ -2244,6 +2244,9 @@ window.onload = function() {
       <div style="font-size:10px;color:rgba(255,255,255,0.25);margin-top:10px">
         {target_date} &nbsp;·&nbsp; GitHub Copilot Impact Report
       </div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.45);margin-top:10px">
+        ⭐ If you found this useful, consider <a href="https://github.com/microsoft/What-I-Did-Copilot" style="color:rgba(255,255,255,0.7);text-decoration:none;font-weight:600">starring the repo</a> to help others discover it
+      </div>
     </td>
   </tr>
 
