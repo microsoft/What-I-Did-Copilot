@@ -38,7 +38,7 @@ Every interaction classified by intent — **Building, Researching, Designing, I
 Time-of-day activity patterns with a daily heatmap — spot whether you're an early-morning builder or a late-night debugger, and whether AI assistance is concentrated or spread across your day.
 
 ### 📐 Complexity Evidence
-Collapsible estimation detail showing the quantitative signals behind every effort number — tool invocations, premium requests, token volumes, and the deterministic formula. Evidence that Copilot isn't just handling boilerplate — it's tackling real complexity.
+Collapsible estimation detail showing the quantitative signals behind every effort number — tool invocations, conversation turns, iteration depth, and the deterministic formula. Evidence that Copilot isn't just handling boilerplate — it's tackling real complexity. [Grounded in peer-reviewed research →](docs/effort-estimation-methodology.md)
 
 ## 📸 Sample Report
 
@@ -128,7 +128,19 @@ whatidid --14D --email
 
 See [docs/architecture.md](docs/architecture.md) for session file formats, token cost model, and leverage calculation details.
 
-See [docs/effort-estimation-methodology.md](docs/effort-estimation-methodology.md) for the research basis, signal definitions, and calibration logic behind effort estimates.
+See [docs/effort-estimation-methodology.md](docs/effort-estimation-methodology.md) for the research basis, signal definitions, and calibration logic behind effort estimates — grounded in 13 peer-reviewed sources including Alaswad et al. 2026, Cambon et al. 2023 (Microsoft Research), Ziegler et al. 2024 (CACM), and the SPACE framework (Forsgren et al. 2021).
+
+## 🔒 Privacy
+
+**Your data stays on your machine.** This tool is completely local-first:
+
+- **Reads only local files** — session logs from `~/.copilot/session-state/` that already exist on your machine
+- **No telemetry, no tracking, no cloud uploads** — the tool never phones home
+- **AI analysis is optional** — uses GitHub Models API (authenticated via your own `gh` CLI token) to semantically interpret sessions. Without API access, a local heuristic fallback produces estimates with zero external calls
+- **Email is optional** — the `--email` flag sends the report via your own Outlook client. If you don't use it, the HTML file stays on disk
+- **No one has access to your report unless you share it** — the output is a standalone HTML file saved to your local project directory
+
+The tool processes the same session data that GitHub Copilot already stores locally. It adds nothing new to disk beyond the HTML report and a small analysis cache in `cache/`.
 
 ## 📋 Requirements
 

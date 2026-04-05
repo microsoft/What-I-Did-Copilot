@@ -33,7 +33,7 @@ DEFAULT RULE: When in doubt, MERGE. Too few goals is better than too many.
 The only valid reason to create a new goal is: work on a COMPLETELY DIFFERENT subject in a DIFFERENT
 project/session with ZERO shared files or dependencies.
 
-ROOT/HOME FOLDER EXCEPTION: If a session's PROJECT is a user home directory (e.g. "shahegde",
+ROOT/HOME FOLDER EXCEPTION: If a session's PROJECT is a user home directory (e.g. "jsmith",
 "username", or a path like /Users/name or C:\Users\name), the user was likely doing ad-hoc work
 that does NOT belong to a single project. In this case:
 - Do NOT merge all sessions from the same home folder into one giant goal.
