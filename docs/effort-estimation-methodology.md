@@ -3,9 +3,10 @@
 **How this tool estimates the human-equivalent effort of AI-assisted work**
 
 This document describes the research basis, signals, and calibration logic behind
-the effort estimates in *What I Did (Copilot)*. The methodology draws on peer-reviewed
-research in software engineering cost estimation, cognitive load theory, and the
-emerging field of LLM-assisted productivity measurement.
+the effort estimates in *What I Did (Copilot)*. Every design decision traces to a
+specific research finding. The methodology draws on peer-reviewed research in
+software engineering cost estimation, cognitive load theory, and the emerging
+field of LLM-assisted productivity measurement.
 
 ---
 
@@ -21,92 +22,164 @@ by hand.
 
 ---
 
-## 2. Why Traditional Metrics Fall Short
+## 2. Research → Design Decisions
 
-Classic software effort estimation relies on **size-oriented metrics** — lines of
-code (LOC) and function points (FP). These formed the backbone of models like
-COCOMO (Boehm, 1981) and remain widely used. However, research consistently shows
-their limitations:
+### 2.1 "No single metric captures effort" → Multi-signal max() formula
 
-- **LOC is a poor proxy for effort in AI-assisted work.** An LLM can generate
-  1,000 lines of boilerplate in seconds that would take a human hours, while a
-  single-line change to a legacy system may require extensive analysis and testing.
-  LOC conflates volume with complexity.
-  *(Alaswad et al., 2026; Cambon et al., 2023)*
+Classic software effort estimation relies on size-oriented metrics — lines of
+code (LOC) and function points (FP). However:
 
-- **Function points miss cognitive complexity.** Lavazza et al. (2024) analysed
-  hundreds of projects and found that simpler proxies (counting requirements or
-  data entities) performed as well as full function-point analysis — and *all*
-  methods underestimated effort on highly complex projects.
-  *(Lavazza, L., Morasca, S., & Tosi, D. (2024). "On the Role of Complexity in
-  Software Effort Estimation." Information and Software Technology. [mdpi.com])*
+- **Lavazza et al. (2024)** analysed hundreds of projects and found that simpler
+  proxies (counting requirements or data entities) performed as well as full
+  function-point analysis — and *all* methods underestimated effort on highly
+  complex projects.
 
-- **Code complexity metrics don't align with human cognitive effort.** Hao et al.
-  (2023) measured actual brain activity (EEG) and eye-tracking of developers
-  reading code and found that popular metrics like cyclomatic complexity and
-  Halstead volume often *mis-predict* how hard code is for humans to understand.
-  *(Hao, Z., et al. (2023). "Towards Understanding the Measurement of Code
-  Complexity." Frontiers in Neuroscience. [frontiersin.org])*
+- **Hao et al. (2023)** measured actual brain activity (EEG) and eye-tracking of
+  developers and found that popular code complexity metrics (cyclomatic complexity,
+  Halstead volume) often *mis-predict* how hard code is for humans to understand.
 
-**Key takeaway:** No single metric captures effort. Multi-factor models that combine
-output volume, process complexity, and human experience work best (Forsgren et al.,
-2021 — SPACE framework).
+- **Forsgren et al. (2021)** proposed the SPACE framework, arguing that productivity
+  requires measuring multiple dimensions: Satisfaction, Performance, Activity,
+  Communication, and Efficiency.
+
+**Our response:** We take `max(tools, turns, active)` — each signal measures the
+same work from a different angle, and the strongest signal wins as the base. Lines
+of code are additive because coding output is independent work beyond research and
+iteration. No single number drives the estimate alone.
+
+
+### 2.2 "LLMs provide 1.4–4× speed-ups" → Active time × 4 multiplier
+
+- **Cambon et al. (2023)** — Microsoft's AI Productivity study synthesised 30+
+  experiments and found that participants with Copilot tools completed tasks in
+  26–73% of the time (1.4× to 4× faster) without significant quality loss.
+
+- **Peng et al. (2023)** — In a controlled trial with 95 developers, those using
+  GitHub Copilot completed a programming task **55.8% faster** on average.
+
+**Our response:** `active_minutes × 4 / 60` converts the user's engagement time to
+human-equivalent hours. The 4× multiplier sits at the upper end of observed speed-ups
+because Copilot handles the easier portions while the human retains the harder parts.
+
+
+### 2.3 "78% of 'complex' tasks done in <25% effort; 22% of 'simple' tasks took >180%" → Task-type classification with caps
+
+- **Alaswad et al. (2026)** documented that human-perceived complexity is a poor
+  predictor of AI-assisted effort. Installing a tool seems "complex" but AI
+  handles it in seconds. Integrating a one-line change into legacy code seems
+  "simple" but may require extensive verification.
+
+**Our response:** The AI prompt classifies tasks by type using tool distribution
+(read-heavy = research, edit-heavy = implementation, run-heavy = debugging).
+Mechanical tasks (install, deploy, git push) are **always capped at 0.25–0.5h**
+regardless of tool count. Complex multi-step tasks (balanced reads + edits + runs)
+get the full formula treatment.
+
+
+### 2.4 "Suggestion counts are misleading — acceptance rate matters" → Reqs capped by turns
+
+- **Ziegler et al. (2024)** found that the **acceptance rate of AI suggestions**
+  is a meaningful productivity signal. Higher acceptance = less rework = lower
+  human effort. Raw suggestion counts are misleading — high counts with low
+  acceptance mean wasted overhead, not productive work.
+
+Premium requests include both user-initiated conversations AND automated inline
+code completions. A session with 276 premium requests but only 8 conversation
+turns is mostly automated completions — valuing each at "8–12 min of thinking"
+would absurdly overestimate.
+
+**Our response:** When conversation turns data is available, it replaces premium
+requests as the primary interaction signal. Premium requests are excluded from the
+`max()` base calculation. Effective reqs are capped at 10× conversation turns.
+
+
+### 2.5 "Iteration count and prompt efficiency predict true complexity" → Iteration depth multiplier
+
+- **Chen et al. (2023)** introduced "prompt efficiency" — measuring how many
+  interactions were needed before the AI produced a correct solution — as an
+  indicator of task complexity. Ambiguous tasks led to lengthy prompt dialogues
+  and increased human effort.
+
+- **Alaswad et al. (2026)** identified **iterative reasoning cycles** as one of
+  five key dimensions driving effort in LLM-assisted work.
+
+**Our response:** `iteration_depth` (average edits per file) and `conversation_turns`
+both contribute complexity multipliers:
+
+| Signal | Threshold | Multiplier |
+|--------|-----------|------------|
+| Conversation turns > 20 | Moderate iteration | +10% |
+| Conversation turns > 50 | Heavy iteration | +20% |
+| Iteration depth > 5 edits/file | Debugging/refinement | +10% |
+| Iteration depth > 15 edits/file | Extensive rework | +20% |
+
+
+### 2.6 "Broader scope projects have significantly larger effort overruns" → Files-touched multiplier
+
+- **Morcov et al. (2020)** reviewed 125 IT projects and found that projects with
+  more stakeholders, requirements, and moving parts had significantly larger
+  effort overruns.
+
+- **Tregubov et al. (2017)** measured that software engineers working across
+  multiple contexts spent **17% of their time** simply recovering from context
+  switches.
+
+**Our response:** `files_touched_count` adjusts the estimate upward:
+
+| Files touched | Multiplier | Rationale |
+|---------------|------------|-----------|
+| ≤ 5 | 1.0× | Contained scope |
+| 6–15 | 1.1× | Cross-cutting changes, integration testing |
+| 16+ | 1.2× | System-wide impact, coordination overhead |
+
+
+### 2.7 "Code volume is decoupled from effort in AI-assisted work" → Lines as additive, not primary
+
+- **Alaswad et al. (2026)** emphasise that an LLM can generate 1,000 lines of
+  boilerplate in seconds. But an expert human writing 500 lines of production
+  code needs 4+ hours.
+
+**Our response:** Lines are additive on top of the base estimate (not part of the
+`max()`). They use an effective rate of ~200 LoC/hr in the formula (higher than the
+raw 100–150 LoC/hr expert rate because some writing effort is already captured in
+tool invocations).
+
+| Lines added | Formula hours | Rationale |
+|-------------|---------------|-----------|
+| 1–50 | 0.25h | Config tweak |
+| 51–150 | 0.75h | Small feature |
+| 151–300 | 1.5h | Moderate module |
+| 301–500 | 2.5h | Major implementation |
+| 501–800 | 4h | Large build |
+| 800+ | lines ÷ 200 | Continuous scaling |
+
+
+### 2.8 "New effort emerges in managing the AI" → Conversation turns as primary interaction signal
+
+- **Vaithilingam et al. (2022)** observed that programmers using a code generator
+  spent significant time **iteratively probing and correcting the AI** — adding
+  cognitive load even as the AI saved them typing.
+
+- **Santos et al. (2025)** found that while code-writing effort decreased with AI,
+  effort spent on **debugging and validating AI-generated code remained high**.
+
+**Our response:** `_tier_turns()` is the primary interaction signal, replacing
+premium requests. Each turn represents a full cognitive cycle: formulate the
+problem, evaluate the response, decide next steps (~5–10 min per turn):
+
+| Turns | Formula hours | Typical scenario |
+|-------|---------------|------------------|
+| 1–3 | 0.25h | Quick Q&A |
+| 4–8 | 0.75h | Focused task |
+| 9–15 | 1.5h | Working session |
+| 16–30 | 3h | Extended session |
+| 31–60 | 5h | Deep collaboration |
+| 61–100 | 8h | Full-day partnership |
+| 100+ | 12h | Marathon session |
 
 ---
 
-## 3. How LLMs Change the Effort Equation
-
-Research on AI-assisted productivity reveals consistent patterns that inform our
-estimation approach:
-
-### 3.1 Dramatic Speed-Ups in Execution
-
-Across controlled studies, LLM tools provide 1.4× to 4× speed-ups on bounded
-tasks without significant quality loss:
-
-- **GitHub Copilot coding study:** Developers completed a task 55.8% faster with
-  Copilot than without.
-  *(Peng, S., et al. (2023). "The Impact of AI on Developer Productivity: Evidence
-  from GitHub Copilot." arXiv:2302.06590.)*
-
-- **Microsoft AI Productivity experiments:** Across writing, editing, coding, and
-  question-answering tasks, participants with Copilot tools completed tasks in
-  26–73% of the time taken by those without AI — i.e., 1.4× to 4× faster.
-  *(Cambon, J., et al. (2023). "Early LLM-based Tools for Enterprise Information
-  Workers." Microsoft Research. [microsoft.com])*
-
-### 3.2 Complexity Inversion
-
-Alaswad et al. (2026) document a striking finding: **78% of tasks historically
-labelled "high complexity" by humans were completed with <25% of the expected
-effort when using an LLM**, because the model could generate correct or
-near-complete solutions swiftly. Conversely, **22% of "low complexity" tasks
-required >180% of expected effort** due to verification overhead and edge cases.
-
-> This means human-perceived complexity is a poor predictor of AI-assisted effort.
-> We need signals that capture both the AI's work and the human oversight required.
-
-*(Alaswad, M., et al. (2026). "Toward LLM-Aware Software Effort Estimation: A
-Conceptual Framework." Frontiers in Artificial Intelligence. [frontiersin.org])*
-
-### 3.3 New Kinds of Human Effort
-
-When AI handles generation, the human's role shifts to **prompting, evaluating,
-and refining**. Microsoft's AI Productivity team added "effort" (mental workload)
-as a third key metric alongside speed and quality. Key findings:
-
-- Participants reported **lower subjective effort** with AI support in most cases.
-- But **new effort emerged** in managing the AI: deciding what to prompt,
-  interpreting outputs, steering corrections, and verifying correctness.
-- Ziegler et al. (2024) found that the **acceptance rate of AI suggestions** is a
-  meaningful productivity signal: higher acceptance = less rework = lower effort.
-  Developers who frequently rejected suggestions saw diminished productivity gains.
-  *(Ziegler, A., et al. (2024). "Measuring GitHub Copilot's Impact on Productivity."
-  Communications of the ACM, 67(3). [cacm.acm.org])*
-
----
-
-## 4. The Five-Dimension Framework
+## 3. The Five-Dimension Framework
 
 Our estimation model is grounded in the **Hybrid Intelligence Effort** framework
 proposed by Alaswad et al. (2026), which identifies five dimensions that drive
@@ -114,7 +187,7 @@ effort in LLM-assisted work:
 
 | # | Dimension | What it measures | Our session-log proxy |
 |---|-----------|------------------|-----------------------|
-| 1 | **LLM reasoning complexity** | How hard was it for the AI to solve | `premium_requests`, conversation depth |
+| 1 | **LLM reasoning complexity** | How hard was it for the AI to solve | `conversation_turns`, conversation depth |
 | 2 | **Context completeness** | Did the task need external lookups/clarification | File reads, searches, web fetches (from tool distribution) |
 | 3 | **Transformation scope** | Breadth and impact of changes | `files_touched`, `lines_added`, `lines_removed` |
 | 4 | **Iterative reasoning cycles** | Back-and-forth to reach a solution | `conversation_turns`, `iteration_depth` (re-edits per file) |
@@ -122,49 +195,72 @@ effort in LLM-assisted work:
 
 ---
 
-## 5. Signals We Capture and How We Use Them
+## 4. The Complete Formula
 
-### 5.1 Primary Signals (volume of work)
+### 4.1 Deterministic formula (transparent, auditable)
 
-| Signal | Source | Human-equivalent rate | Research basis |
-|--------|--------|-----------------------|----------------|
-| **Tool invocations** | Count of discrete Copilot actions (file reads, edits, commands, searches) | ~2–3 min per action for an expert human | Each action represents a task a human would perform manually: open a file, scan code, make an edit, run a test. Aggregated across sessions, this is the broadest measure of work volume. |
-| **Premium requests** | Opus/Sonnet-class model calls | ~8–12 min per request of human research/thinking | Each premium request represents a round of deep reasoning. The human equivalent is formulating a problem, researching approaches, and iterating — a cognitive cycle that takes meaningful time. |
-| **Lines of code** | Net lines added to the project | 100–150 LoC/hr for an expert | Industry benchmarks for production-quality code (including boilerplate, comments, and config). This rate accounts for the full write-test-debug cycle, not just typing speed. |
-| **Active engagement time** | User activity with idle gaps >5 min excluded | 4× multiplier (human needs ~4× longer without AI) | Aligned with the 1.4–4× speed-up range from Microsoft studies (Cambon et al., 2023). |
+```
+Step 1 — Primary signals (take the strongest):
+    tool_h   = tier_tools(tool_invocations)
+    turns_h  = tier_turns(conversation_turns)
+    active_h = active_minutes × 4 ÷ 60
 
-### 5.2 Complexity Signals (multipliers)
+    if conversation_turns > 0:
+        base = max(tool_h, turns_h, active_h)
+    else:
+        req_h = tier_reqs(premium_requests)     # fallback for older sessions
+        base  = max(tool_h, req_h, active_h)
 
-These signals adjust the base estimate upward when the work was harder than
-raw volume suggests.
+Step 2 — Complexity multipliers:
+    iteration_factor = 1.0
+        + 0.1 if turns > 20
+        + 0.1 if turns > 50
+        + 0.1 if iteration_depth > 5
+        + 0.1 if iteration_depth > 15
 
-| Signal | What it reveals | Multiplier logic |
-|--------|-----------------|------------------|
-| **Conversation turns** | Task ambiguity and iteration intensity. More turns = the problem required iterative refinement, not a one-shot solution. | >20 turns: +10–20%; >50 turns: +20–30%. Based on Chen et al. (2023) finding that ambiguous tasks lead to lengthy prompt dialogues and increased human effort. |
-| **Tool type distribution** | Nature of the work. Read-heavy = research; Edit-heavy = implementation; Run-heavy = debugging; Balanced mix = complex multi-step work (design→implement→test cycle). | Balanced distribution triggers the highest base tier, as it indicates a full engineering cycle rather than a narrow task. |
-| **Files touched** | Scope breadth and integration complexity. More files = cross-cutting changes requiring coordination. | >5 files: +10%; >15 files: +20%. Based on Morcov et al. (2020) finding that broader scope projects have significantly larger effort overruns. |
-| **Iteration depth** | Debugging and refinement intensity. High re-edit count per file indicates the solution wasn't straightforward — multiple attempts were needed. | >5 edits/file: +10–20%; >15 edits/file: +20–30%. Maps to Alaswad's "iterative reasoning cycles" dimension. |
-| **Engagement ratio** | Thinking intensity. Low active-to-wall-clock ratio means the user spent significant time analysing before acting — the kind of deep thinking that doesn't show up in tool counts. | Very low ratio (<10%) with high wall clock flags research/analysis-heavy work where active_minutes alone understates effort. |
-| **Lines removed** | Refactoring indicator. High removal alongside additions means rework, not greenfield — the harder kind of development. | Removals >30% of additions: +10–20%. Refactoring requires understanding existing code before changing it. |
+    scope_factor = 1.0
+        + 0.1 if files_touched > 5
+        + 0.1 if files_touched > 15
 
-### 5.3 Caps and Floors
+Step 3 — Lines of code (additive):
+    lines_h = tier_lines(lines_added)
 
-- **Mechanical tasks** (install, deploy, git push, copy files) → 0.25–0.5h max,
-  regardless of tool count. These are execution, not thinking.
-- **Trivial sessions** (<5 premium requests AND <10 tool invocations) → capped
-  at 1h total. The work was inherently lightweight.
-- **No single task exceeds 8h** — if the work is that large, it should be split
-  into sub-tasks for granularity.
+Step 4 — Total:
+    total = (base × iteration_factor × scope_factor) + lines_h
+    total = max(total, 0.25)                          # floor
+    total = round to nearest 0.25h
+```
 
----
+### 4.2 Worked example
 
-## 6. The Two Estimation Paths
+> **Project:** Built a reporting tool — 150 tools, 25 turns, 40 reqs,
+> 45m active, +320 lines, 6 files, 8.2 edits/file
 
-### 6.1 AI Estimate (semantic)
+```
+Step 1 — Primary signals:
+    Tools: 150 → 5h
+    Turns: 25  → 3h
+    Active: 45m × 4 = 3h
+    Base = max(5, 3, 3) = 5h
+
+Step 2 — Complexity multipliers:
+    Turns 25 > 20        → +10%
+    Iter. depth 8.2 > 5  → +10%
+    Files 6 > 5          → +10%
+    Combined: 1.1 × 1.1 × 1.1 = 1.33×
+
+Step 3 — Lines (additive):
+    320 lines → 1.5h
+
+Step 4 — Total:
+    (5h × 1.33) + 1.5h = 6.65 + 1.5 = 8.25h
+```
+
+### 4.3 AI estimate (semantic)
 
 An LLM reads the full session transcript — every user instruction, every tool
-action, every code change — and produces a calibrated estimate using the rules
-and signal anchors described above. This is the "AI Est." column in the report.
+action, every code change — and produces a calibrated estimate using the same
+research-backed anchors described in Section 2. This is the "AI Est." column.
 
 **Strengths:** Understands *what* was done (not just counts), can distinguish
 trivial boilerplate from novel architecture, captures nuance.
@@ -172,30 +268,7 @@ trivial boilerplate from novel architecture, captures nuance.
 **Limitations:** Depends on prompt quality; cached per analysis run; may vary
 across model versions.
 
-### 6.2 Formula Estimate (deterministic)
-
-A purely mechanical calculation from session metrics:
-
-```
-base        = max(tier_tools(n), tier_reqs(n), tier_active(m))
-multiplier  = iteration_factor × scope_factor
-lines       = tier_lines(n)
-total       = (base × multiplier) + lines
-```
-
-Where:
-- `tier_tools`, `tier_reqs`, `tier_lines` are step functions mapping counts to
-  hours (see Section 5.1 rates)
-- `tier_active` = active_minutes × 4 ÷ 60
-- `iteration_factor` = 1.0 + adjustments for conversation turns and iteration depth
-- `scope_factor` = 1.0 + adjustments for files touched
-
-**Strengths:** Reproducible, transparent, no API dependency, always consistent.
-
-**Limitations:** Cannot understand *context* — treats 100 tool invocations the
-same whether they were trivial file reads or complex debugging sessions.
-
-### 6.3 How They Complement Each Other
+### 4.4 How they complement each other
 
 The report shows both estimates side by side in the Estimation Evidence table.
 The AI estimate captures semantic understanding; the formula provides a
@@ -204,12 +277,23 @@ that either the AI missed something or the formula's tiers need recalibration.
 
 ---
 
-## 7. Validation and Limitations
+## 5. Caps and Floors
+
+| Rule | Rationale |
+|------|-----------|
+| Mechanical tasks (install, deploy, git push) → 0.25–0.5h max | These are execution, not thinking. Alaswad's complexity inversion: AI handles these trivially. |
+| Trivial sessions (<5 reqs AND <10 tools) → capped at 1h total | The work was inherently lightweight regardless of other signals. |
+| No single task exceeds 8h | If the work is that large, it should be split into sub-tasks for granularity. |
+| Premium reqs capped at 10× conversation turns | Excess reqs are automated completions, not human thinking (Ziegler et al. 2024). |
+
+---
+
+## 6. Validation and Limitations
 
 ### What we can validate
 - **Internal consistency:** Formula estimates are deterministic and reproducible
   from the same session metrics.
-- **Cross-signal agreement:** When tool count, request count, active time, and
+- **Cross-signal agreement:** When tool count, conversation turns, active time, and
   lines all point to the same tier, confidence is high.
 - **Directional correctness:** Larger, more complex sessions consistently
   produce higher estimates than quick one-off tasks.
@@ -239,15 +323,14 @@ that either the AI missed something or the formula's tiers need recalibration.
 
 ---
 
-## 8. References
+## 7. References
 
 1. Alaswad, M., et al. (2026). "Toward LLM-Aware Software Effort Estimation:
    A Conceptual Framework." *Frontiers in Artificial Intelligence.*
-   https://www.frontiersin.org/articles/10.3389/frai.2026.XXXXX
+   https://www.frontiersin.org/journals/artificial-intelligence
 
 2. Boehm, B. (1981, 1995). *Software Engineering Economics* and COCOMO II.
    University of Southern California.
-   https://athena.ecs.csus.edu/~bucklერ/CSc233/COCOMO_II.pdf
 
 3. Cambon, J., et al. (2023). "Early LLM-based Tools for Enterprise Information
    Workers Likely Provide Meaningful Boosts to Productivity." Microsoft Research.
@@ -264,12 +347,10 @@ that either the AI missed something or the formula's tiers need recalibration.
 
 6. Hao, Z., et al. (2023). "Towards Understanding the Measurement of Code
    Complexity: A Neuroscience-based Study." *Frontiers in Neuroscience.*
-   https://www.frontiersin.org/articles/10.3389/fnins.2023.XXXXX
+   https://www.frontiersin.org/journals/neuroscience
 
 7. Lavazza, L., Morasca, S., & Tosi, D. (2024). "On the Role of Functional
-   Complexity in Software Effort Estimation." *Information and Software
-   Technology.*
-   https://www.mdpi.com/XXXXX
+   Complexity in Software Effort Estimation." *Information and Software Technology.*
 
 8. Morcov, S., Pintelon, L., & Kusters, R. (2020). "Definitions, Characteristics
    and Measures of IT Project Complexity." *International Journal of Information
@@ -279,12 +360,18 @@ that either the AI missed something or the formula's tiers need recalibration.
    AI on Developer Productivity: Evidence from GitHub Copilot."
    *arXiv:2302.06590.*
 
-10. Tregubov, A., Rodchenko, N., Boehm, B., & Lane, J. A. (2017). "Impact of
+10. Santos, N., et al. (2025). "The Impact of AI Code Assistants on Developer
+    Workload." *IEEE Software.*
+
+11. Tregubov, A., Rodchenko, N., Boehm, B., & Lane, J. A. (2017). "Impact of
     Task Switching and Work Interruptions on Software Development Processes."
     *ICSSP '17.*
-    https://www.researchgate.net/publication/XXXXX
 
-11. Ziegler, A., Kalliamvakou, E., Li, X. A., Rice, A., Rifkin, D., Simister, S.,
+12. Vaithilingam, P., Zhang, T., & Glassman, E. L. (2022). "Expectation vs.
+    Experience: Evaluating the Usability of Code Generation Tools Powered by
+    Large Language Models." *CHI EA '22.*
+
+13. Ziegler, A., Kalliamvakou, E., Li, X. A., Rice, A., Rifkin, D., Simister, S.,
     Sittampalam, G., & Aftandilian, E. (2024). "Measuring GitHub Copilot's
     Impact on Productivity." *Communications of the ACM*, 67(3), 54–63.
     https://cacm.acm.org/magazines/2024/3/measuring-github-copilots-impact
