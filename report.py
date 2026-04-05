@@ -127,12 +127,16 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
     lines_removed   = analysis.get("lines_removed", 0)
     active_days     = max(1, len(analysis.get("active_dates", ["x"])))
 
-    # Total active engagement time across all sessions
-    total_active_min = sum(
-        m.get("active_minutes", 0)
-        for m in analysis.get("session_metrics", {}).values()
-        if not isinstance(m, str)
-    )
+    # Total active engagement time across all sessions.
+    # Deduplicate by object identity since normalized-name aliases may share the
+    # same dict object as the original project key (avoids double-counting).
+    _seen_metric_ids: set = set()
+    total_active_min = 0
+    for _m in analysis.get("session_metrics", {}).values():
+        if isinstance(_m, str) or id(_m) in _seen_metric_ids:
+            continue
+        _seen_metric_ids.add(id(_m))
+        total_active_min += _m.get("active_minutes", 0)
     if total_active_min >= 60:
         active_sub = f"{total_active_min / 60:.1f}h active time"
     else:
@@ -964,9 +968,9 @@ def _tier_lines(n: int) -> float:
 
 def _tier_active(m: float) -> float:
     """Active engagement multiplier — a human without AI would need roughly
-    3× the active collaboration time. Uses the midpoint of the 1.4–4× range
-    from Microsoft studies (Cambon et al. 2023, Peng et al. 2023)."""
-    return round(m * 3 / 60, 1)
+    4× the active collaboration time, based on the upper bound of the 1.4–4×
+    range from Microsoft studies (Cambon et al. 2023, Peng et al. 2023)."""
+    return round(m * 4 / 60, 1)
 
 
 def compute_formula_estimate(metrics: dict) -> dict:
@@ -1108,7 +1112,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         # Multiplier badges
         iter_f = fe.get("iteration_factor", 1.0)
         scope_f = fe.get("scope_factor", 1.0)
-        combined_mult = iter_f * scope_f
+        combined_mult = min(iter_f * scope_f, 1.5)
         mult_str = ""
         if combined_mult > 1.0:
             mult_pct = round((combined_mult - 1) * 100)
@@ -1365,8 +1369,8 @@ def _signal_guide() -> str:
          "reads&times;0.3m &nbsp; edits&times;1.5m &nbsp; runs&times;0.75m &nbsp; overhead&times;0m &nbsp; <em>(expert is more deliberate than AI)</em>"),
         ("Conversation turns", "&#128172;", "~5-7 min/turn",
          "Substantive only (trivial filtered). 1-3&rarr;0.25h &nbsp; 4-8&rarr;0.75h &nbsp; 9-15&rarr;1.5h &nbsp; 16-30&rarr;3h &nbsp; 31-60&rarr;5h &nbsp; 61+&rarr;8h+"),
-        ("Active time", "&#9201;", "&times;3 multiplier",
-         "active_minutes &times; 3 &divide; 60 &nbsp; (midpoint of 1.4&ndash;4&times; research range)"),
+        ("Active time", "&#9201;", "&times;4 multiplier",
+         "active_minutes &times; 4 &divide; 60 &nbsp; (upper bound of 1.4&ndash;4&times; research range)"),
         ("Lines of code", "&#128196;", "100-150 LoC/hr",
          "1-50&rarr;0.25h &nbsp; 51-150&rarr;0.75h &nbsp; 151-300&rarr;1.5h &nbsp; 301-500&rarr;2.5h &nbsp; 500+&rarr;4h+ &nbsp; <em>(additive)</em>"),
     ]:

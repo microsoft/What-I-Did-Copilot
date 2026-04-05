@@ -58,8 +58,9 @@ iteration. No single number drives the estimate alone.
   GitHub Copilot completed a programming task **55.8% faster** on average.
 
 **Our response:** `active_minutes × 4 / 60` converts the user's engagement time to
-human-equivalent hours. The 3× multiplier is the midpoint of observed speed-ups
-(Cambon et al. found 1.4–4×), balancing conservative and aggressive estimates.
+human-equivalent hours. The 4× multiplier reflects the upper bound of observed
+speed-ups (Cambon et al. found 1.4–4×), capturing the full productivity gain that
+AI provides in skilled professional work.
 
 
 ### 2.3 "78% of 'complex' tasks done in <25% effort; 22% of 'simple' tasks took >180%" → Task-type classification with caps
@@ -208,8 +209,8 @@ Step 1 — Primary signals (take the strongest):
                (falls back to tools × 0.8min ÷ 60 when breakdown unavailable)
     turns_h  = tier_turns(substantive_turns)
                (trivial turns like 'yes', 'commit', 'looks good' are filtered out)
-    active_h = active_minutes × 3 ÷ 60
-               (3× is the midpoint of the 1.4–4× research range)
+    active_h = active_minutes × 4 ÷ 60
+               (4× is the upper bound of the 1.4–4× research range)
 
     if substantive_turns > 0:
         base = max(tool_h, turns_h, active_h)

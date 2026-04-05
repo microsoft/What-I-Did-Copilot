@@ -15,7 +15,7 @@ Data Engineer            | pipeline, etl, schema, warehouse, dbt
 Technical Writer         | document, readme, how-to, guide, explainer
 DevOps Engineer          | deploy, dockerfile, kubernetes, terraform, ci/cd, github action
 Solutions Architect      | architect, api design, integration design
-Product Manager          | roadmap, user stor, prioriti, backlog, product requirement
+Product Manager          | roadmap, user story, prioritize, backlog, product requirement
 Program Manager          | project plan, milestone, delivery, dependency, status report, program
 Business Analyst         | process map, gap analysis, workflow, business requirement, stakeholder interview
 Management Consultant    | strategy, recommendation, framework, benchmark, executive, consulting

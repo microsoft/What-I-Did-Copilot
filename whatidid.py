@@ -106,20 +106,6 @@ def _normalize_project(name: str) -> str:
     return name.replace("\\", "/").split("/")[-1].lower().strip().replace(" ", "-")
 
 
-def _is_home_folder_project(name: str) -> bool:
-    """Detect if a project name is a user home directory (ad-hoc work).
-    Only returns True when the path explicitly contains /Users/ or /home/
-    and the project name is the username segment."""
-    norm = name.replace("\\", "/").strip("/")
-    parts = norm.split("/")
-    # Only match explicit home paths like /Users/jsmith, /home/jsmith, C:/Users/jsmith
-    for i, p in enumerate(parts):
-        if p.lower() in ("users", "home") and i + 1 < len(parts):
-            if parts[-1].lower() == parts[i + 1].lower():
-                return True
-    return False
-
-
 def _merge_related_goals(goals: list, project_canonical: dict = None,
                          sessions: list = None) -> list:
     """Group goals from the same project across different days into single entries.
@@ -136,15 +122,17 @@ def _merge_related_goals(goals: list, project_canonical: dict = None,
     if project_canonical is None:
         project_canonical = {}
 
-    # Build set of project names that are actually home folders (check project_path)
+    # Build set of project names that are actually home folders (check project_path).
+    # Use case-insensitive comparison so paths like C:/users/<name> or /USERS/<name>
+    # are handled correctly across all OS/path casing conventions.
     home_projects = set()
     for s in (sessions or []):
-        pp = s.get("project_path", "").replace("\\", "/")
-        if "/Users/" in pp or "/home/" in pp:
+        pp = s.get("project_path", "").replace("\\", "/").lower()
+        if "/users/" in pp or "/home/" in pp:
             parts = pp.split("/")
             for i, p in enumerate(parts):
-                if p.lower() in ("users", "home") and i + 1 < len(parts):
-                    if _normalize_project(s.get("project", "")) == parts[i + 1].lower():
+                if p in ("users", "home") and i + 1 < len(parts):
+                    if _normalize_project(s.get("project", "")) == parts[i + 1]:
                         home_projects.add(_normalize_project(s.get("project", "")))
 
     groups: OrderedDict = OrderedDict()
@@ -241,9 +229,11 @@ def _merge_analyses(day_analyses: list) -> dict:
         for proj, metrics in analysis.get("session_metrics", {}).items():
             dated_key = target_date + "|" + proj
             merged_session_metrics[dated_key] = dict(metrics)
-            # Also store under normalized key for cross-day matching
+            # Also store under normalized key for cross-day matching (same object,
+            # not a copy, so deduplication by id() works when aggregating totals)
             norm_key = target_date + "|" + _normalize_project(proj)
-            merged_session_metrics.setdefault(norm_key, dict(metrics))
+            if norm_key != dated_key:
+                merged_session_metrics.setdefault(norm_key, merged_session_metrics[dated_key])
 
     active_dates = sorted({d for d, _, _ in day_analyses})
 
@@ -285,7 +275,10 @@ def _merge_analyses(day_analyses: list) -> dict:
                 if c == canon:
                     equiv_names.add(p)
 
-            # Sum raw metrics for display, but compute formula per-day
+            # Sum raw metrics for display, but compute formula per-day.
+            # files_touched_count is a count of unique files per day — use max()
+            # across days to avoid overstating scope (and avoid erroneously
+            # tripping the >10 files multiplier on aggregated multi-day counts).
             agg = {"tokens": 0, "tool_invocations": 0, "premium_requests": 0,
                    "lines_added": 0, "lines_removed": 0, "active_minutes": 0,
                    "wall_clock_minutes": 0, "sessions": 0,
@@ -300,7 +293,10 @@ def _merge_analyses(day_analyses: list) -> dict:
                         m = merged_session_metrics.get(try_key, {})
                         if m:
                             for k in agg:
-                                agg[k] += m.get(k, 0)
+                                if k == "files_touched_count":
+                                    agg[k] = max(agg[k], m.get(k, 0))
+                                else:
+                                    agg[k] += m.get(k, 0)
                             per_day_formula_total += _cfe(m)["total"]
                             found = True
                             break
