@@ -1184,28 +1184,30 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
     th_muted = th_style.replace(f"color:{C['accent']}", f"color:{C['muted']}")
 
     return f"""
-      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px;line-height:1.6">
-        <strong style="color:{C['text']}">How to read this table:</strong>
-        Each row shows a project&rsquo;s raw session data (top) and the hour multiplier each
-        primary signal maps to (bottom). The <strong style="color:{C['accent']}">highest
-        multiplier</strong> among tools, requests, and active time becomes the base estimate,
-        then <strong>complexity multipliers</strong> from conversation turns, files touched, and
-        iteration depth adjust it upward (shown as a +% badge). Lines of code are added on top.
-        <br><span style="font-size:10px">Based on: Alaswad et al. 2026, Cambon et al. 2023,
-        Ziegler et al. 2024 &mdash;
+      <div style="font-size:11px;color:{C['text']};margin-bottom:14px;line-height:1.7">
+        <strong>Why we lead with AI estimation:</strong>
+        The AI reads your full session transcript &mdash; every instruction, every tool action,
+        every code change &mdash; and understands <em>what</em> was accomplished, not just how many
+        actions were taken. It distinguishes a 200-line boilerplate scaffold from a 50-line
+        algorithm that required deep design thinking, and it recognises that &ldquo;commit and push&rdquo;
+        is 0.25h regardless of how many tool calls it triggered.
+        This contextual understanding produces more accurate estimates than counting actions alone.
+        <br><span style="font-size:10px;color:{C['muted']}">
+        Calibrated against peer-reviewed research &mdash;
         <a href="https://github.com/microsoft/What-I-Did-Copilot/blob/main/docs/effort-estimation-methodology.md"
-           style="color:{C['accent']};text-decoration:none">full methodology</a></span>
+           style="color:{C['accent']};text-decoration:none">full methodology &amp; sources</a></span>
       </div>
       <div style="font-size:10px;color:{C['muted']};margin-bottom:10px;padding:8px 12px;
                   background:{C['subtle']};border-radius:6px;border:1px solid {C['border']}">
-        <span style="color:{C['green']}">&#9632;</span> AI-calibrated estimate &nbsp;·&nbsp;
-        <strong style="color:{C['accent']}">Bold</strong> = highest signal &nbsp;·&nbsp;
+        <span style="color:{C['green']}">&#9632;</span> AI-calibrated estimate &nbsp;&middot;&nbsp;
+        <strong style="color:{C['accent']}">Bold</strong> = highest signal &nbsp;&middot;&nbsp;
         <span style="font-size:9px;color:{C['accent']};font-weight:600;background:{C['accent_lt']};
                padding:1px 5px;border-radius:4px">+N%</span> = complexity multiplier
         &nbsp;&nbsp;
         <span id="formula-col-toggle" data-open="0" onclick="toggleFormulaCol()"
-              style="cursor:pointer;font-size:9px;color:{C['accent']};user-select:none">
-          &#9654; Show formula column
+              style="cursor:pointer;font-size:9px;color:{C['accent']};user-select:none;
+                     border:1px solid {C['accent']};padding:2px 8px;border-radius:4px">
+          &#9654; Insert deterministic formula
         </span>
       </div>
       <table width="100%" cellpadding="0" cellspacing="0"
@@ -1223,7 +1225,25 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           <th style="{th_style.replace(f"color:{C['accent']}", f"color:{C['green']}")};width:9%">AI Est.</th>
         </tr>
         {rows}
-      </table>"""
+      </table>
+      <div class="formula-col" style="display:none;margin-top:12px;padding:10px 12px;
+                  background:{C['subtle']};border:1px solid {C['border']};border-radius:6px">
+        <div style="font-size:10px;color:{C['text']};line-height:1.6;margin-bottom:6px">
+          <strong>About the deterministic formula:</strong>
+          This is a transparent, reproducible calculation from raw session metrics &mdash;
+          no AI involved. It provides an auditable cross-check against the AI estimate.
+          However, it has limits: it cannot understand <em>context</em> (100 tool invocations
+          get the same weight whether they were trivial file reads or complex debugging sessions),
+          and it tends to overestimate on large multi-day projects because the metrics accumulate
+          while the AI evaluates each day independently.
+        </div>
+        <div style="font-family:monospace;font-size:10px;color:{C['muted']};line-height:1.5;
+                    padding:6px 8px;background:{C['card']};border-radius:4px">
+          base = max(weighted_tools, substantive_turns, active&times;3)<br>
+          complexity = iteration_factor &times; scope_factor (capped at 1.5&times;)<br>
+          total = (base &times; complexity) + lines_added
+        </div>
+      </div>"""
 
 
 def _evidence_strip(goal: dict, session_metrics: dict) -> str:
@@ -2001,7 +2021,7 @@ function toggleFormulaCol() {
   var hide = btn.getAttribute('data-open') === '1';
   cols.forEach(function(el) { el.style.display = hide ? 'none' : ''; });
   btn.setAttribute('data-open', hide ? '0' : '1');
-  btn.innerHTML = hide ? '&#9654; Show formula column' : '&#9660; Hide formula column';
+  btn.innerHTML = hide ? '&#9654; Insert deterministic formula' : '&#9660; Hide deterministic formula';
 }
 function shareViaEmail(subject, body) {
   var a = document.createElement('a');
@@ -2174,7 +2194,7 @@ window.onload = function() {
            onclick="toggleDetail('evidence')">
         <span id="evidence-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
         <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                     color:{C['muted']}">Estimation Evidence &mdash; per-project session signals</span>
+                     color:{C['muted']}">Estimation Evidence &mdash; how these numbers were calculated</span>
       </div>
       <div id="evidence-tasks" style="display:none">
         {_estimation_waterfall_inner(goals, analysis)}
