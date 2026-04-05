@@ -884,18 +884,23 @@ def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -
 
 # ── Deterministic effort formula ─────────────────────────────────────────────
 
-def _tier_tools(n: int) -> float:
+def _tier_tools(n: int, reads: int = 0, edits: int = 0, runs: int = 0) -> float:
     """Tool invocations → expert human hours.
-    Each action (read file, edit, run command, search) averages 2-3 min for
-    a human. Diminishing returns at scale as many become quick reads."""
-    if n <= 0:   return 0.0
-    if n <= 10:  return 0.5       # exploration / setup
-    if n <= 30:  return 1.5       # focused change (~3 min each)
-    if n <= 75:  return 3.0       # multi-file work (~2.4 min each)
-    if n <= 150: return 5.0       # substantial feature (~2 min each)
-    if n <= 300: return 8.0       # major implementation
-    if n <= 600: return 12.0      # full system build
-    return 16.0                    # very large project
+    When tool type breakdown is available, weights by action type:
+      reads (file reads, searches) ≈ 0.5 min — quick glances
+      edits (file edits, creates)  ≈ 4 min — substantive code work
+      runs  (commands, tests)      ≈ 1.5 min — execution + verify
+      other (agent overhead)       ≈ 0 min — not human work
+    Falls back to 1.5 min/action flat rate when breakdown unavailable.
+    (Ziegler et al. 2024: not all AI actions represent equal human effort)"""
+    if n <= 0:
+        return 0.0
+    if reads + edits + runs > 0:
+        weighted_min = reads * 0.5 + edits * 4 + runs * 1.5
+        return max(round(weighted_min / 60, 1), 0.25)
+    # Fallback: flat rate when breakdown not available (~1.5 min/action avg,
+    # discounted from 2-3 min to account for ~35% overhead/reads)
+    return max(round(n * 1.5 / 60, 1), 0.25)
 
 
 def _tier_reqs(n: int, turns: int = 0) -> float:
@@ -964,7 +969,10 @@ def compute_formula_estimate(metrics: dict) -> dict:
     Multipliers from Alaswad et al. 2026: iteration depth and scope breadth.
     """
     turns    = metrics.get("conversation_turns", 0)
-    tool_h   = _tier_tools(metrics.get("tool_invocations", 0))
+    tool_h   = _tier_tools(metrics.get("tool_invocations", 0),
+                           metrics.get("reads", 0),
+                           metrics.get("edits", 0),
+                           metrics.get("runs", 0))
     turns_h  = _tier_turns(turns)
     req_h    = _tier_reqs(metrics.get("premium_requests", 0), turns)
     active_h = _tier_active(metrics.get("active_minutes", 0))
