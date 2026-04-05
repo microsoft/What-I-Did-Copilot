@@ -973,19 +973,24 @@ def compute_formula_estimate(metrics: dict) -> dict:
     else:
         base = max(tool_h, req_h, active_h)
 
-    # Iteration complexity: high re-edit depth = debugging/refinement
+    # Iteration complexity: high conversation turns or re-edit depth
+    # indicates the problem was fundamentally harder than raw counts suggest.
+    # Chen (2023): ambiguous tasks → lengthy dialogues → increased effort.
+    # Alaswad (2026): 22% of tasks took >180% expected effort due to iteration.
     iter_depth = metrics.get("iteration_depth", 0)
     iteration_factor = 1.0
-    if turns > 20:      iteration_factor += 0.1
-    if turns > 50:      iteration_factor += 0.1
-    if iter_depth > 5:  iteration_factor += 0.1
-    if iter_depth > 15: iteration_factor += 0.1
+    if turns > 15:      iteration_factor += 0.15
+    if turns > 40:      iteration_factor += 0.20
+    if iter_depth > 5:  iteration_factor += 0.15
+    if iter_depth > 12: iteration_factor += 0.20
 
-    # Scope breadth: more files touched = integration/coordination overhead
+    # Scope breadth: more files = integration and context-switching overhead.
+    # Tregubov (2017): 17% time lost to context-switching at moderate levels.
+    # Morcov (2020): broader scope → significantly larger effort overruns.
     files = metrics.get("files_touched_count", 0)
     scope_factor = 1.0
-    if files > 5:  scope_factor += 0.1
-    if files > 15: scope_factor += 0.1
+    if files > 3:  scope_factor += 0.10
+    if files > 10: scope_factor += 0.20
 
     total = (base * iteration_factor * scope_factor) + lines_h
     total = max(total, 0.25)

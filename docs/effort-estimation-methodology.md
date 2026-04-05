@@ -108,10 +108,10 @@ both contribute complexity multipliers:
 
 | Signal | Threshold | Multiplier |
 |--------|-----------|------------|
-| Conversation turns > 20 | Moderate iteration | +10% |
-| Conversation turns > 50 | Heavy iteration | +20% |
-| Iteration depth > 5 edits/file | Debugging/refinement | +10% |
-| Iteration depth > 15 edits/file | Extensive rework | +20% |
+| Conversation turns > 15 | Moderate iteration | +15% |
+| Conversation turns > 40 | Heavy iteration | +35% cumulative |
+| Iteration depth > 5 edits/file | Debugging/refinement | +15% |
+| Iteration depth > 12 edits/file | Extensive rework | +35% cumulative |
 
 
 ### 2.6 "Broader scope projects have significantly larger effort overruns" → Files-touched multiplier
@@ -128,9 +128,9 @@ both contribute complexity multipliers:
 
 | Files touched | Multiplier | Rationale |
 |---------------|------------|-----------|
-| ≤ 5 | 1.0× | Contained scope |
-| 6–15 | 1.1× | Cross-cutting changes, integration testing |
-| 16+ | 1.2× | System-wide impact, coordination overhead |
+| ≤ 3 | 1.0× | Contained scope |
+| 4–10 | 1.1× | Cross-cutting changes, integration testing |
+| 11+ | 1.3× | System-wide impact, heavy context-switching (Tregubov: 17% loss) |
 
 
 ### 2.7 "Code volume is decoupled from effort in AI-assisted work" → Lines as additive, not primary
@@ -213,14 +213,14 @@ Step 1 — Primary signals (take the strongest):
 
 Step 2 — Complexity multipliers:
     iteration_factor = 1.0
-        + 0.1 if turns > 20
-        + 0.1 if turns > 50
-        + 0.1 if iteration_depth > 5
-        + 0.1 if iteration_depth > 15
+        + 0.15 if turns > 15
+        + 0.20 if turns > 40
+        + 0.15 if iteration_depth > 5
+        + 0.20 if iteration_depth > 12
 
     scope_factor = 1.0
-        + 0.1 if files_touched > 5
-        + 0.1 if files_touched > 15
+        + 0.10 if files_touched > 3
+        + 0.20 if files_touched > 10
 
 Step 3 — Lines of code (additive):
     lines_h = tier_lines(lines_added)
