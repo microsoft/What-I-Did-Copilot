@@ -107,22 +107,21 @@ def _normalize_project(name: str) -> str:
 
 
 def _is_home_folder_project(name: str) -> bool:
-    """Detect if a project name looks like a user home directory (ad-hoc work)."""
+    """Detect if a project name is a user home directory (ad-hoc work).
+    Only returns True when the path explicitly contains /Users/ or /home/
+    and the project name is the username segment."""
     norm = name.replace("\\", "/").strip("/")
     parts = norm.split("/")
-    # Matches: "username", "Users/username", "home/username", "C:/Users/username"
-    if len(parts) == 1 and not any(c in parts[0] for c in ".-_") and len(parts[0]) < 20:
-        # Single short word with no separators — likely a username
-        return True
+    # Only match explicit home paths like /Users/jsmith, /home/jsmith, C:/Users/jsmith
     for i, p in enumerate(parts):
         if p.lower() in ("users", "home") and i + 1 < len(parts):
-            # The segment after "Users" or "home" is the username root
-            if parts[i + 1].replace("\\", "/").split("/")[-1] == _normalize_project(name):
+            if parts[-1].lower() == parts[i + 1].lower():
                 return True
     return False
 
 
-def _merge_related_goals(goals: list, project_canonical: dict = None) -> list:
+def _merge_related_goals(goals: list, project_canonical: dict = None,
+                         sessions: list = None) -> list:
     """Group goals from the same project across different days into single entries.
 
     Goals are considered related when they share the same normalized project name
@@ -137,6 +136,17 @@ def _merge_related_goals(goals: list, project_canonical: dict = None) -> list:
     if project_canonical is None:
         project_canonical = {}
 
+    # Build set of project names that are actually home folders (check project_path)
+    home_projects = set()
+    for s in (sessions or []):
+        pp = s.get("project_path", "").replace("\\", "/")
+        if "/Users/" in pp or "/home/" in pp:
+            parts = pp.split("/")
+            for i, p in enumerate(parts):
+                if p.lower() in ("users", "home") and i + 1 < len(parts):
+                    if _normalize_project(s.get("project", "")) == parts[i + 1].lower():
+                        home_projects.add(_normalize_project(s.get("project", "")))
+
     groups: OrderedDict = OrderedDict()
     for g in goals:
         proj = g.get("project", "")
@@ -146,10 +156,10 @@ def _merge_related_goals(goals: list, project_canonical: dict = None) -> list:
         canon = project_canonical.get(norm, norm)
 
         # For home folder projects WITHOUT repo evidence, use label as the grouping
-        # key so unrelated ad-hoc tasks stay separate. But if the canonical map links
-        # this project to others via a shared repo, always merge by canonical name.
+        # key so unrelated ad-hoc tasks stay separate.
+        is_home = norm in home_projects
         has_repo_evidence = norm in project_canonical
-        if canon and _is_home_folder_project(proj) and not has_repo_evidence:
+        if canon and is_home and not has_repo_evidence:
             label = (g.get("label") or g.get("title", "")).strip().lower()
             key = f"_home_{canon}_{label}" if label else f"_unnamed_{id(g)}"
         elif canon:
@@ -255,7 +265,7 @@ def _merge_analyses(day_analyses: list) -> dict:
 
     # Merge goals from the same project across days into single entries
     if len(active_dates) > 1:
-        all_goals = _merge_related_goals(all_goals, project_canonical)
+        all_goals = _merge_related_goals(all_goals, project_canonical, all_sessions)
 
         # Create aggregated session_metrics for merged goals that span multiple days
         for g in all_goals:

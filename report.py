@@ -920,15 +920,17 @@ def _tier_reqs(n: int, turns: int = 0) -> float:
 def _tier_turns(n: int) -> float:
     """Conversation turns → expert human hours.
     Each turn represents a user-initiated interaction: formulating a question,
-    reviewing the response, deciding next steps. ~5-10 min per turn."""
+    reviewing the response, deciding next steps. ~12-15 min per turn for
+    substantive work (research shows prompt dialogues + evaluation take
+    meaningful cognitive effort — Chen et al. 2023, Vaithilingam et al. 2022)."""
     if n <= 0:   return 0.0
-    if n <= 3:   return 0.25      # quick Q&A
-    if n <= 8:   return 0.75      # focused task
-    if n <= 15:  return 1.5       # working session
-    if n <= 30:  return 3.0       # extended session
-    if n <= 60:  return 5.0       # deep work
-    if n <= 100: return 8.0       # full-day collaboration
-    return 12.0
+    if n <= 3:   return 0.5       # quick Q&A
+    if n <= 8:   return 1.5       # focused task
+    if n <= 15:  return 3.0       # working session
+    if n <= 30:  return 5.0       # extended session
+    if n <= 60:  return 8.0       # deep collaboration (full day)
+    if n <= 100: return 12.0      # multi-day partnership
+    return 16.0
 
 
 def _tier_lines(n: int) -> float:
