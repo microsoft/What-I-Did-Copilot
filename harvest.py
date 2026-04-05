@@ -301,43 +301,37 @@ def compute_active_minutes(messages: list) -> float:
 
 # ── Intent Classification ────────────────────────────────────────────────────
 
-_INTENT_CATEGORIES = {
-    "Building":      _re.compile(r"\b(create|add|generate|implement|write|make|build|produce|include|set up|initialize|scaffold|install|open it|rerun|run)\b", _re.I),
-    "Investigating": _re.compile(r"\b(examine|why does|why is|what.s going on|debug|diagnose|analyze what|look at this|can you examine|what.s wrong|trace|root cause|broken|fails|failing|error|identical.+different)\b", _re.I),
-    "Designing":     _re.compile(r"\b(redesign|prominent|visual|layout|style|look like|look more|distinction|spacing|story|compelling|section|appearance|prototype|mockup|wireframe|branding|banner)\b", _re.I),
-    "Researching":   _re.compile(r"\b(what.s the|how does|how do|are there|can i do|do they|what can|what would|how come|cost|limit|explain|compare|difference|option)\b", _re.I),
-    "Iterating":     _re.compile(r"\b(adjust|simplify|change the|not impressed|didn.t like|better|improve|also like|refine|tweak|move this|swap|resize|reorder|reduce|remove the)\b", _re.I),
-    "Shipping":      _re.compile(r"\b(commit|push|pr\b|pull request|merge|deploy|ship|tag|release|check.?in)\b", _re.I),
-    "Planning":      _re.compile(r"\b(plan|propose|approach|strategy|stages|phases|priority|before that|options|go ahead|wait for)\b", _re.I),
-    "Testing":       _re.compile(r"\b(test|verify|validate|check if|smoke|does it work|try it|confirm)\b", _re.I),
-    "Configuring":   _re.compile(r"\b(config|setup|auth|login|permission|access|credential|settings|env|alias|profile)\b", _re.I),
-    "Navigating":    _re.compile(r"\b(find|search|where is|show me|list|fetch|locate|get the latest|look for)\b", _re.I),
-}
+def _load_intent_config() -> tuple:
+    """Load intent categories and colors from prompts/intent_classification.txt.
+    Icons are hardcoded — they're HTML rendering detail, not classification logic."""
+    path = Path(__file__).parent / "prompts" / "intent_classification.txt"
+    categories, colors = {}, {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p.strip() for p in line.split("|", 2)]
+        if len(parts) != 3:
+            continue
+        name, color, pattern = parts
+        categories[name] = _re.compile(pattern, _re.I)
+        colors[name] = color
+    return categories, colors
+
+
+_INTENT_CATEGORIES, _INTENT_COLORS = _load_intent_config()
 
 _INTENT_ICONS = {
-    "Building":      "&#128679;",  # 🏗
-    "Investigating": "&#128300;",  # 🔬
-    "Designing":     "&#127912;",  # 🎨
-    "Researching":   "&#128202;",  # 📊
-    "Iterating":     "&#128260;",  # 🔄
-    "Shipping":      "&#128640;",  # 🚀
-    "Planning":      "&#128203;",  # 📋
-    "Testing":       "&#9989;",    # ✅
-    "Configuring":   "&#9881;",    # ⚙
-    "Navigating":    "&#129517;",  # 🧭
-}
-
-_INTENT_COLORS = {
-    "Building":      "#0078d4",
-    "Investigating": "#e65100",
-    "Designing":     "#7b1fa2",
-    "Researching":   "#1a7f37",
-    "Iterating":     "#0969da",
-    "Shipping":      "#cf222e",
-    "Planning":      "#8250df",
-    "Testing":       "#1a7f37",
-    "Configuring":   "#6a737d",
-    "Navigating":    "#bf8700",
+    "Building":      "&#128679;",
+    "Investigating": "&#128300;",
+    "Designing":     "&#127912;",
+    "Researching":   "&#128202;",
+    "Iterating":     "&#128260;",
+    "Shipping":      "&#128640;",
+    "Planning":      "&#128203;",
+    "Testing":       "&#9989;",
+    "Configuring":   "&#9881;",
+    "Navigating":    "&#129517;",
 }
 
 

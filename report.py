@@ -127,6 +127,28 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
     lines_removed   = analysis.get("lines_removed", 0)
     active_days     = max(1, len(analysis.get("active_dates", ["x"])))
 
+    # Total active engagement time across all sessions.
+    # Deduplicate by (date, normalized_project) key since both the original and
+    # the normalized project name appear as separate keys in session_metrics.
+    _seen_metric_keys: set = set()
+    total_active_min = 0
+    for _key, _m in analysis.get("session_metrics", {}).items():
+        if isinstance(_m, str):
+            continue
+        if "|" in _key:
+            _date, _proj = _key.split("|", 1)
+            _canon_key = (_date, _proj.replace("\\", "/").split("/")[-1].lower().strip().replace(" ", "-"))
+        else:
+            _canon_key = (_key,)
+        if _canon_key in _seen_metric_keys:
+            continue
+        _seen_metric_keys.add(_canon_key)
+        total_active_min += _m.get("active_minutes", 0)
+    if total_active_min >= 60:
+        active_sub = f"{total_active_min / 60:.1f}h active time"
+    else:
+        active_sub = f"{total_active_min:.0f}m active time"
+
     h_str = _fmt_h(total_human_h)
     days_label = f"{active_days}"
 
@@ -149,10 +171,13 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
       <table width="100%" cellpadding="0" cellspacing="0">
         <tr>
           {_kpi_card(str(n_goals), "Projects<br>Assisted", f"{n_sessions} sessions")}
-          {_kpi_card(h_str, "Human Effort<br>Equivalent", f"@ ${HOURLY_RATE}/hr")}
+          {_kpi_card(h_str, "Human Effort<br>Equivalent",
+                    f'@ ${HOURLY_RATE}/hr · <a href="#evidence-hdr" style="color:{C["accent"]};'
+                    f'text-decoration:none;font-size:9px" onclick="toggleDetail(\'evidence\');'
+                    f'return false;">see evidence &#9656;</a>')}
           {_kpi_card(code_val, "Lines of Code<br>Added", code_sub)}
           {_kpi_card(pr_commit_val, "PRs<br>Merged", pr_commit_sub)}
-          {_kpi_card(days_label, "Active Days", "")}
+          {_kpi_card(days_label, "Active Days", active_sub)}
         </tr>
       </table>
     </td>
@@ -881,24 +906,35 @@ def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -
 
 # ── Deterministic effort formula ─────────────────────────────────────────────
 
-def _tier_tools(n: int) -> float:
+def _tier_tools(n: int, reads: int = 0, edits: int = 0, runs: int = 0) -> float:
     """Tool invocations → expert human hours.
-    Each action (read file, edit, run command, search) averages 2-3 min for
-    a human. Diminishing returns at scale as many become quick reads."""
-    if n <= 0:   return 0.0
-    if n <= 10:  return 0.5       # exploration / setup
-    if n <= 30:  return 1.5       # focused change (~3 min each)
-    if n <= 75:  return 3.0       # multi-file work (~2.4 min each)
-    if n <= 150: return 5.0       # substantial feature (~2 min each)
-    if n <= 300: return 8.0       # major implementation
-    if n <= 600: return 12.0      # full system build
-    return 16.0                    # very large project
+    Weighted by action type. An expert human would accomplish the same outcome
+    in fewer actions than Copilot's iterative approach, so per-action weights
+    reflect a deliberate expert, not a 1:1 mapping of AI actions to human actions.
+      reads (file views, searches) ≈ 0.3 min — quick scan
+      edits (file edits, creates)  ≈ 1.5 min — expert makes fewer, targeted edits
+      runs  (commands, tests)      ≈ 0.75 min — execution + glance at result
+      other (agent overhead)       ≈ 0 min — not human work
+    (Ziegler et al. 2024; Cambon et al. 2023: AI iterates more than a human expert)"""
+    if n <= 0:
+        return 0.0
+    if reads + edits + runs > 0:
+        weighted_min = reads * 0.3 + edits * 1.5 + runs * 0.75
+        return max(round(weighted_min / 60, 1), 0.25)
+    # Fallback: ~0.8 min/action average when breakdown unavailable
+    return max(round(n * 0.8 / 60, 1), 0.25)
 
 
-def _tier_reqs(n: int) -> float:
+def _tier_reqs(n: int, turns: int = 0) -> float:
     """Premium requests → expert human hours.
-    Each request = a research/thinking cycle: formulate problem, read docs,
-    try approaches, iterate. ~8-12 min per meaningful turn."""
+    Premium requests include both user-initiated conversations AND automated
+    completions (inline suggestions). When reqs >> turns, most are automated
+    and should not be valued at the full ~8-12 min/request rate.
+    We use conversation turns to cap the effective request count."""
+    # If we have turns data and reqs are disproportionately high,
+    # the excess is automated completions — cap effective reqs
+    if turns > 0 and n > turns * 10:
+        n = turns * 10  # Cap at 10× conversation turns
     if n <= 0:   return 0.0
     if n <= 5:   return 0.5       # quick consultation
     if n <= 15:  return 2.0       # research session
@@ -906,6 +942,21 @@ def _tier_reqs(n: int) -> float:
     if n <= 80:  return 8.0       # full-day equivalent
     if n <= 150: return 12.0      # multi-day research
     return 16.0
+
+
+def _tier_turns(n: int) -> float:
+    """Conversation turns → expert human hours.
+    Each turn represents a user-initiated interaction. Many turns are quick
+    directives ('commit', 'looks good', 'open it') not deep thinking.
+    Average ~5-7 min/turn — some quick, some substantive."""
+    if n <= 0:   return 0.0
+    if n <= 3:   return 0.25      # quick Q&A
+    if n <= 8:   return 0.75      # focused task
+    if n <= 15:  return 1.5       # working session
+    if n <= 30:  return 3.0       # extended session
+    if n <= 60:  return 5.0       # deep collaboration
+    if n <= 100: return 8.0       # full-day partnership
+    return 10.0
 
 
 def _tier_lines(n: int) -> float:
@@ -924,37 +975,96 @@ def _tier_lines(n: int) -> float:
 
 def _tier_active(m: float) -> float:
     """Active engagement multiplier — a human without AI would need roughly
-    4× the active collaboration time, accounting for the specialist skills
-    Copilot augments."""
-    return round(m * 4 / 60, 1)  # 4× active minutes, converted to hours
+    4× the active collaboration time, based on the upper bound of the 1.4–4×
+    range from Microsoft studies (Cambon et al. 2023, Peng et al. 2023)."""
+    return round(m * 4 / 60, 1)
 
 
 def compute_formula_estimate(metrics: dict) -> dict:
-    """Deterministic effort estimate: max(tools, requests, active) + lines.
+    """Deterministic effort estimate with complexity multipliers.
 
-    Returns dict with per-signal multipliers and final estimate.
+    Formula: (max(tools, turns, requests, active) × iteration_factor × scope_factor) + lines
+
+    Premium requests are capped relative to conversation turns since they include
+    automated completions. Turns are the cleaner signal for human interaction depth.
+    Multipliers from Alaswad et al. 2026: iteration depth and scope breadth.
     """
-    tool_h   = _tier_tools(metrics.get("tool_invocations", 0))
-    req_h    = _tier_reqs(metrics.get("premium_requests", 0))
+    turns    = metrics.get("substantive_turns", 0) or metrics.get("conversation_turns", 0)
+    tool_h   = _tier_tools(metrics.get("tool_invocations", 0),
+                           metrics.get("reads", 0),
+                           metrics.get("edits", 0),
+                           metrics.get("runs", 0))
+    turns_h  = _tier_turns(turns)
+    req_h    = _tier_reqs(metrics.get("premium_requests", 0), turns)
     active_h = _tier_active(metrics.get("active_minutes", 0))
     lines_h  = _tier_lines(metrics.get("lines_added", 0))
 
-    base = max(tool_h, req_h, active_h)
-    total = base + lines_h
-    total = max(total, 0.25)           # Floor at 0.25h
+    # When conversation_turns data is available, it's the cleaner interaction
+    # signal. Premium requests include automated completions and should only
+    # dominate when turns data is missing (older sessions).
+    if turns > 0:
+        base = max(tool_h, turns_h, active_h)
+    else:
+        base = max(tool_h, req_h, active_h)
+
+    # Iteration complexity: high conversation turns or re-edit depth
+    # indicates the problem was fundamentally harder than raw counts suggest.
+    # Chen (2023): ambiguous tasks → lengthy dialogues → increased effort.
+    # Alaswad (2026): 22% of tasks took >180% expected effort due to iteration.
+    iter_depth = metrics.get("iteration_depth", 0)
+    iteration_factor = 1.0
+    if turns > 15:      iteration_factor += 0.15
+    if turns > 40:      iteration_factor += 0.20
+    if iter_depth > 5:  iteration_factor += 0.15
+    if iter_depth > 12: iteration_factor += 0.20
+
+    # Scope breadth: more files = integration and context-switching overhead.
+    # Tregubov (2017): 17% time lost to context-switching at moderate levels.
+    # Morcov (2020): broader scope → significantly larger effort overruns.
+    files = metrics.get("files_touched_count", 0)
+    scope_factor = 1.0
+    if files > 3:  scope_factor += 0.10
+    if files > 10: scope_factor += 0.20
+
+    # For multi-day merged goals, use pre-computed per-day formula sum
+    # (avoids inflating multipliers on aggregated metrics)
+    per_day_total = metrics.get("_per_day_formula_total")
+    if per_day_total is not None:
+        return {
+            "tool_h":           tool_h,
+            "turns_h":          turns_h,
+            "req_h":            req_h,
+            "active_h":         active_h,
+            "lines_h":          lines_h,
+            "base":             base,
+            "iteration_factor": iteration_factor,
+            "scope_factor":     scope_factor,
+            "combined_mult":    min(iteration_factor * scope_factor, 1.5),
+            "total":            per_day_total,
+        }
+
+    # Cap combined multiplier at 1.5×
+    combined = min(iteration_factor * scope_factor, 1.5)
+
+    total = (base * combined) + lines_h
+    total = max(total, 0.25)
 
     return {
-        "tool_h":   tool_h,
-        "req_h":    req_h,
-        "active_h": active_h,
-        "lines_h":  lines_h,
-        "base":     base,
-        "total":    round(total * 4) / 4,  # Nearest 0.25h
+        "tool_h":           tool_h,
+        "turns_h":          turns_h,
+        "req_h":            req_h,
+        "active_h":         active_h,
+        "lines_h":          lines_h,
+        "base":             base,
+        "iteration_factor": iteration_factor,
+        "scope_factor":     scope_factor,
+        "combined_mult":    combined,
+        "total":            round(total * 4) / 4,
     }
 
 
 def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
-    """Evidence table showing raw signals, per-signal multipliers, and formula result."""
+    """Evidence table showing raw signals, complexity multipliers, and formula result."""
     session_metrics = analysis.get("session_metrics", {})
     if not goals:
         return ""
@@ -972,12 +1082,25 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         total_formula_h += fe["total"]
 
         tools      = metrics.get("tool_invocations", 0)
+        reads      = metrics.get("reads", 0)
+        edits      = metrics.get("edits", 0)
+        runs_count = metrics.get("runs", 0)
         reqs       = metrics.get("premium_requests", 0)
         la         = metrics.get("lines_added", 0)
         active     = metrics.get("active_minutes", 0)
         active_str = f"{active:.0f}m" if active else "&mdash;"
+        turns      = metrics.get("conversation_turns", 0)
+        files      = metrics.get("files_touched_count", 0)
+        iter_d     = metrics.get("iteration_depth", 0)
         ai_h       = _fmt_h(g.get("human_hours", 0))
         formula_h  = _fmt_h(fe["total"])
+
+        # Tools display: show breakdown if available
+        if reads + edits + runs_count > 0:
+            tools_display = (f'{tools}<br><span style="font-size:8px;color:{C["muted"]};font-weight:400">'
+                             f'{reads}r {edits}e {runs_count}x</span>')
+        else:
+            tools_display = str(tools)
 
         title = g.get("label") or g.get("title", "")
         if len(title) > 40:
@@ -986,19 +1109,23 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         # Highlight which signal is the max (the "base" driver)
         max_val = fe["base"]
         def _hl(v: float) -> str:
-            """Bold the multiplier if it equals the max (base driver)."""
             s = _fmt_h(v) if v > 0 else "&mdash;"
             if v > 0 and v == max_val:
-                return (f'<strong style="color:{C["accent"]}">{s}</strong>')
+                return f'<strong style="color:{C["accent"]}">{s}</strong>'
             return f'<span style="color:{C["muted"]}">{s}</span>'
 
         lines_m = _fmt_h(fe["lines_h"]) if fe["lines_h"] > 0 else "&mdash;"
 
-        # Formula string: max(tool, req, active) + lines = total
-        formula_str = (
-            f'max({_fmt_h(fe["tool_h"])}, {_fmt_h(fe["req_h"])}, {_fmt_h(fe["active_h"])})'
-            f' + {_fmt_h(fe["lines_h"])} = <strong>{formula_h}</strong>'
-        )
+        # Multiplier badges
+        iter_f = fe.get("iteration_factor", 1.0)
+        scope_f = fe.get("scope_factor", 1.0)
+        combined_mult = min(iter_f * scope_f, 1.5)
+        mult_str = ""
+        if combined_mult > 1.0:
+            mult_pct = round((combined_mult - 1) * 100)
+            mult_str = (f'<span style="font-size:9px;color:{C["accent"]};font-weight:600;'
+                        f'background:{C["accent_lt"]};padding:1px 5px;border-radius:4px;'
+                        f'margin-left:4px">+{mult_pct}%</span>')
 
         # Insert see-more toggle row for >5 projects
         if i == VISIBLE and len(goals) > VISIBLE:
@@ -1009,106 +1136,136 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
                      var show=rows.length && rows[0].style.display==='none';
                      for(var j=0;j<rows.length;j++){{rows[j].style.display=show?'':'none';}}
                      this.style.display='none';">
-          <td colspan="7" style="padding:6px 10px;text-align:center;font-size:11px;
+          <td colspan="9" style="padding:6px 10px;text-align:center;font-size:11px;
                      font-weight:600;color:{C['accent']}">
             &#9660; Show {n_extra} more project{'s' if n_extra != 1 else ''}</td>
         </tr>"""
 
         extra = len(goals) > VISIBLE and i >= VISIBLE
         extra_attrs = f' class="evidence-extra-row" style="display:none;background:{bg}"' if extra else f' style="background:{bg}"'
+
+        # Row 1: raw signal values
         rows += f"""
         <tr{extra_attrs}>
-          <td style="padding:6px 10px;border-bottom:1px solid {C['border']};vertical-align:top;width:22%"
+          <td style="padding:6px 8px;border-bottom:1px solid {C['border']};vertical-align:top"
               rowspan="2">
             <div style="font-size:11px;font-weight:600;color:{C['text']};line-height:1.3">{title}</div>
+            {mult_str}
           </td>
-          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600;width:13%">{tools}</td>
-          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600;width:13%">{reqs}</td>
-          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600;width:13%">{active_str}</td>
-          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600;width:13%">+{la}</td>
-          <td class="formula-col" style="padding:4px 6px;text-align:center;width:13%;vertical-align:middle;display:none" rowspan="2">
+          <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600">{tools_display}</td>
+          <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600">{reqs}</td>
+          <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600">{active_str}</td>
+          <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600">+{la}</td>
+          <td style="padding:4px 5px;font-size:10px;color:{C['muted']};text-align:center">{turns}</td>
+          <td style="padding:4px 5px;font-size:10px;color:{C['muted']};text-align:center">{files}</td>
+          <td style="padding:4px 5px;font-size:10px;color:{C['muted']};text-align:center">{iter_d:.0f}</td>
+          <td class="formula-col" style="padding:4px 5px;text-align:center;vertical-align:middle;display:none" rowspan="2">
             <div style="font-size:14px;font-weight:700;color:{C['accent']}">{formula_h}</div>
             <div style="font-size:8px;color:{C['muted']};text-transform:uppercase;margin-top:1px">formula</div>
           </td>
-          <td style="padding:4px 6px;text-align:center;width:13%;vertical-align:middle" rowspan="2">
+          <td style="padding:4px 5px;text-align:center;vertical-align:middle" rowspan="2">
             <div style="font-size:14px;font-weight:700;color:{C['green']}">{ai_h}</div>
             <div style="font-size:8px;color:{C['muted']};text-transform:uppercase;margin-top:1px">AI est.</div>
           </td>
         </tr>
         <tr{extra_attrs}>
-          <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
+          <td style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']}">
             {_hl(fe["tool_h"])}</td>
-          <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
+          <td style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']}">
             {_hl(fe["req_h"])}</td>
-          <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
+          <td style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']}">
             {_hl(fe["active_h"])}</td>
-          <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
+          <td style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']}">
             <span style="color:{C['muted']}">{lines_m}</span></td>
+          <td colspan="3" style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']};
+                     font-size:9px;color:{C['muted']}">complexity signals</td>
         </tr>"""
 
     # Total row
     rows += f"""
         <tr style="background:{C['accent_lt']}">
-          <td style="padding:8px 10px;border-top:2px solid {C['border']};
-                     font-size:11px;font-weight:700;color:{C['accent']};text-align:right" colspan="5">
+          <td style="padding:8px 8px;border-top:2px solid {C['border']};
+                     font-size:11px;font-weight:700;color:{C['accent']};text-align:right" colspan="8">
             Total</td>
-          <td class="formula-col" style="padding:8px 6px;border-top:2px solid {C['border']};text-align:center;display:none">
+          <td class="formula-col" style="padding:8px 5px;border-top:2px solid {C['border']};text-align:center;display:none">
             <div style="font-size:16px;font-weight:700;color:{C['accent']}">{_fmt_h(total_formula_h)}</div>
           </td>
-          <td style="padding:8px 6px;border-top:2px solid {C['border']};text-align:center">
+          <td style="padding:8px 5px;border-top:2px solid {C['border']};text-align:center">
             <div style="font-size:16px;font-weight:700;color:{C['green']}">{_fmt_h(total_h)}</div>
           </td>
         </tr>"""
 
+    # Column headers
+    th_style = (f"padding:6px 5px;text-align:center;font-size:8px;font-weight:700;"
+                f"color:{C['accent']};text-transform:uppercase;letter-spacing:0.4px;"
+                f"border-bottom:1px solid {C['border']}")
+    th_muted = th_style.replace(f"color:{C['accent']}", f"color:{C['muted']}")
+
     return f"""
-      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px;line-height:1.6">
-        <strong style="color:{C['text']}">How to read this table:</strong>
-        Each row shows a project's raw session data (top) and the hour multiplier each signal
-        maps to (bottom). The <strong style="color:{C['accent']}">highest multiplier</strong>
-        among tools, requests, and active time becomes the base estimate.
-        Lines of code are added on top.
+      <div style="font-size:11px;color:{C['text']};margin-bottom:14px;line-height:1.7">
+        <strong>Why we lead with AI estimation:</strong>
+        The AI reads your full session transcript &mdash; every instruction, every tool action,
+        every code change &mdash; and understands <em>what</em> was accomplished, not just how many
+        actions were taken. It distinguishes a 200-line boilerplate scaffold from a 50-line
+        algorithm that required deep design thinking, and it recognises that &ldquo;commit and push&rdquo;
+        is 0.25h regardless of how many tool calls it triggered.
+        This contextual understanding produces more accurate estimates than counting actions alone.
+        <br><span style="font-size:10px;color:{C['muted']}">
+        Calibrated against peer-reviewed research &mdash;
+        <a href="https://github.com/microsoft/What-I-Did-Copilot/blob/main/docs/effort-estimation-methodology.md"
+           style="color:{C['accent']};text-decoration:none">full methodology &amp; sources</a></span>
       </div>
       <div style="font-size:10px;color:{C['muted']};margin-bottom:10px;padding:8px 12px;
                   background:{C['subtle']};border-radius:6px;border:1px solid {C['border']}">
-        <span style="color:{C['green']}">&#9632;</span> AI-calibrated estimate &nbsp;·&nbsp;
-        <strong style="color:{C['accent']}">Bold</strong> = highest signal
+        <span style="color:{C['green']}">&#9632;</span> AI-calibrated estimate &nbsp;&middot;&nbsp;
+        <strong style="color:{C['accent']}">Bold</strong> = highest signal &nbsp;&middot;&nbsp;
+        <span style="font-size:9px;color:{C['accent']};font-weight:600;background:{C['accent_lt']};
+               padding:1px 5px;border-radius:4px">+N%</span> = complexity multiplier
         &nbsp;&nbsp;
         <span id="formula-col-toggle" data-open="0" onclick="toggleFormulaCol()"
-              style="cursor:pointer;font-size:9px;color:{C['accent']};user-select:none">
-          &#9654; Show formula column
+              style="cursor:pointer;font-size:9px;color:{C['accent']};user-select:none;
+                     border:1px solid {C['accent']};padding:2px 8px;border-radius:4px">
+          &#9654; Insert deterministic formula
         </span>
       </div>
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
         <tr style="background:{C['accent_lt']}">
-          <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:22%">Project</th>
-          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%">Tools</th>
-          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%">Requests</th>
-          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%">Active</th>
-          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%">Lines</th>
-          <th class="formula-col" style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%;display:none">Formula</th>
-          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['green']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%">AI Est.</th>
+          <th style="{th_style};text-align:left;width:20%">Project</th>
+          <th style="{th_style};width:9%">Tools</th>
+          <th style="{th_style};width:9%">Requests</th>
+          <th style="{th_style};width:9%">Active</th>
+          <th style="{th_style};width:9%">Lines</th>
+          <th style="{th_muted};width:7%">Turns</th>
+          <th style="{th_muted};width:7%">Files</th>
+          <th style="{th_muted};width:7%">Iter.</th>
+          <th class="formula-col" style="{th_style};width:9%;display:none">Formula</th>
+          <th style="{th_style.replace(f"color:{C['accent']}", f"color:{C['green']}")};width:9%">AI Est.</th>
         </tr>
         {rows}
-      </table>"""
+      </table>
+      <div class="formula-col" style="display:none;margin-top:12px;padding:10px 12px;
+                  background:{C['subtle']};border:1px solid {C['border']};border-radius:6px">
+        <div style="font-size:10px;color:{C['text']};line-height:1.6;margin-bottom:6px">
+          <strong>About the deterministic formula:</strong>
+          This is a transparent, reproducible calculation from raw session metrics &mdash;
+          no AI involved. It provides an auditable cross-check against the AI estimate.
+          However, it has limits: it cannot understand <em>context</em> (100 tool invocations
+          get the same weight whether they were trivial file reads or complex debugging sessions),
+          and it tends to overestimate on large multi-day projects because the metrics accumulate
+          while the AI evaluates each day independently.
+        </div>
+        <div style="font-family:monospace;font-size:10px;color:{C['muted']};line-height:1.5;
+                    padding:6px 8px;background:{C['card']};border-radius:4px">
+          base = max(weighted_tools, substantive_turns, active&times;3)<br>
+          complexity = iteration_factor &times; scope_factor (capped at 1.5&times;)<br>
+          total = (base &times; complexity) + lines_added
+        </div>
+      </div>"""
 
 
 def _evidence_strip(goal: dict, session_metrics: dict) -> str:
@@ -1205,96 +1362,113 @@ def _signal_tier_table(title: str, icon: str, description: str, tiers: list) -> 
 
 
 def _signal_guide() -> str:
-    """Detailed explanation of each session signal with tiered examples."""
-    tools = _signal_tier_table(
-        "Tool Invocations", "&#128295;",
-        "Each time Copilot performs a discrete action: read a file, edit code, run a command, "
-        "search, create a file. A human expert averages 2-3 minutes per equivalent action.",
-        [
-            ("1–10",   "0.5h",  "Quick task &mdash; open a few files, make an edit, run a test. "
-                                "<em>\"Fix this typo in config.yaml\"</em>"),
-            ("11–30",  "1.5h",  "Focused change &mdash; read several files, edit a function, debug. "
-                                "<em>\"Add error handling to the upload endpoint\"</em>"),
-            ("31–75",  "3h",    "Multi-file work &mdash; touch many files, iterate on approach. "
-                                "<em>\"Refactor the auth module to use JWT\"</em>"),
-            ("76–150", "5h",    "Substantial feature &mdash; design + implement across a module with tests. "
-                                "<em>\"Build the report generation pipeline\"</em>"),
-            ("151–300","8h",    "Major implementation &mdash; full tool or feature from scratch with iteration. "
-                                "<em>\"Ship an executive deck builder from concept to working system\"</em>"),
-            ("301–600","12h",   "System build &mdash; extensive multi-session design across many files. "
-                                "<em>\"Build a complete analytics tool with harvester, analyser, and report\"</em>"),
-            ("600+",   "16h",   "Large project &mdash; comprehensive system overhaul or multi-day build. "
-                                "<em>\"Redesign the entire reporting system with new architecture\"</em>"),
-        ]
-    )
-    reqs = _signal_tier_table(
-        "Premium Requests", "&#9889;",
-        "Opus/Sonnet-class model calls that consume your Copilot quota. Each represents a "
-        "round of deep AI reasoning &mdash; equivalent to a research/thinking cycle for a human (~8-12 min).",
-        [
-            ("0",      "0h",    "No AI reasoning &mdash; script execution or file operations only"),
-            ("1–5",    "0.5h",  "Quick consultation &mdash; ask one question, get answer, done. "
-                                "<em>\"What does this error mean?\"</em>"),
-            ("6–15",   "2h",    "Research session &mdash; explore options, debug a problem. "
-                                "<em>\"Why is this test failing? Try a different approach\"</em>"),
-            ("16–40",  "4h",    "Deep work session &mdash; iterative feature build with refinement. "
-                                "<em>\"Build this component, adjust styling, add tests\"</em>"),
-            ("41–80",  "8h",    "Full-day equivalent &mdash; complex design + implementation + review. "
-                                "<em>\"Architect the data pipeline and implement each stage\"</em>"),
-            ("81–150", "12h",   "Multi-day collaboration &mdash; sustained intensive design and delivery. "
-                                "<em>\"Full system design through to deployment with 120+ model calls\"</em>"),
-            ("150+",   "16h",   "Marathon partnership &mdash; extensive multi-day research and implementation"),
-        ]
-    )
-    lines = _signal_tier_table(
-        "Lines of Code", "&#128196;",
-        "Net code added to the project. An expert writes 100-150 lines per hour including "
-        "boilerplate, comments, and config. Lines are additive to research effort since writing "
-        "code is work beyond the thinking and iteration captured by other signals.",
-        [
-            ("0",      "0h",    "Research or analysis only &mdash; investigation, planning, no code written"),
-            ("1–50",   "0.25h", "Config tweak or small fix &mdash; change a setting, fix a one-liner"),
-            ("51–150", "0.75h", "Small feature &mdash; a new function, helper, or template. "
-                                "<em>\"Add a utility function with error handling\"</em>"),
-            ("151–300","1.5h",  "Moderate development &mdash; a new module or significant feature. "
-                                "<em>\"Build the session harvester with event parsing\"</em>"),
-            ("301–500","2.5h",  "Substantial implementation &mdash; major feature with multiple components. "
-                                "<em>\"Implement the full report generation pipeline\"</em>"),
-            ("501–800","4h",    "Large build &mdash; complete tool or extensive refactor. "
-                                "<em>\"Ship 600 lines of presentation generation code\"</em>"),
-            ("800+",   "5h+",   "Major build &mdash; comprehensive system code from scratch. "
-                                "<em>\"Write 1000+ lines for a full analytics engine\"</em>"),
-        ]
-    )
-    active = _signal_tier_table(
-        "Active Engagement Time", "&#9201;",
-        "Time you were actively engaged with Copilot, excluding idle gaps longer than 5 minutes. "
-        "Multiplier is <strong>4&times; active time</strong> &mdash; reflecting that a human "
-        "without AI would need roughly four times longer to achieve the same result.",
-        [
-            ("&lt; 5m",    "0.3h",  "Quick task &mdash; one-shot edit, single question"),
-            ("5–15m",      "1h",    "Focused task &mdash; fix a bug, write a function"),
-            ("15–45m",     "2–3h",  "Working session &mdash; implement and test a feature"),
-            ("45m–2h",     "3–8h",  "Deep work &mdash; multi-step design, implementation, and refinement"),
-            ("2–6h",       "8–24h", "Extended session &mdash; full feature build across multiple iterations"),
-            ("6–12h",      "24–48h","Multi-day collaboration &mdash; system-level design and delivery"),
-            ("12h+",       "48h+",  "Marathon project &mdash; comprehensive system build over many days"),
-        ]
-    )
+    """Compact explanation of the estimation formula with a worked example."""
+
+    th = (f"padding:4px 8px;font-size:9px;font-weight:700;color:{C['accent']};"
+          f"text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid {C['border']}")
+    td = f"padding:3px 8px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}"
+    tdm = td.replace(f"color:{C['text']}", f"color:{C['muted']}")
+
+    # Compact signal reference — one row per signal
+    signal_rows = ""
+    for signal, icon, rate, tiers in [
+        ("Tool invocations", "&#128295;", "weighted by type",
+         "reads&times;0.3m &nbsp; edits&times;1.5m &nbsp; runs&times;0.75m &nbsp; overhead&times;0m &nbsp; <em>(expert is more deliberate than AI)</em>"),
+        ("Conversation turns", "&#128172;", "~5-7 min/turn",
+         "Substantive only (trivial filtered). 1-3&rarr;0.25h &nbsp; 4-8&rarr;0.75h &nbsp; 9-15&rarr;1.5h &nbsp; 16-30&rarr;3h &nbsp; 31-60&rarr;5h &nbsp; 61+&rarr;8h+"),
+        ("Active time", "&#9201;", "&times;4 multiplier",
+         "active_minutes &times; 4 &divide; 60 &nbsp; (upper bound of 1.4&ndash;4&times; research range)"),
+        ("Lines of code", "&#128196;", "100-150 LoC/hr",
+         "1-50&rarr;0.25h &nbsp; 51-150&rarr;0.75h &nbsp; 151-300&rarr;1.5h &nbsp; 301-500&rarr;2.5h &nbsp; 500+&rarr;4h+ &nbsp; <em>(additive)</em>"),
+    ]:
+        signal_rows += (
+            f'<tr>'
+            f'<td style="{td};white-space:nowrap;font-weight:600">{icon} {signal}</td>'
+            f'<td style="{tdm};white-space:nowrap">{rate}</td>'
+            f'<td style="{tdm}">{tiers}</td>'
+            f'</tr>'
+        )
+
+    # Compact multiplier reference
+    mult_rows = ""
+    for signal, threshold, bump, source in [
+        ("Conversation turns", "&gt; 15", "+15%", "Chen 2023"),
+        ("Conversation turns", "&gt; 40", "+20% more", ""),
+        ("Iteration depth", "&gt; 5 edits/file", "+15%", "Alaswad 2026"),
+        ("Iteration depth", "&gt; 12 edits/file", "+20% more", ""),
+        ("Files touched", "&gt; 3", "+10%", "Morcov 2020"),
+        ("Files touched", "&gt; 10", "+20% more", "Tregubov 2017"),
+    ]:
+        source_html = f'<span style="color:{C["muted"]}">{source}</span>' if source else ""
+        mult_rows += (
+            f'<tr>'
+            f'<td style="{td}">{signal}</td>'
+            f'<td style="{td};text-align:center">{threshold}</td>'
+            f'<td style="{td};text-align:center;font-weight:600;color:{C["accent"]}">{bump}</td>'
+            f'<td style="{tdm}">{source_html}</td>'
+            f'</tr>'
+        )
+
+    # Worked example
+    example = f"""
+        <div style="margin-top:14px;padding:10px 12px;background:{C['subtle']};
+                    border:1px solid {C['border']};border-radius:6px">
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
+                      color:{C['accent']};margin-bottom:6px">&#128270; Example: 150 tools (45 reads, 40 edits, 25 runs, 40 other),
+            22 substantive turns (of 25 total), 45m active, +320 lines, 6 files, 8.2 edits/file</div>
+          <div style="font-family:monospace;font-size:10px;line-height:1.7;color:{C['text']}">
+            Tools: 45&times;0.3 + 40&times;1.5 + 25&times;0.75 = 13.5+60+18.8 = 92min = <strong>1.5h</strong><br>
+            Turns: 22 substantive &rarr; <strong>3h</strong><br>
+            Active: 45m &times; 3 = <strong>2.2h</strong><br>
+            Base = max(1.5, 3, 2.2) = <strong style="color:{C['accent']}">3h</strong> (turns wins)<br>
+            Multipliers: turns&gt;15 (+15%) &middot; iter&gt;5 (+15%) &middot; files&gt;3 (+10%)
+            = 1.15 &times; 1.15 &times; 1.1 = 1.45&times; &rarr; <strong>capped at 1.5&times;</strong><br>
+            Lines: 320 &rarr; <strong>1.5h</strong> (additive)<br>
+            <strong style="color:{C['accent']}">Total = (3h &times; 1.45) + 1.5h = 4.35 + 1.5 = 5.75h</strong>
+          </div>
+        </div>"""
+
     return f"""
         <div style="margin-top:16px;padding-top:12px;border-top:1px solid {C['border']}">
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                      color:{C['muted']};margin-bottom:4px">What each signal means</div>
-          <div style="font-size:10px;color:{C['muted']};line-height:1.5;margin-bottom:4px">
-            Each session signal maps to a multiplier representing equivalent human effort. The formula
-            takes the highest of tools, requests, and active time, then adds lines of code on top.
-            <br><strong style="color:{C['text']}">Reading the table:</strong> find your value in the
-            Range column &rarr; the Multiplier shows the hour contribution from that signal alone.
+                      color:{C['muted']};margin-bottom:6px">How the effort estimate is calculated</div>
+          <div style="font-size:10px;color:{C['muted']};line-height:1.5;margin-bottom:8px">
+            <code style="font-size:10px;background:{C['subtle']};padding:2px 6px;border-radius:3px;
+                         color:{C['accent']}">
+              total = (max(tools, turns, active) &times; complexity) + lines
+            </code>
+            &nbsp;&mdash;&nbsp; strongest signal wins, multiplied by iteration/scope complexity,
+            plus lines of code on top.
+            <a href="https://github.com/microsoft/What-I-Did-Copilot/blob/main/docs/effort-estimation-methodology.md"
+               style="color:{C['accent']};text-decoration:none;font-weight:600">
+              Full methodology &amp; research basis &#8599;</a>
           </div>
-          {tools}
-          {reqs}
-          {lines}
-          {active}
+
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
+                      color:{C['muted']};margin-bottom:4px">Primary signals &mdash; base estimate</div>
+          <table width="100%" cellpadding="0" cellspacing="0"
+                 style="border:1px solid {C['border']};border-radius:5px;overflow:hidden;margin-bottom:12px">
+            <tr style="background:{C['accent_lt']}">
+              <th style="{th};width:22%">Signal</th>
+              <th style="{th};width:16%">Rate</th>
+              <th style="{th}">Tier mapping</th>
+            </tr>
+            {signal_rows}
+          </table>
+
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
+                      color:{C['muted']};margin-bottom:4px">Complexity multipliers &mdash; adjust base upward</div>
+          <table width="100%" cellpadding="0" cellspacing="0"
+                 style="border:1px solid {C['border']};border-radius:5px;overflow:hidden">
+            <tr style="background:{C['accent_lt']}">
+              <th style="{th};width:25%">Signal</th>
+              <th style="{th};width:18%;text-align:center">When</th>
+              <th style="{th};width:15%;text-align:center">Adjust</th>
+              <th style="{th}">Source</th>
+            </tr>
+            {mult_rows}
+          </table>
+          {example}
         </div>"""
 
 
@@ -1869,7 +2043,7 @@ function toggleFormulaCol() {
   var hide = btn.getAttribute('data-open') === '1';
   cols.forEach(function(el) { el.style.display = hide ? 'none' : ''; });
   btn.setAttribute('data-open', hide ? '0' : '1');
-  btn.innerHTML = hide ? '&#9654; Show formula column' : '&#9660; Hide formula column';
+  btn.innerHTML = hide ? '&#9654; Insert deterministic formula' : '&#9660; Hide deterministic formula';
 }
 function shareViaEmail(subject, body) {
   var a = document.createElement('a');
@@ -1967,6 +2141,18 @@ window.onload = function() {
 
   {_share_bar(target_date, goals, headline, total_human_h)}
 
+  <!-- PRIVACY -->
+  <tr>
+    <td style="background:{C['card']};padding:6px 24px;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <div style="font-size:9px;color:{C['muted']};text-align:center">
+        &#128274; <strong style="color:{C['text']}">Your data, private to you.</strong>
+        Generated locally from your Copilot session logs &mdash; no telemetry, no cloud uploads.
+        No one has access to this unless you share it.
+      </div>
+    </td>
+  </tr>
+
   {heuristic_banner}
 
   <!-- ACT 1: THE STORY -->
@@ -2030,7 +2216,7 @@ window.onload = function() {
            onclick="toggleDetail('evidence')">
         <span id="evidence-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
         <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                     color:{C['muted']}">Estimation Evidence &mdash; per-project session signals</span>
+                     color:{C['muted']}">Estimation Evidence &mdash; how these numbers were calculated</span>
       </div>
       <div id="evidence-tasks" style="display:none">
         {_estimation_waterfall_inner(goals, analysis)}

@@ -16,19 +16,27 @@ from harvest import compute_active_minutes, compute_elapsed_minutes
 API_URL = "https://models.github.ai/inference/chat/completions"
 MODEL   = "openai/gpt-4o-mini"
 
-DOMAIN_SKILLS = (
-    "System Architecture", "Product Planning", "Requirements Analysis",
-    "Technical Research", "Data Analysis", "Statistical Modelling",
-    "UX Design", "Product Management", "Project Management",
-    "Technical Writing", "Documentation", "Stakeholder Communication",
-    "Prompt Engineering", "Security Review", "Code Review",
-)
-TECH_SKILLS = (
-    "Python", "JavaScript", "TypeScript", "Bash/Shell",
-    "HTML/CSS", "SQL", "API Integration", "DevOps/CI-CD",
-    "Cloud Infrastructure", "Database Design", "Machine Learning",
-    "Data Engineering", "Debugging", "Refactoring", "Frontend Development",
-)
+def _load_taxonomy() -> tuple:
+    """Load domain and tech skill lists from prompts/skills_taxonomy.txt."""
+    path = Path(__file__).parent / "prompts" / "skills_taxonomy.txt"
+    domain, tech = [], []
+    section = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line == "[domain_skills]":
+            section = "domain"
+        elif line == "[tech_skills]":
+            section = "tech"
+        elif section == "domain":
+            domain.append(line)
+        elif section == "tech":
+            tech.append(line)
+    return tuple(domain), tuple(tech)
+
+
+DOMAIN_SKILLS, TECH_SKILLS = _load_taxonomy()
 
 
 def _get_github_token() -> str:
@@ -188,11 +196,52 @@ def _build_transcript(sessions: list) -> str:
             )
         if s.get("premium_requests"):
             lines.append(f"Premium requests: {s['premium_requests']}")
-        if s.get("tokens", {}).get("total"):
-            lines.append(f"Tokens consumed: {s['tokens']['total']:,}")
+
+        # Enriched quantitative signals for effort calibration
+        user_msgs = [m for m in s["messages"] if m["role"] == "user"]
         n_tools = sum(len(m.get("tools_after", [])) for m in s["messages"] if m["role"] == "user")
-        if n_tools:
-            lines.append(f"Tool invocations: {n_tools}")
+        reads, edits, runs = 0, 0, 0
+        edit_targets: dict = {}
+        for m in s["messages"]:
+            for t in m.get("tools_after", []):
+                tl = t.lower()
+                if any(w in tl for w in ("view", "read", "grep", "glob", "search", "find", "explore")):
+                    reads += 1
+                elif any(w in tl for w in ("edit", "create", "write", "replace")):
+                    edits += 1
+                    fname_match = re.search(r'[\\/]([^\\/]+\.\w{1,8})', t)
+                    if fname_match:
+                        fn = fname_match.group(1)
+                        edit_targets[fn] = edit_targets.get(fn, 0) + 1
+                elif any(w in tl for w in ("run", "test", "build", "install", "exec", "powershell",
+                                           "command", "pip", "npm", "git")):
+                    runs += 1
+        iter_depth = round(sum(edit_targets.values()) / max(len(edit_targets), 1), 1) if edit_targets else 0.0
+        active_min = compute_active_minutes(s["messages"])
+        wall_min = compute_elapsed_minutes(s.get("session_start", ""), s.get("session_end", ""))
+        engagement = round(active_min / max(wall_min, 1) * 100, 1)
+        files_touched = list(set(cc.get("filesModified", []) + s.get("files_touched", [])))
+
+        signals = [f"SIGNALS: {n_tools} tools ({reads} reads, {edits} edits, {runs} runs)"]
+        signals.append(f"  Conversation turns: {len(user_msgs)}")
+        if s.get("premium_requests"):
+            signals.append(f"  Premium requests: {s['premium_requests']}")
+        signals.append(f"  Files touched: {len(files_touched)}")
+        if cc.get("linesAdded") or cc.get("linesRemoved"):
+            signals.append(f"  Lines: +{cc.get('linesAdded', 0)} / -{cc.get('linesRemoved', 0)}")
+        signals.append(f"  Active time: {active_min:.0f}m of {wall_min:.0f}m wall clock ({engagement}% engagement)")
+        if iter_depth > 1:
+            signals.append(f"  Iteration depth: {iter_depth} edits/file avg")
+        if s.get("git_ops"):
+            ops = s["git_ops"]
+            commits = ops.count("commit")
+            prs = ops.count("pr")
+            parts = []
+            if commits: parts.append(f"{commits} commit{'s' if commits != 1 else ''}")
+            if prs: parts.append(f"{prs} PR{'s' if prs != 1 else ''}")
+            if parts:
+                signals.append(f"  Git ops: {', '.join(parts)}")
+        lines.append("\n".join(signals))
 
         for msg in s["messages"]:
             if msg["role"] != "user":
@@ -212,134 +261,14 @@ def _cache_path(target_date: str) -> Path:
 
 
 def _build_analysis_prompt(transcript: str, domain_list: str, tech_list: str) -> str:
-    """Build the analysis prompt — shared by both the API and copilot CLI paths."""
-    return f"""Analyze this day of GitHub Copilot-assisted work and produce a JSON digest.
-
-SESSION TRANSCRIPT:
-{transcript}
-
-═══════════════════════════════════════════
-RULE 0 — PERSONAL / OFF-TOPIC FILTER
-═══════════════════════════════════════════
-
-SKIP any user messages that are clearly personal and unrelated to professional work.
-Personal queries include (but are not limited to): health, fitness, nutrition, supplements,
-food, recipes, personal finance, relationships, news, general trivia, shopping, entertainment.
-
-If an ENTIRE session contains only personal queries, omit that session from the output entirely.
-If personal queries are MIXED with professional work in a session, include only the professional tasks.
-Do NOT invent a professional framing for a personal query — just leave it out.
-
-═══════════════════════════════════════════
-RULE 1 — GOAL GROUPING (most important rule)
-═══════════════════════════════════════════
-
-Group work into BUSINESS GOALS. A goal = the high-level outcome accomplished, not the technical steps.
-
-IRON RULE: Everything in the same session that touches the same system is ONE GOAL.
-Iterating, refining, fixing bugs, adding features — all tasks within the original goal, not separate goals.
-
-DEFAULT RULE: When in doubt, MERGE. Too few goals is better than too many.
-
-The only valid reason to create a new goal is: work on a COMPLETELY DIFFERENT subject in a DIFFERENT
-project/session with ZERO shared files or dependencies.
-
-GOOD GOAL TITLES (business outcome, verb-first, based on the MOST SUBSTANTIAL work done):
-  "Built a daily Copilot activity analytics tool with branded HTML reports"
-  "Shipped a daily work digest tool from concept to working system"
-  "Provided strategic rewrite recommendations for the presentation"
-  "Diagnosed and resolved checkout regression in production"
-
-BAD GOAL TITLES (too granular, based on first message instead of overall outcome):
-  "Set up authentication"        ← part of a larger goal
-  "Built report generator"       ← a task within a goal
-  "Initialized git repository"   ← setup step, not the goal itself
-  "Prepared directory for checkin" ← describes first action, not the outcome
-
-TITLE RULE: The goal title must describe the PRIMARY DELIVERABLE, not the first thing done.
-If a session starts with "prepare for github" but spends 80% of time building a report tool,
-the title should be about the report tool, not the git setup.
-
-═══════════════════════════════════════════
-RULE 2 — LANGUAGE
-═══════════════════════════════════════════
-
-Write as if briefing a senior executive on what was accomplished.
-
-NEVER write anything that implies the human was unclear, imprecise, or needed to course-correct.
-NEVER ASSUME CONTEXT NOT IN THE TRANSCRIPT.
-DO use the actual file or document name when it appears in the tool calls.
-
-GOOD framing:
-  ✓ "Designed and shipped X" — confident, direct
-  ✓ "Built X with Y capability" — outcome-focused
-  ✓ "Delivered X that does Y" — value-focused
-
-═══════════════════════════════════════════
-RULE 3 — EFFORT ESTIMATES (calibrated)
-═══════════════════════════════════════════
-
-human_hours = what a skilled professional would need WITHOUT Copilot assistance.
-Estimate realistically — what would an expert actually bill for this work?
-Use this calibration scale — match the task to the closest anchor:
-
-  0.25h  — Trivial: install a package, run a CLI command, toggle a config, copy files, push to git
-  0.5h   — Simple: minor code edit, format/style tweak, rename, small config change, answer a question
-  0.75h  — Light: write a helper function, fix a known bug, small template change
-  1.0-1.5h — Moderate: implement a small feature, debug an unknown issue, draft a short document
-  2-3h   — Substantial: design + implement a feature, write a detailed report, complex data analysis
-  4-8h   — Major: architect a new module, build a complete tool, comprehensive multi-step research
-  8-16h  — Large: build a full system from scratch, multi-day design-implement-test cycle, extensive refactor
-
-Trivial/mechanical tasks (installing, deploying, git operations, answering questions) → 0.25-0.5h max.
-Complex tasks involving DESIGN, ANALYSIS, NOVEL CODING, or MULTI-STEP IMPLEMENTATION should scale up
-based on the quantitative signals below. An expert human writing 500 lines of production code needs
-4+ hours; researching and iterating through 100+ premium requests is a full workday.
-
-USE THESE QUANTITATIVE SIGNALS to calibrate estimates:
-- Premium requests per session indicate complexity: 1-5 = trivial, 5-20 = moderate, 20-50 = substantial, 50+ = major
-- Tool invocations: 1-10 = simple, 10-30 = moderate, 30-75 = substantial, 75-150 = major, 150+ = large
-- Code impact (lines added): <50 = minor, 50-150 = moderate, 150-300 = substantial, 300+ = major development
-- Expert human writes 100-150 lines of code per hour (including boilerplate, comments, config)
-- If a session used <5 premium requests AND <10 tool invocations, keep tasks capped at 1h total
-
-IMPORTANT RULES:
-- Mechanical execution (installing, deploying, running existing code, copying files) → 0.25-0.5h max
-- Each number must be nearest 0.25h (not just 0.5h increments)
-- goal.human_hours must exactly equal the sum of its task hours
-
-═══════════════════════════════════════════
-OUTPUT SCHEMA
-═══════════════════════════════════════════
-
-Return ONLY this JSON (no markdown fences, no explanation before or after):
-
-{{
-  "headline": "One punchy sentence — the most significant thing accomplished today",
-  "primary_focus": "2-4 words (e.g. 'Productivity tooling', 'Deck strategy')",
-  "day_narrative": "Exactly 2 sentences. What was accomplished and why it matters. Confident tone, plain English.",
-  "goals": [
-    {{
-      "title": "Business outcome title (verb-first)",
-      "label": "2-5 word noun phrase naming the deliverable (used as bold heading in summary list)",
-      "summary": "1 sentence, max 20 words. What exists now that didn't before. Confident tone.",
-      "human_hours": <sum of task hours>,
-      "project": "exact project name from the SESSION header",
-      "docs_referenced": ["filenames of docs actually analyzed or produced — empty list if none"],
-      "tasks": [
-        {{
-          "title": "Implementation step (verb-first)",
-          "what_got_done": "One sentence, max 18 words. Outcome only — no tool names.",
-          "domain_skills": ["1-2 from: {domain_list}"],
-          "tech_skills": ["0-2 from: {tech_list} (omit if none)"],
-          "task_type": "one of: Development | Bug Fix & Debug | Analysis & Research | Design & UX | Execution & Ops",
-          "professional_roles": ["1-2 roles a billing firm would charge for this work — e.g. Software Engineer, Data Analyst, UX Designer, Management Consultant, etc."],
-          "human_hours": <single calibrated number per the scale above, nearest 0.25h>
-        }}
-      ]
-    }}
-  ]
-}}"""
+    """Build the analysis prompt — loads template from prompts/analysis.txt."""
+    prompt_path = Path(__file__).parent / "prompts" / "analysis.txt"
+    template = prompt_path.read_text(encoding="utf-8")
+    return template.format(
+        transcript=transcript,
+        domain_list=domain_list,
+        tech_list=tech_list,
+    )
 
 
 def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api: bool = True) -> dict:
@@ -374,6 +303,47 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
         active_min = compute_active_minutes(s["messages"])
         wall_min = compute_elapsed_minutes(s.get("session_start", ""), s.get("session_end", ""))
 
+        # New signals: conversation turns, tool types, files, iteration depth
+        user_msgs = [m for m in s["messages"] if m["role"] == "user"]
+        conv_turns = len(user_msgs)
+
+        # Classify turns: substantive (real instructions) vs trivial (confirmations)
+        _trivial_rx = re.compile(
+            r'^(yes|no|ok|okay|sure|thanks|thank you|perfect|great|good|looks good|'
+            r'go ahead|do it|please|correct|exactly|right|got it|nice|awesome|'
+            r'commit|push|open|lgtm|ship it|done|\d)\s*[.!?]*$', re.I)
+        substantive = 0
+        for um in user_msgs:
+            first_line = um["text"].strip().split("\n")[0].strip()
+            if len(first_line) >= 20 and not _trivial_rx.match(first_line):
+                substantive += 1
+        files_touched = list(set(
+            cc.get("filesModified", []) + s.get("files_touched", [])
+        ))
+        files_count = len(files_touched)
+
+        # Classify tool types from tool_after descriptions
+        reads, edits, runs = 0, 0, 0
+        edit_targets: dict = {}  # filename → edit count for iteration depth
+        for m in s["messages"]:
+            for t in m.get("tools_after", []):
+                tl = t.lower()
+                if any(w in tl for w in ("view", "read", "grep", "glob", "search", "find", "explore")):
+                    reads += 1
+                elif any(w in tl for w in ("edit", "create", "write", "replace")):
+                    edits += 1
+                    # Extract filename for iteration tracking
+                    fname_match = re.search(r'[\\/]([^\\/]+\.\w{1,8})', t)
+                    if fname_match:
+                        fn = fname_match.group(1)
+                        edit_targets[fn] = edit_targets.get(fn, 0) + 1
+                elif any(w in tl for w in ("run", "test", "build", "install", "exec", "powershell",
+                                           "command", "pip", "npm", "git")):
+                    runs += 1
+
+        # Iteration depth: avg edits per unique file edited (0 if no edits)
+        iter_depth = round(sum(edit_targets.values()) / max(len(edit_targets), 1), 1) if edit_targets else 0.0
+
         if proj in _session_metrics:
             m = _session_metrics[proj]
             m["tokens"]           += s["tokens"]["total"]
@@ -384,6 +354,24 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
             m["active_minutes"]   += active_min
             m["wall_clock_minutes"] += wall_min
             m["sessions"]         += 1
+            m["conversation_turns"] += conv_turns
+            m["substantive_turns"] += substantive
+            m["reads"]            += reads
+            m["edits"]            += edits
+            m["runs"]             += runs
+            m["files_touched_count"] = len(set(
+                files_touched + [f for f in all_files if f in s.get("files_touched", [])]
+            )) or m["files_touched_count"]
+            # Update iteration depth as weighted average
+            prev_edits = m.get("_total_file_edits", 0)
+            prev_files = m.get("_total_files_edited", 0)
+            curr_edits = sum(edit_targets.values())
+            curr_files = len(edit_targets)
+            total_e = prev_edits + curr_edits
+            total_f = prev_files + curr_files
+            m["iteration_depth"] = round(total_e / max(total_f, 1), 1)
+            m["_total_file_edits"] = total_e
+            m["_total_files_edited"] = total_f
         else:
             _session_metrics[proj] = {
                 "tokens":            s["tokens"]["total"],
@@ -394,6 +382,15 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
                 "active_minutes":    active_min,
                 "wall_clock_minutes": wall_min,
                 "sessions":          1,
+                "conversation_turns": conv_turns,
+                "substantive_turns": substantive,
+                "reads":             reads,
+                "edits":             edits,
+                "runs":              runs,
+                "files_touched_count": files_count,
+                "iteration_depth":   iter_depth,
+                "_total_file_edits": sum(edit_targets.values()),
+                "_total_files_edited": len(edit_targets),
             }
 
     # Also index by last path component for flexible goal→project matching

@@ -1,0 +1,37 @@
+# Skill Taxonomy
+# Domain and technical skill labels used by the AI analysis prompt.
+# These appear as tags on tasks in the report.
+
+[domain_skills]
+System Architecture
+Product Planning
+Requirements Analysis
+Technical Research
+Data Analysis
+Statistical Modelling
+UX Design
+Product Management
+Project Management
+Technical Writing
+Documentation
+Stakeholder Communication
+Prompt Engineering
+Security Review
+Code Review
+
+[tech_skills]
+Python
+JavaScript
+TypeScript
+Bash/Shell
+HTML/CSS
+SQL
+API Integration
+DevOps/CI-CD
+Cloud Infrastructure
+Database Design
+Machine Learning
+Data Engineering
+Debugging
+Refactoring
+Frontend Development

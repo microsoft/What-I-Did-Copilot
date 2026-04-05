@@ -1,0 +1,32 @@
+# Professional Role Classification (Heuristic Fallback)
+# Keyword-based rules that map task content to professional roles.
+# Used when the AI API is unavailable. The AI prompt uses its own judgment
+# but follows a similar taxonomy.
+#
+# Format: role | keywords (any match triggers the role)
+# Applied to the concatenation of user message text + tool descriptions.
+
+QA Engineer              | debug, fix, error, bug, crash, broken
+UX Designer              | ux, wireframe, flow, prototype, mockup
+Frontend Developer       | .html, .css, visual, layout, style, component
+Software Engineer        | .py, python, code, implement, build, function, module
+Data Analyst             | sql, query, dashboard, kpi, dataset, dataframe, pivot, bi report, power bi
+Data Engineer            | pipeline, etl, schema, warehouse, dbt
+Technical Writer         | document, readme, how-to, guide, explainer
+DevOps Engineer          | deploy, dockerfile, kubernetes, terraform, ci/cd, github action
+Solutions Architect      | architect, api design, integration design
+Product Manager          | roadmap, user story, prioritize, backlog, product requirement
+Program Manager          | project plan, milestone, delivery, dependency, status report, program
+Business Analyst         | process map, gap analysis, workflow, business requirement, stakeholder interview
+Management Consultant    | strategy, recommendation, framework, benchmark, executive, consulting
+Financial Analyst        | financial model, valuation, forecast, portfolio, backtest, alpha, pnl, quant
+Risk & Compliance Analyst| compliance, regulation, audit, risk assessment, kyc, aml, regulatory
+Research Scientist       | experiment, hypothesis, literature, simulation, scientific, research paper
+
+# Task type classification
+# Format: type | keywords
+Development              | (default when no other matches)
+Bug Fix & Debug          | debug, fix, error, bug, crash, broken
+Analysis & Research      | analyze, research, investigate, report, metric, data
+Design & UX              | design, ui, ux, layout, style, css, visual
+Execution & Ops          | deploy, release, pipeline, ci, cd, ops, config

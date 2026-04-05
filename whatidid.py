@@ -106,18 +106,54 @@ def _normalize_project(name: str) -> str:
     return name.replace("\\", "/").split("/")[-1].lower().strip().replace(" ", "-")
 
 
-def _merge_related_goals(goals: list) -> list:
+def _merge_related_goals(goals: list, project_canonical: dict = None,
+                         sessions: list = None) -> list:
     """Group goals from the same project across different days into single entries.
 
-    Goals are considered related when they share the same normalized project name.
+    Goals are considered related when they share the same normalized project name
+    (or are linked via shared git repos through project_canonical).
     Merged goals combine all tasks, sum hours, and show the date range.
+
+    EXCEPTION: Goals from home/root folders (ad-hoc work) are only merged if they
+    share the same label — the user may be doing unrelated tasks from their home dir.
     """
     from collections import OrderedDict
+
+    if project_canonical is None:
+        project_canonical = {}
+
+    # Build set of project names that are actually home folders (check project_path).
+    # Use case-insensitive comparison so paths like C:/users/<name> or /USERS/<name>
+    # are handled correctly across all OS/path casing conventions.
+    home_projects = set()
+    for s in (sessions or []):
+        pp = s.get("project_path", "").replace("\\", "/").lower()
+        if "/users/" in pp or "/home/" in pp:
+            parts = pp.split("/")
+            for i, p in enumerate(parts):
+                if p in ("users", "home") and i + 1 < len(parts):
+                    if _normalize_project(s.get("project", "")) == parts[i + 1]:
+                        home_projects.add(_normalize_project(s.get("project", "")))
 
     groups: OrderedDict = OrderedDict()
     for g in goals:
         proj = g.get("project", "")
-        key = _normalize_project(proj) if proj else f"_unnamed_{id(g)}"
+        norm = _normalize_project(proj) if proj else ""
+
+        # Apply repo-based equivalence (e.g. whatididghcp ↔ what-i-did-copilot)
+        canon = project_canonical.get(norm, norm)
+
+        # For home folder projects WITHOUT repo evidence, use label as the grouping
+        # key so unrelated ad-hoc tasks stay separate.
+        is_home = norm in home_projects
+        has_repo_evidence = norm in project_canonical
+        if canon and is_home and not has_repo_evidence:
+            label = (g.get("label") or g.get("title", "")).strip().lower()
+            key = f"_home_{canon}_{label}" if label else f"_unnamed_{id(g)}"
+        elif canon:
+            key = canon
+        else:
+            key = f"_unnamed_{id(g)}"
 
         if key in groups:
             merged = groups[key]
@@ -193,34 +229,85 @@ def _merge_analyses(day_analyses: list) -> dict:
         for proj, metrics in analysis.get("session_metrics", {}).items():
             dated_key = target_date + "|" + proj
             merged_session_metrics[dated_key] = dict(metrics)
-            # Also store under normalized key for cross-day matching
+            # Also store under normalized key for cross-day matching (same object,
+            # not a copy, so deduplication by id() works when aggregating totals)
             norm_key = target_date + "|" + _normalize_project(proj)
-            merged_session_metrics.setdefault(norm_key, dict(metrics))
+            if norm_key != dated_key:
+                merged_session_metrics.setdefault(norm_key, merged_session_metrics[dated_key])
 
     active_dates = sorted({d for d, _, _ in day_analyses})
 
+    # Build project equivalence map from git repos: different folder names
+    # for the same repo should merge (e.g. "whatididghcp" ↔ "What-I-Did-Copilot")
+    _repo_to_projects: dict = {}  # repo_name → set of project names
+    for s in all_sessions:
+        sp = s.get("project", "")
+        for repo in s.get("git_repos", []):
+            repo_short = repo.replace("\\", "/").split("/")[-1].lower()
+            _repo_to_projects.setdefault(repo_short, set()).add(_normalize_project(sp))
+    # Map each project to a canonical name (first seen) via shared repo
+    project_canonical: dict = {}
+    for repo, projs in _repo_to_projects.items():
+        if len(projs) > 1:
+            canonical = sorted(projs)[0]  # deterministic: alphabetically first
+            for p in projs:
+                project_canonical[p] = canonical
+
     # Merge goals from the same project across days into single entries
     if len(active_dates) > 1:
-        all_goals = _merge_related_goals(all_goals)
+        all_goals = _merge_related_goals(all_goals, project_canonical, all_sessions)
 
-        # Create aggregated session_metrics for merged goals that span multiple days
+        # Create aggregated session_metrics for merged goals that span multiple days.
+        # IMPORTANT: compute formula per-day then sum (matching AI's per-day approach)
+        # rather than aggregating raw metrics then computing once (which inflates
+        # multipliers since all thresholds trigger on large cumulative numbers).
+        from report import compute_formula_estimate as _cfe
         for g in all_goals:
             all_dates = g.get("_all_dates", [g.get("date", "")])
             if len(all_dates) <= 1:
                 continue
             proj = g.get("project", "")
             norm = _normalize_project(proj)
-            # Sum metrics across all dates for this project
+            # Find all project names that are equivalent via repo mapping
+            equiv_names = {proj, norm}
+            canon = project_canonical.get(norm, norm)
+            for p, c in project_canonical.items():
+                if c == canon:
+                    equiv_names.add(p)
+
+            # Sum raw metrics for display, but compute formula per-day.
+            # files_touched_count is a count of unique files per day — use max()
+            # across days to avoid overstating scope (and avoid erroneously
+            # tripping the >10 files multiplier on aggregated multi-day counts).
             agg = {"tokens": 0, "tool_invocations": 0, "premium_requests": 0,
                    "lines_added": 0, "lines_removed": 0, "active_minutes": 0,
-                   "wall_clock_minutes": 0, "sessions": 0}
+                   "wall_clock_minutes": 0, "sessions": 0,
+                   "conversation_turns": 0, "substantive_turns": 0,
+                   "reads": 0, "edits": 0, "runs": 0,
+                   "files_touched_count": 0, "_total_file_edits": 0, "_total_files_edited": 0}
+            per_day_formula_total = 0.0
             for d in all_dates:
-                for try_key in [d + "|" + proj, d + "|" + norm]:
-                    m = merged_session_metrics.get(try_key, {})
-                    if m:
-                        for k in agg:
-                            agg[k] += m.get(k, 0)
+                found = False
+                for pname in equiv_names:
+                    for try_key in [d + "|" + pname]:
+                        m = merged_session_metrics.get(try_key, {})
+                        if m:
+                            for k in agg:
+                                if k == "files_touched_count":
+                                    agg[k] = max(agg[k], m.get(k, 0))
+                                else:
+                                    agg[k] += m.get(k, 0)
+                            per_day_formula_total += _cfe(m)["total"]
+                            found = True
+                            break
+                    if found:
                         break
+            # Compute aggregate iteration depth from totals
+            total_e = agg.pop("_total_file_edits", 0)
+            total_f = agg.pop("_total_files_edited", 0)
+            agg["iteration_depth"] = round(total_e / max(total_f, 1), 1)
+            # Store the per-day formula sum so the evidence table can use it
+            agg["_per_day_formula_total"] = round(per_day_formula_total * 4) / 4
             # Store aggregated metrics under the earliest date key
             merged_session_metrics[all_dates[0] + "|" + proj] = agg
             merged_session_metrics[all_dates[0] + "|" + norm] = agg
