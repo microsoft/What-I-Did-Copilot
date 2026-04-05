@@ -128,14 +128,21 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
     active_days     = max(1, len(analysis.get("active_dates", ["x"])))
 
     # Total active engagement time across all sessions.
-    # Deduplicate by object identity since normalized-name aliases may share the
-    # same dict object as the original project key (avoids double-counting).
-    _seen_metric_ids: set = set()
+    # Deduplicate by (date, normalized_project) key since both the original and
+    # the normalized project name appear as separate keys in session_metrics.
+    _seen_metric_keys: set = set()
     total_active_min = 0
-    for _m in analysis.get("session_metrics", {}).values():
-        if isinstance(_m, str) or id(_m) in _seen_metric_ids:
+    for _key, _m in analysis.get("session_metrics", {}).items():
+        if isinstance(_m, str):
             continue
-        _seen_metric_ids.add(id(_m))
+        if "|" in _key:
+            _date, _proj = _key.split("|", 1)
+            _canon_key = (_date, _proj.replace("\\", "/").split("/")[-1].lower().strip().replace(" ", "-"))
+        else:
+            _canon_key = (_key,)
+        if _canon_key in _seen_metric_keys:
+            continue
+        _seen_metric_keys.add(_canon_key)
         total_active_min += _m.get("active_minutes", 0)
     if total_active_min >= 60:
         active_sub = f"{total_active_min / 60:.1f}h active time"
