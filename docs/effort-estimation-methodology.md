@@ -201,7 +201,8 @@ effort in LLM-assisted work:
 
 ```
 Step 1 — Primary signals (take the strongest):
-    tool_h   = tier_tools(tool_invocations)
+    tool_h   = weighted_tools(reads × 0.5min + edits × 4min + runs × 1.5min) ÷ 60
+               (falls back to tools × 1.5min ÷ 60 when breakdown unavailable)
     turns_h  = tier_turns(conversation_turns)
     active_h = active_minutes × 4 ÷ 60
 

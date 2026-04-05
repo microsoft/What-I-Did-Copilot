@@ -105,10 +105,16 @@ STEP 1 — Classify the task type using the SIGNALS block:
   Complex multi-step (balanced reads+edits+runs)     → use highest signal as base, apply multipliers
 
 STEP 2 — Compute base estimate from the STRONGEST primary signal:
-  Conversation turns (PRIMARY interaction signal — each turn ≈ 5-10 min of human thinking):
-    1-3 = 0.25h, 4-8 = 0.75h, 9-15 = 1.5h, 16-30 = 3h, 31-60 = 5h, 61-100 = 8h, 100+ = 12h
-  Tool invocations (each action ≈ 2-3 min of expert human effort):
-    1-10 = 0.5h, 10-30 = 1.5h, 30-75 = 3h, 75-150 = 5h, 150-300 = 8h, 300+ = 12h+
+  Conversation turns (PRIMARY interaction signal — each turn ≈ 12-15 min of human thinking):
+    1-3 = 0.5h, 4-8 = 1.5h, 9-15 = 3h, 16-30 = 5h, 31-60 = 8h, 61-100 = 12h, 100+ = 16h
+  Tool invocations (WEIGHTED by action type, not flat rate):
+    The SIGNALS block shows the breakdown: reads, edits, runs.
+    reads (file views, searches) ≈ 0.5 min each — quick glances
+    edits (file edits, creates) ≈ 4 min each — substantive code work
+    runs (commands, tests) ≈ 1.5 min each — execution + verify
+    other (agent overhead, intent reporting) ≈ 0 min — not human work
+    Example: 200 tools (60 reads, 40 edits, 30 runs, 70 other) =
+      60×0.5 + 40×4 + 30×1.5 = 30+160+45 = 235 min = 3.9h (NOT 200×2min = 6.7h)
   Active engagement time: active_minutes × 4 (human needs ~4× longer without AI)
   Lines of code (ADDITIVE — added on top of the base, not part of max):
     Expert writes 100-150 LoC/hr. 50-150 lines = 0.75h, 150-300 = 1.5h, 300-500 = 2.5h, 500+ = 4h+

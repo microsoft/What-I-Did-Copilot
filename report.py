@@ -1040,6 +1040,9 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         total_formula_h += fe["total"]
 
         tools      = metrics.get("tool_invocations", 0)
+        reads      = metrics.get("reads", 0)
+        edits      = metrics.get("edits", 0)
+        runs_count = metrics.get("runs", 0)
         reqs       = metrics.get("premium_requests", 0)
         la         = metrics.get("lines_added", 0)
         active     = metrics.get("active_minutes", 0)
@@ -1049,6 +1052,13 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         iter_d     = metrics.get("iteration_depth", 0)
         ai_h       = _fmt_h(g.get("human_hours", 0))
         formula_h  = _fmt_h(fe["total"])
+
+        # Tools display: show breakdown if available
+        if reads + edits + runs_count > 0:
+            tools_display = (f'{tools}<br><span style="font-size:8px;color:{C["muted"]};font-weight:400">'
+                             f'{reads}r {edits}e {runs_count}x</span>')
+        else:
+            tools_display = str(tools)
 
         title = g.get("label") or g.get("title", "")
         if len(title) > 40:
@@ -1101,7 +1111,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
             {mult_str}
           </td>
           <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600">{tools}</td>
+                     font-weight:600">{tools_display}</td>
           <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
                      font-weight:600">{reqs}</td>
           <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
@@ -1300,10 +1310,10 @@ def _signal_guide() -> str:
     # Compact signal reference — one row per signal
     signal_rows = ""
     for signal, icon, rate, tiers in [
-        ("Tool invocations", "&#128295;", "~2-3 min/action",
-         "1-10→0.5h &nbsp; 11-30→1.5h &nbsp; 31-75→3h &nbsp; 76-150→5h &nbsp; 151-300→8h &nbsp; 300+→12h+"),
-        ("Conversation turns", "&#128172;", "~5-10 min/turn",
-         "1-3→0.25h &nbsp; 4-8→0.75h &nbsp; 9-15→1.5h &nbsp; 16-30→3h &nbsp; 31-60→5h &nbsp; 61+→8h+"),
+        ("Tool invocations", "&#128295;", "weighted by type",
+         "reads×0.5m &nbsp; edits×4m &nbsp; runs×1.5m &nbsp; overhead×0m &nbsp; <em>(falls back to 1.5m/action if no breakdown)</em>"),
+        ("Conversation turns", "&#128172;", "~12-15 min/turn",
+         "1-3→0.5h &nbsp; 4-8→1.5h &nbsp; 9-15→3h &nbsp; 16-30→5h &nbsp; 31-60→8h &nbsp; 61+→12h+"),
         ("Active time", "&#9201;", "×4 multiplier",
          "active_minutes × 4 ÷ 60 &nbsp; (human needs ~4× longer without AI)"),
         ("Lines of code", "&#128196;", "100-150 LoC/hr",
@@ -1342,14 +1352,17 @@ def _signal_guide() -> str:
         <div style="margin-top:14px;padding:10px 12px;background:{C['subtle']};
                     border:1px solid {C['border']};border-radius:6px">
           <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
-                      color:{C['accent']};margin-bottom:6px">&#128270; Example: 150 tools, 25 turns,
+                      color:{C['accent']};margin-bottom:6px">&#128270; Example: 150 tools (45 reads, 40 edits, 25 runs, 40 other), 25 turns,
             45m active, +320 lines, 6 files, 8.2 edits/file</div>
           <div style="font-family:monospace;font-size:10px;line-height:1.7;color:{C['text']}">
-            Base = max(tools→5h, turns→3h, active→3h) = <strong style="color:{C['accent']}">5h</strong><br>
-            Multipliers: turns&gt;15 (+15%) · iter&gt;5 (+15%) · files&gt;3 (+10%)
-            = <strong>1.1 × 1.15 × 1.15 ≈ 1.45×</strong><br>
-            Lines: 320 → <strong>1.5h</strong> (additive)<br>
-            <strong style="color:{C['accent']}">Total = (5h × 1.45) + 1.5h = 8.75h</strong>
+            Tools: 45&times;0.5 + 40&times;4 + 25&times;1.5 + 40&times;0 = 22+160+38 = 220min = <strong>3.7h</strong><br>
+            Turns: 25 &rarr; <strong>5h</strong><br>
+            Active: 45m &times; 4 = <strong>3h</strong><br>
+            Base = max(3.7, 5, 3) = <strong style="color:{C['accent']}">5h</strong> (turns wins)<br>
+            Multipliers: turns&gt;15 (+15%) &middot; iter&gt;5 (+15%) &middot; files&gt;3 (+10%)
+            = <strong>1.15 &times; 1.15 &times; 1.1 &asymp; 1.45&times;</strong><br>
+            Lines: 320 &rarr; <strong>1.5h</strong> (additive)<br>
+            <strong style="color:{C['accent']}">Total = (5h &times; 1.45) + 1.5h = 7.25 + 1.5 = 8.75h</strong>
           </div>
         </div>"""
 
