@@ -149,6 +149,13 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
     else:
         active_sub = f"{total_active_min:.0f}m active time"
 
+    # Speed multiplier: human effort / active time
+    if total_active_min > 0:
+        speed_x = total_human_h / (total_active_min / 60)
+        speed_label = f"{speed_x:.1f}&times; faster"
+    else:
+        speed_label = ""
+
     h_str = _fmt_h(total_human_h)
     days_label = f"{active_days}"
 
@@ -164,6 +171,16 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
     pr_commit_val = f"{total_prs}"
     pr_commit_sub = f"{total_commits} commit{'s' if total_commits != 1 else ''}"
 
+    effort_sub = speed_label
+    if speed_label:
+        effort_sub += (f' · <a href="#evidence-hdr" style="color:{C["accent"]};'
+                       f'text-decoration:none;font-size:9px" onclick="toggleDetail(\'evidence\');'
+                       f'return false;">see evidence &#9656;</a>')
+    else:
+        effort_sub = (f'<a href="#evidence-hdr" style="color:{C["accent"]};'
+                      f'text-decoration:none;font-size:9px" onclick="toggleDetail(\'evidence\');'
+                      f'return false;">see evidence &#9656;</a>')
+
     return f"""
   <tr>
     <td style="background:{C['bg']};padding:12px 24px;
@@ -171,10 +188,7 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
       <table width="100%" cellpadding="0" cellspacing="0">
         <tr>
           {_kpi_card(str(n_goals), "Projects<br>Assisted", f"{n_sessions} sessions")}
-          {_kpi_card(h_str, "Human Effort<br>Equivalent",
-                    f'@ ${HOURLY_RATE}/hr · <a href="#evidence-hdr" style="color:{C["accent"]};'
-                    f'text-decoration:none;font-size:9px" onclick="toggleDetail(\'evidence\');'
-                    f'return false;">see evidence &#9656;</a>')}
+          {_kpi_card(h_str, "Human Effort<br>Equivalent", effort_sub)}
           {_kpi_card(code_val, "Lines of Code<br>Added", code_sub)}
           {_kpi_card(pr_commit_val, "PRs<br>Merged", pr_commit_sub)}
           {_kpi_card(days_label, "Active Days", active_sub)}

@@ -13,9 +13,6 @@
 
 ---
 
-> **"In March, Copilot delivered $4,380 worth of professional services for a $39/mo seat — a 112× return on investment."**
-> — *Real output from this tool*
-
 *"Where did the tokens go? What am I actually building with Copilot? Am I accessing skills I didn't have before?"*
 
 If you can't answer these confidently, you're not alone. Most developers know Copilot helps — but can't show *how much*, *at what*, or *why it matters*. This tool turns your local session logs into a single report that makes the invisible visible — what got built, what skills were augmented, and what it would have cost to do it alone.
