@@ -628,26 +628,19 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
     grunt_pct = round(modes.get("Grunt work handled", 0) / total * 100)
     high_value_pct = 100 - handholding_pct - grunt_pct
     total_str = f"{total:.0f}m" if total < 60 else f"{total / 60:.1f}h"
+    n_modes = len([m for m in sorted_modes if m[1] >= 0.1])
 
-    # Hero insight banner — prominent, like "this is the team Copilot assembled"
-    hero = f"""
-        <div style="background:linear-gradient(135deg,{C['accent']},#005a9e);border-radius:8px;
-                    padding:16px 20px;margin-bottom:16px;color:#ffffff">
-          <div style="font-size:14px;font-weight:700;line-height:1.4;margin-bottom:6px">
-            {high_value_pct}% of your collaboration time was high-value work &mdash;
-            creating, researching, building, and refining.</div>
-          <div style="font-size:11px;opacity:0.85;line-height:1.5">"""
+    # Headline insight
+    headline = (f"{high_value_pct}% of your collaboration was high-value work "
+                f"&mdash; creating, researching, building, and refining.")
+    sub_parts = []
     if grunt_pct > 0:
-        hero += f"Copilot automated <strong>{grunt_pct}%</strong> of routine grunt work. "
+        sub_parts.append(f"Copilot automated {grunt_pct}% of routine grunt work")
     if handholding_pct > 0:
-        hero += (f"<strong>{handholding_pct}%</strong> was spent course-correcting AI output "
-                 f"&mdash; an area where future improvements would directly save you time.")
-    hero += f"""
-          </div>
-          <div style="font-size:10px;opacity:0.5;margin-top:6px">{total_str} active collaboration time</div>
-        </div>"""
+        sub_parts.append(f"{handholding_pct}% was spent course-correcting AI output")
+    subtitle = " &middot; ".join(sub_parts) if sub_parts else ""
 
-    # Card grid — 2 columns × 3 rows, each card shows icon + label + % + time
+    # Card grid — each mode gets a tile with icon, label, bold %, bar, time
     cards = ""
     for i, (mode, mins) in enumerate(sorted_modes):
         if mins < 0.1:
@@ -656,30 +649,38 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
         meta = MODE_META.get(mode, {"icon": "", "desc": ""})
         color = _QUALITY_COLORS.get(mode, C["muted"])
         mins_str = f"{mins:.0f}m" if mins < 60 else f"{mins / 60:.1f}h"
+        bar_width = max(pct, 4)
 
-        # Accent bar on the left edge of each card
         cards += f"""
-          <td style="padding:4px;width:50%;vertical-align:top">
-            <div style="border-left:4px solid {color};border:1px solid {C['border']};
-                        border-left:4px solid {color};border-radius:6px;padding:10px 12px;
-                        background:{C['card']};height:60px">
-              <div style="display:flex;align-items:center;margin-bottom:4px">
-                <span style="font-size:16px;margin-right:6px">{meta['icon']}</span>
-                <span style="font-size:11px;font-weight:700;color:{C['text']}">{mode}</span>
-                <span style="font-size:14px;font-weight:800;color:{color};margin-left:auto">
-                  {pct:.0f}%</span>
-              </div>
-              <div style="font-size:10px;color:{C['muted']};line-height:1.3">
-                {meta['desc']} &middot; {mins_str}</div>
-            </div>
+          <td style="padding:5px;width:50%;vertical-align:top">
+            <table width="100%" cellpadding="0" cellspacing="0"
+                   style="border:1px solid {C['border']};border-left:4px solid {color};
+                          border-radius:6px;overflow:hidden">
+              <tr>
+                <td style="padding:10px 12px">
+                  <div style="display:flex;align-items:baseline;margin-bottom:6px">
+                    <span style="font-size:18px;margin-right:6px">{meta['icon']}</span>
+                    <span style="font-size:12px;font-weight:700;color:{C['text']}">{mode}</span>
+                    <span style="font-size:16px;font-weight:800;color:{color};margin-left:auto">
+                      {pct:.0f}%</span>
+                  </div>
+                  <div style="background:{C['bg']};border-radius:3px;height:8px;margin-bottom:6px;
+                              overflow:hidden">
+                    <div style="width:{bar_width:.0f}%;background:{color};height:100%;
+                                border-radius:3px"></div>
+                  </div>
+                  <div style="font-size:11px;color:{C['muted']};line-height:1.3">
+                    {meta['desc']} &middot; <strong style="color:{C['text']}">{mins_str}</strong></div>
+                </td>
+              </tr>
+            </table>
           </td>"""
-        # Close row every 2 cards
         if i % 2 == 1:
             cards += "</tr><tr>"
 
-    # Pad if odd number of cards
+    # Pad if odd
     if len([m for m in sorted_modes if m[1] >= 0.1]) % 2 == 1:
-        cards += '<td style="padding:4px"></td>'
+        cards += '<td style="padding:5px"></td>'
 
     return f"""
   <tr>
@@ -689,10 +690,13 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
                     color:rgba(255,255,255,0.7)">How I Collaborated</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-          What Copilot did with your active time</div>
+          The different types of work Copilot handled for you</div>
       </td></tr></table>
-      <div style="padding:14px 24px 16px">
-        {hero}
+      <div style="padding:16px 24px 18px">
+        <div style="font-size:14px;font-weight:700;color:{C['text']};margin-bottom:4px;line-height:1.4">
+          {headline}</div>
+        <div style="font-size:11px;color:{C['muted']};margin-bottom:16px">
+          {total_str} of active collaboration across {n_modes} modes &middot; {subtitle}</div>
         <table width="100%" cellpadding="0" cellspacing="0">
           <tr>{cards}</tr>
         </table>
