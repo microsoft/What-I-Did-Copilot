@@ -601,170 +601,11 @@ def _work_pattern(sessions: list) -> str:
 
 
 def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str:
-    """Section: 'How I Collaborated' — intent donut chart with per-project breakdowns."""
-    from harvest import aggregate_intents
-    import harvest as _harvest
+    """Section: 'How I Collaborated' — quality modes ring chart showing how Copilot contributed."""
+    from harvest import compute_active_time_quality, _QUALITY_COLORS
 
     if project_label_map is None:
         project_label_map = {}
-
-    # Prefer intent metadata from `harvest` when available; fall back to empty mappings.
-    _INTENT_COLORS = getattr(_harvest, "_INTENT_COLORS", {})
-    _INTENT_ICONS  = getattr(_harvest, "_INTENT_ICONS", {})
-
-    intent_data = aggregate_intents(sessions)
-    counts = intent_data["counts"]
-    by_project_raw = intent_data["by_project"]
-    total = intent_data["total"]
-
-    # Remap raw project names to consistent goal labels when possible.
-    # If no mapping exists for a project, preserve its raw name so the
-    # per-project breakdown is not dropped when `project_label_map` is empty
-    # or incomplete.
-    by_project = {}
-    for raw_name, pcounts in by_project_raw.items():
-        display = project_label_map.get(raw_name) or raw_name
-        if display in by_project:
-            for cat, n in pcounts.items():
-                by_project[display][cat] = by_project[display].get(cat, 0) + n
-        else:
-            by_project[display] = dict(pcounts)
-
-    if total == 0:
-        return ""
-
-    # Sort categories by count descending, take top 6
-    sorted_cats = sorted(counts.items(), key=lambda x: -x[1])
-    if len(sorted_cats) > 6:
-        top = sorted_cats[:5]
-        other_count = sum(v for _, v in sorted_cats[5:])
-        top.append(("Other", other_count))
-    else:
-        top = sorted_cats
-
-    # Build conic-gradient stops for donut chart
-    gradient_stops = []
-    cumulative = 0
-    for cat, n in top:
-        pct = n / total * 100
-        color = _INTENT_COLORS.get(cat, C["muted"])
-        gradient_stops.append(f"{color} {cumulative:.1f}% {cumulative + pct:.1f}%")
-        cumulative += pct
-    gradient = ", ".join(gradient_stops)
-
-    # Legend items — vertical list beside the donut
-    legend_rows = ""
-    for cat, n in top:
-        pct = n / total * 100
-        if n == 0:
-            continue
-        color = _INTENT_COLORS.get(cat, C["muted"])
-        icon = _INTENT_ICONS.get(cat, "&#128161;")
-        legend_rows += (
-            f'<div style="display:flex;align-items:center;margin-bottom:6px">'
-            f'<span style="display:inline-block;width:10px;height:10px;background:{color};'
-            f'border-radius:2px;margin-right:8px;flex-shrink:0"></span>'
-            f'<span style="font-size:11px;font-weight:600;color:{C["text"]};'
-            f'margin-right:6px;white-space:nowrap">{icon} {cat}</span>'
-            f'<span style="font-size:10px;color:{C["muted"]};white-space:nowrap">'
-            f'{n} ({pct:.0f}%)</span>'
-            f'</div>'
-        )
-
-    # Top intent insight line
-    top_cat, top_n = top[0]
-    top_pct = round(top_n / total * 100)
-    n_modes = len([c for c, n in top if n > 0])
-    insight = (
-        f'Worked across <strong style="color:{C["text"]}">{n_modes} collaboration modes</strong>. '
-        f'Primary mode: <strong style="color:{_INTENT_COLORS.get(top_cat, C["accent"])}">'
-        f'{top_cat}</strong> ({top_pct}% of interactions)'
-    )
-
-    # Per-project mini-bars (only if multiple projects)
-    project_bars_html = ""
-    if len(by_project) > 1:
-        proj_rows = ""
-        for proj, pcounts in sorted(by_project.items(), key=lambda x: -sum(x[1].values())):
-            ptotal = sum(pcounts.values())
-            if ptotal == 0:
-                continue
-            proj_sorted = sorted(pcounts.items(), key=lambda x: -x[1])
-            proj_bar = ""
-            for cat, n in proj_sorted:
-                pct = n / ptotal * 100
-                if pct < 3:
-                    continue
-                color = _INTENT_COLORS.get(cat, C["muted"])
-                proj_bar += (
-                    f'<td style="width:{pct:.1f}%;background:{color};height:12px;'
-                    f'font-size:0;padding:0"></td>'
-                )
-            top2 = [f'{c} {round(n/ptotal*100)}%' for c, n in proj_sorted[:2] if n > 0]
-            proj_rows += (
-                f'<tr>'
-                f'<td style="padding:4px 10px 4px 0;font-size:10px;font-weight:600;'
-                f'color:{C["text"]};white-space:nowrap;width:120px;vertical-align:middle">{proj}</td>'
-                f'<td style="padding:4px 0;vertical-align:middle">'
-                f'<table width="100%" cellpadding="0" cellspacing="0" '
-                f'style="border-radius:4px;overflow:hidden"><tr>{proj_bar}</tr></table></td>'
-                f'<td style="padding:4px 0 4px 10px;font-size:9px;color:{C["muted"]};'
-                f'white-space:nowrap;width:140px;vertical-align:middle">{" · ".join(top2)}</td>'
-                f'</tr>'
-            )
-
-        if proj_rows:
-            project_bars_html = f"""
-            <div style="border-top:1px solid {C['border']};margin-top:14px;padding-top:10px">
-              <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
-                          color:{C['muted']};margin-bottom:6px">By Project</div>
-              <table width="100%" cellpadding="0" cellspacing="0">{proj_rows}</table>
-            </div>"""
-
-    return f"""
-  <tr>
-    <td style="background:{C['card']};padding:0;
-               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
-        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
-                    color:rgba(255,255,255,0.7)">How I Collaborated</div>
-        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-          Intent behind every interaction &mdash; from research to shipping</div>
-      </td></tr></table>
-      <div style="padding:14px 24px 16px">
-        <div style="font-size:11px;color:{C['muted']};margin-bottom:14px;line-height:1.5">
-          {insight}
-        </div>
-        <table cellpadding="0" cellspacing="0" width="100%">
-          <tr>
-            <td style="width:140px;vertical-align:middle;text-align:center;padding-right:20px">
-              <div style="width:130px;height:130px;border-radius:50%;
-                          background:conic-gradient({gradient});
-                          display:inline-block;position:relative">
-                <div style="position:absolute;top:25px;left:25px;width:80px;height:80px;
-                            border-radius:50%;background:{C['card']}">
-                  <div style="text-align:center;padding-top:22px">
-                    <div style="font-size:22px;font-weight:800;color:{C['accent']};line-height:1">{total}</div>
-                    <div style="font-size:8px;font-weight:600;color:{C['muted']};text-transform:uppercase;
-                                letter-spacing:0.5px;margin-top:2px">interactions</div>
-                  </div>
-                </div>
-              </div>
-            </td>
-            <td style="vertical-align:middle;padding-left:10px">
-              {legend_rows}
-            </td>
-          </tr>
-        </table>
-        {project_bars_html}
-      </div>
-    </td>
-  </tr>"""
-
-
-def _active_time_quality(sessions: list) -> str:
-    """Section: 'How Copilot Spent Your Time' — stacked bar showing quality modes."""
-    from harvest import compute_active_time_quality
 
     modes = compute_active_time_quality(sessions)
     total = sum(modes.values())
@@ -772,64 +613,85 @@ def _active_time_quality(sessions: list) -> str:
         return ""
 
     MODE_META = {
-        "Creative partner":    {"icon": "&#127912;", "color": "#7b1fa2", "desc": "Design, strategy, architecture"},
-        "Research assistant":  {"icon": "&#128300;", "color": "#1a7f37", "desc": "Exploring options, investigating"},
-        "Builder":             {"icon": "&#128679;", "color": "#0078d4", "desc": "Writing code, generating files"},
-        "Refinement partner":  {"icon": "&#128260;", "color": "#0969da", "desc": "Iterating, polishing, improving"},
-        "Needed hand-holding": {"icon": "&#128295;", "color": "#e65100", "desc": "Errors, retries, course-correcting AI"},
-        "Grunt work handled":  {"icon": "&#9889;",   "color": "#6a737d", "desc": "Git ops, config, installs, routine"},
+        "Creative partner":    {"icon": "&#127912;", "desc": "Design, strategy, architecture"},
+        "Research assistant":  {"icon": "&#128300;", "desc": "Exploring options, investigating"},
+        "Builder":             {"icon": "&#128679;", "desc": "Writing code, generating files"},
+        "Refinement partner":  {"icon": "&#128260;", "desc": "Iterating, polishing, improving"},
+        "Needed hand-holding": {"icon": "&#128295;", "desc": "Errors, retries, course-correcting AI"},
+        "Grunt work handled":  {"icon": "&#9889;",   "desc": "Git ops, config, installs, routine"},
     }
 
-    # Sort by minutes descending
     sorted_modes = sorted(modes.items(), key=lambda x: -x[1])
 
-    # Build stacked bar
-    bar_cells = ""
+    # Build conic-gradient for ring chart
+    gradient_stops = []
+    cumulative = 0
     for mode, mins in sorted_modes:
-        if mins < 0.5:
-            continue
         pct = mins / total * 100
-        meta = MODE_META.get(mode, {"color": C["muted"]})
-        bar_cells += (f'<td style="width:{pct:.1f}%;background:{meta["color"]};height:18px;'
-                      f'font-size:0;padding:0"></td>')
+        color = _QUALITY_COLORS.get(mode, C["muted"])
+        gradient_stops.append(f"{color} {cumulative:.1f}% {cumulative + pct:.1f}%")
+        cumulative += pct
+    gradient = ", ".join(gradient_stops)
 
-    # Build legend rows
+    # Build ring chart label segments (positioned around the ring)
+    ring_labels = ""
+    cumulative = 0
+    for mode, mins in sorted_modes:
+        pct = mins / total * 100
+        if pct < 5:
+            cumulative += pct
+            continue
+        # Position label at the midpoint of the arc
+        mid_angle = cumulative + pct / 2
+        # Convert to x,y on a circle (r=85, center=90,90)
+        import math
+        rad = math.radians(mid_angle * 3.6 - 90)  # -90 to start from top
+        lx = 90 + 62 * math.cos(rad)
+        ly = 90 + 62 * math.sin(rad)
+        ring_labels += (
+            f'<div style="position:absolute;left:{lx:.0f}px;top:{ly:.0f}px;'
+            f'transform:translate(-50%,-50%);font-size:9px;font-weight:700;'
+            f'color:{C["text"]};text-align:center;line-height:1.1;white-space:nowrap">'
+            f'{pct:.0f}%</div>')
+        cumulative += pct
+
+    # Legend with horizontal bars
     legend = ""
     for mode, mins in sorted_modes:
         if mins < 0.5:
             continue
         pct = mins / total * 100
-        meta = MODE_META.get(mode, {"icon": "", "color": C["muted"], "desc": ""})
+        meta = MODE_META.get(mode, {"icon": "", "desc": ""})
+        color = _QUALITY_COLORS.get(mode, C["muted"])
         mins_str = f"{mins:.0f}m" if mins < 60 else f"{mins / 60:.1f}h"
+        bar_width = max(pct, 3)
         legend += (
-            f'<tr>'
-            f'<td style="padding:4px 0;width:14px;vertical-align:middle">'
-            f'<span style="display:inline-block;width:10px;height:10px;background:{meta["color"]};'
-            f'border-radius:2px"></span></td>'
-            f'<td style="padding:4px 8px;font-size:11px;font-weight:600;color:{C["text"]};'
-            f'white-space:nowrap;vertical-align:middle">{meta["icon"]} {mode}</td>'
-            f'<td style="padding:4px 8px;font-size:11px;color:{C["accent"]};font-weight:700;'
-            f'text-align:right;vertical-align:middle">{mins_str}</td>'
-            f'<td style="padding:4px 8px;font-size:10px;color:{C["muted"]};vertical-align:middle">'
-            f'{pct:.0f}% &mdash; {meta["desc"]}</td>'
-            f'</tr>'
-        )
+            f'<div style="display:flex;align-items:center;margin-bottom:8px">'
+            f'<div style="width:130px;font-size:10px;font-weight:600;color:{C["text"]};'
+            f'white-space:nowrap;flex-shrink:0">{meta["icon"]} {mode}</div>'
+            f'<div style="flex:1;margin:0 10px">'
+            f'<div style="width:{bar_width:.0f}%;background:{color};height:14px;'
+            f'border-radius:3px;min-width:4px"></div></div>'
+            f'<div style="width:45px;font-size:11px;font-weight:700;color:{C["accent"]};'
+            f'text-align:right;flex-shrink:0">{pct:.0f}%</div>'
+            f'<div style="width:40px;font-size:10px;color:{C["muted"]};text-align:right;'
+            f'flex-shrink:0;margin-left:6px">{mins_str}</div>'
+            f'</div>')
 
     # Narrative insight
-    top_mode = sorted_modes[0][0] if sorted_modes else ""
-    top_pct = round(sorted_modes[0][1] / total * 100) if sorted_modes else 0
     handholding_pct = round(modes.get("Needed hand-holding", 0) / total * 100)
     grunt_pct = round(modes.get("Grunt work handled", 0) / total * 100)
     high_value_pct = 100 - handholding_pct - grunt_pct
+    top_mode = sorted_modes[0][0] if sorted_modes else ""
 
     insight = (
         f'<strong style="color:{C["text"]}">{high_value_pct}%</strong> of your time was in '
         f'high-value work (creating, researching, building, refining). '
     )
     if grunt_pct > 0:
-        insight += f'Copilot handled <strong>{grunt_pct}%</strong> of routine grunt work automatically. '
+        insight += f'Copilot handled <strong>{grunt_pct}%</strong> of routine grunt work. '
     if handholding_pct > 0:
-        insight += (f'<span style="color:{MODE_META["Needed hand-holding"]["color"]}">'
+        insight += (f'<span style="color:{_QUALITY_COLORS.get("Needed hand-holding", C["muted"])}">'
                     f'{handholding_pct}%</span> was spent course-correcting AI output.')
 
     total_str = f"{total:.0f}m" if total < 60 else f"{total / 60:.1f}h"
@@ -840,20 +702,36 @@ def _active_time_quality(sessions: list) -> str:
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
-                    color:rgba(255,255,255,0.7)">How Copilot Spent Your Time</div>
+                    color:rgba(255,255,255,0.7)">How I Collaborated</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-          {total_str} of active collaboration &mdash; classified by how Copilot contributed</div>
+          {total_str} of active time &mdash; classified by how Copilot contributed</div>
       </td></tr></table>
       <div style="padding:14px 24px 16px">
-        <div style="font-size:11px;color:{C['muted']};margin-bottom:12px;line-height:1.5">
+        <div style="font-size:11px;color:{C['muted']};margin-bottom:14px;line-height:1.5">
           {insight}
         </div>
-        <table width="100%" cellpadding="0" cellspacing="0"
-               style="border-radius:6px;overflow:hidden;margin-bottom:14px">
-          <tr>{bar_cells}</tr>
-        </table>
         <table cellpadding="0" cellspacing="0" width="100%">
-          {legend}
+          <tr>
+            <td style="width:190px;vertical-align:middle;text-align:center;padding-right:20px">
+              <div style="width:180px;height:180px;border-radius:50%;
+                          background:conic-gradient({gradient});
+                          display:inline-block;position:relative">
+                <div style="position:absolute;top:35px;left:35px;width:110px;height:110px;
+                            border-radius:50%;background:{C['card']}">
+                  <div style="text-align:center;padding-top:32px">
+                    <div style="font-size:24px;font-weight:800;color:{C['accent']};line-height:1">
+                      {high_value_pct}%</div>
+                    <div style="font-size:8px;font-weight:600;color:{C['muted']};text-transform:uppercase;
+                                letter-spacing:0.5px;margin-top:3px">high-value<br>work</div>
+                  </div>
+                </div>
+                {ring_labels}
+              </div>
+            </td>
+            <td style="vertical-align:middle">
+              {legend}
+            </td>
+          </tr>
         </table>
       </div>
     </td>
@@ -2306,9 +2184,6 @@ window.onload = function() {
 
   <!-- 3. HOW I WORKED WITH COPILOT (intent) -->
   {_collaboration_intent(sessions, project_label_map)}
-
-  <!-- 3b. HOW COPILOT SPENT YOUR TIME -->
-  {_active_time_quality(sessions)}
 
   <!-- 4. WHEN I WORKED WITH COPILOT -->
   {_work_pattern(sessions)}

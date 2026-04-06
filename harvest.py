@@ -453,31 +453,52 @@ def aggregate_intents(sessions: list) -> dict:
     }
 
 
+def _load_quality_config() -> tuple:
+    """Load active time quality classification from prompts/active_time_quality.txt."""
+    path = Path(__file__).parent / "prompts" / "active_time_quality.txt"
+    user_rx = None
+    tool_rx = None
+    modes_order = []  # [(name, intents_set, desc)]
+    colors = {}
+    section = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            section = line.strip("[]")
+            continue
+        if section == "hand_holding_user_patterns":
+            user_rx = _re.compile(line, _re.I)
+        elif section == "hand_holding_tool_patterns":
+            tool_rx = _re.compile(line, _re.I)
+        elif section == "modes":
+            parts = [p.strip() for p in line.split("|", 2)]
+            if len(parts) == 3:
+                name, intents_str, desc = parts
+                intents = set(i.strip() for i in intents_str.split(","))
+                modes_order.append((name, intents, desc))
+        elif section == "mode_colors":
+            parts = [p.strip() for p in line.split("|", 1)]
+            if len(parts) == 2:
+                colors[parts[0]] = parts[1]
+    return user_rx, tool_rx, modes_order, colors
+
+
+_QUALITY_USER_RX, _QUALITY_TOOL_RX, _QUALITY_MODES, _QUALITY_COLORS = _load_quality_config()
+
+
 def compute_active_time_quality(sessions: list) -> dict:
     """Classify active time into quality modes showing how Copilot contributed.
 
-    Returns dict with mode_name → minutes for:
-      Creative partner    — design, strategy, architecture (Designing + Planning)
-      Research assistant   — explored options, investigated problems (Researching + Investigating)
-      Builder              — heavy lifting: wrote code, ran commands (Building + tools)
-      Refinement partner   — iterating, polishing, getting it right (Iterating)
-      Needed hand-holding  — errors, retries, fixing Copilot's mistakes
-      Grunt work handled   — routine: git, config, installs (Shipping + Configuring + trivial)
+    Returns dict with mode_name → minutes. Uses two detection layers:
+    1. Hand-holding: user correcting Copilot OR error signals in tool output
+    2. Mode: based on intent classification of message content
     """
     from datetime import datetime as _dt
 
-    _ERROR_RX = _re.compile(
-        r'\b(error|fail|exception|traceback|broken|crash|UnicodeError|SyntaxError|KeyError'
-        r'|TypeError|ModuleNotFound|ImportError|rejected|denied)\b', _re.I)
-
-    modes = {
-        "Creative partner":    0.0,
-        "Research assistant":  0.0,
-        "Builder":             0.0,
-        "Refinement partner":  0.0,
-        "Needed hand-holding": 0.0,
-        "Grunt work handled":  0.0,
-    }
+    modes = {name: 0.0 for name, _, _ in _QUALITY_MODES}
+    modes["Needed hand-holding"] = 0.0
 
     for s in sessions:
         user_turns = []
@@ -493,9 +514,12 @@ def compute_active_time_quality(sessions: list) -> dict:
             text = m.get("text", "").strip()
             tools = m.get("tools_after", [])
             intents = classify_message_intent(text)
+            tools_text = " ".join(tools)
 
-            # Detect error-fixing: error keywords in tool output descriptions
-            has_errors = any(_ERROR_RX.search(t) for t in tools)
+            # Layer 1: hand-holding detection
+            user_correcting = bool(_QUALITY_USER_RX and _QUALITY_USER_RX.search(text[:300]))
+            tool_errors = bool(_QUALITY_TOOL_RX and _QUALITY_TOOL_RX.search(tools_text))
+            needs_handholding = user_correcting or tool_errors
 
             # Detect trivial turn
             first_line = text.split("\n")[0].strip()
@@ -503,7 +527,7 @@ def compute_active_time_quality(sessions: list) -> dict:
 
             user_turns.append({
                 "ts": ts, "intents": intents, "tools": len(tools),
-                "has_errors": has_errors, "is_trivial": is_trivial,
+                "needs_handholding": needs_handholding, "is_trivial": is_trivial,
             })
 
         # Compute time per turn from timestamp gaps (capped at 5 min for idle)
@@ -512,22 +536,26 @@ def compute_active_time_quality(sessions: list) -> dict:
                 gap = (user_turns[i + 1]["ts"] - user_turns[i]["ts"]).total_seconds() / 60
                 user_turns[i]["minutes"] = min(gap, 5)
             else:
-                user_turns[i]["minutes"] = 1  # last turn or missing timestamp
+                user_turns[i]["minutes"] = 1
 
-        # Classify each turn into a mode
+        # Classify each turn
         for t in user_turns:
             mins = t["minutes"]
-            if t["has_errors"]:
+            if t["needs_handholding"]:
                 modes["Needed hand-holding"] += mins
-            elif t["is_trivial"] or any(i in t["intents"] for i in ("Shipping", "Configuring")):
-                modes["Grunt work handled"] += mins
-            elif any(i in t["intents"] for i in ("Designing", "Planning")):
-                modes["Creative partner"] += mins
-            elif any(i in t["intents"] for i in ("Researching", "Investigating", "Navigating")):
-                modes["Research assistant"] += mins
-            elif "Iterating" in t["intents"]:
-                modes["Refinement partner"] += mins
-            else:
-                modes["Builder"] += mins
+                continue
+            # Trivial turns → grunt work
+            if t["is_trivial"]:
+                modes["Grunt work handled"] = modes.get("Grunt work handled", 0) + mins
+                continue
+            # Match against mode rules (first match wins)
+            matched = False
+            for mode_name, intent_set, _ in _QUALITY_MODES:
+                if any(i in intent_set for i in t["intents"]):
+                    modes[mode_name] += mins
+                    matched = True
+                    break
+            if not matched:
+                modes["Builder"] = modes.get("Builder", 0) + mins
 
-    return {k: round(v, 1) for k, v in modes.items()}
+    return {k: round(v, 1) for k, v in modes.items() if v > 0}
