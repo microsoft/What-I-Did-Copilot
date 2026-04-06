@@ -601,7 +601,7 @@ def _work_pattern(sessions: list) -> str:
 
 
 def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str:
-    """Section: 'How I Collaborated' — quality modes ring chart showing how Copilot contributed."""
+    """Section: 'How I Collaborated' — card grid showing how Copilot contributed."""
     from harvest import compute_active_time_quality, _QUALITY_COLORS
 
     if project_label_map is None:
@@ -623,78 +623,63 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
 
     sorted_modes = sorted(modes.items(), key=lambda x: -x[1])
 
-    # Build conic-gradient for ring chart
-    gradient_stops = []
-    cumulative = 0
-    for mode, mins in sorted_modes:
-        pct = mins / total * 100
-        color = _QUALITY_COLORS.get(mode, C["muted"])
-        gradient_stops.append(f"{color} {cumulative:.1f}% {cumulative + pct:.1f}%")
-        cumulative += pct
-    gradient = ", ".join(gradient_stops)
+    # Narrative stats
+    handholding_pct = round(modes.get("Needed hand-holding", 0) / total * 100)
+    grunt_pct = round(modes.get("Grunt work handled", 0) / total * 100)
+    high_value_pct = 100 - handholding_pct - grunt_pct
+    total_str = f"{total:.0f}m" if total < 60 else f"{total / 60:.1f}h"
 
-    # Build ring chart label segments (positioned around the ring)
-    ring_labels = ""
-    cumulative = 0
-    for mode, mins in sorted_modes:
-        pct = mins / total * 100
-        if pct < 5:
-            cumulative += pct
-            continue
-        # Position label at the midpoint of the arc
-        mid_angle = cumulative + pct / 2
-        # Convert to x,y on a circle (r=85, center=90,90)
-        import math
-        rad = math.radians(mid_angle * 3.6 - 90)  # -90 to start from top
-        lx = 90 + 62 * math.cos(rad)
-        ly = 90 + 62 * math.sin(rad)
-        ring_labels += (
-            f'<div style="position:absolute;left:{lx:.0f}px;top:{ly:.0f}px;'
-            f'transform:translate(-50%,-50%);font-size:9px;font-weight:700;'
-            f'color:{C["text"]};text-align:center;line-height:1.1;white-space:nowrap">'
-            f'{pct:.0f}%</div>')
-        cumulative += pct
+    # Hero insight banner — prominent, like "this is the team Copilot assembled"
+    hero = f"""
+        <div style="background:linear-gradient(135deg,{C['accent']},#005a9e);border-radius:8px;
+                    padding:16px 20px;margin-bottom:16px;color:#ffffff">
+          <div style="font-size:14px;font-weight:700;line-height:1.4;margin-bottom:6px">
+            {high_value_pct}% of your collaboration time was high-value work &mdash;
+            creating, researching, building, and refining.</div>
+          <div style="font-size:11px;opacity:0.85;line-height:1.5">"""
+    if grunt_pct > 0:
+        hero += f"Copilot automated <strong>{grunt_pct}%</strong> of routine grunt work. "
+    if handholding_pct > 0:
+        hero += (f"<strong>{handholding_pct}%</strong> was spent course-correcting AI output "
+                 f"&mdash; an area where future improvements would directly save you time.")
+    hero += f"""
+          </div>
+          <div style="font-size:10px;opacity:0.5;margin-top:6px">{total_str} active collaboration time</div>
+        </div>"""
 
-    # Legend with horizontal bars
-    legend = ""
-    for mode, mins in sorted_modes:
-        if mins < 0.5:
+    # Card grid — 2 columns × 3 rows, each card shows icon + label + % + time
+    cards = ""
+    for i, (mode, mins) in enumerate(sorted_modes):
+        if mins < 0.1:
             continue
         pct = mins / total * 100
         meta = MODE_META.get(mode, {"icon": "", "desc": ""})
         color = _QUALITY_COLORS.get(mode, C["muted"])
         mins_str = f"{mins:.0f}m" if mins < 60 else f"{mins / 60:.1f}h"
-        bar_width = max(pct, 3)
-        legend += (
-            f'<div style="display:flex;align-items:center;margin-bottom:8px">'
-            f'<div style="width:130px;font-size:10px;font-weight:600;color:{C["text"]};'
-            f'white-space:nowrap;flex-shrink:0">{meta["icon"]} {mode}</div>'
-            f'<div style="flex:1;margin:0 10px">'
-            f'<div style="width:{bar_width:.0f}%;background:{color};height:14px;'
-            f'border-radius:3px;min-width:4px"></div></div>'
-            f'<div style="width:45px;font-size:11px;font-weight:700;color:{C["accent"]};'
-            f'text-align:right;flex-shrink:0">{pct:.0f}%</div>'
-            f'<div style="width:40px;font-size:10px;color:{C["muted"]};text-align:right;'
-            f'flex-shrink:0;margin-left:6px">{mins_str}</div>'
-            f'</div>')
 
-    # Narrative insight
-    handholding_pct = round(modes.get("Needed hand-holding", 0) / total * 100)
-    grunt_pct = round(modes.get("Grunt work handled", 0) / total * 100)
-    high_value_pct = 100 - handholding_pct - grunt_pct
-    top_mode = sorted_modes[0][0] if sorted_modes else ""
+        # Accent bar on the left edge of each card
+        cards += f"""
+          <td style="padding:4px;width:50%;vertical-align:top">
+            <div style="border-left:4px solid {color};border:1px solid {C['border']};
+                        border-left:4px solid {color};border-radius:6px;padding:10px 12px;
+                        background:{C['card']};height:60px">
+              <div style="display:flex;align-items:center;margin-bottom:4px">
+                <span style="font-size:16px;margin-right:6px">{meta['icon']}</span>
+                <span style="font-size:11px;font-weight:700;color:{C['text']}">{mode}</span>
+                <span style="font-size:14px;font-weight:800;color:{color};margin-left:auto">
+                  {pct:.0f}%</span>
+              </div>
+              <div style="font-size:10px;color:{C['muted']};line-height:1.3">
+                {meta['desc']} &middot; {mins_str}</div>
+            </div>
+          </td>"""
+        # Close row every 2 cards
+        if i % 2 == 1:
+            cards += "</tr><tr>"
 
-    insight = (
-        f'<strong style="color:{C["text"]}">{high_value_pct}%</strong> of your time was in '
-        f'high-value work (creating, researching, building, refining). '
-    )
-    if grunt_pct > 0:
-        insight += f'Copilot handled <strong>{grunt_pct}%</strong> of routine grunt work. '
-    if handholding_pct > 0:
-        insight += (f'<span style="color:{_QUALITY_COLORS.get("Needed hand-holding", C["muted"])}">'
-                    f'{handholding_pct}%</span> was spent course-correcting AI output.')
-
-    total_str = f"{total:.0f}m" if total < 60 else f"{total / 60:.1f}h"
+    # Pad if odd number of cards
+    if len([m for m in sorted_modes if m[1] >= 0.1]) % 2 == 1:
+        cards += '<td style="padding:4px"></td>'
 
     return f"""
   <tr>
@@ -704,34 +689,12 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
                     color:rgba(255,255,255,0.7)">How I Collaborated</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-          {total_str} of active time &mdash; classified by how Copilot contributed</div>
+          What Copilot did with your active time</div>
       </td></tr></table>
       <div style="padding:14px 24px 16px">
-        <div style="font-size:11px;color:{C['muted']};margin-bottom:14px;line-height:1.5">
-          {insight}
-        </div>
-        <table cellpadding="0" cellspacing="0" width="100%">
-          <tr>
-            <td style="width:190px;vertical-align:middle;text-align:center;padding-right:20px">
-              <div style="width:180px;height:180px;border-radius:50%;
-                          background:conic-gradient({gradient});
-                          display:inline-block;position:relative">
-                <div style="position:absolute;top:35px;left:35px;width:110px;height:110px;
-                            border-radius:50%;background:{C['card']}">
-                  <div style="text-align:center;padding-top:32px">
-                    <div style="font-size:24px;font-weight:800;color:{C['accent']};line-height:1">
-                      {high_value_pct}%</div>
-                    <div style="font-size:8px;font-weight:600;color:{C['muted']};text-transform:uppercase;
-                                letter-spacing:0.5px;margin-top:3px">high-value<br>work</div>
-                  </div>
-                </div>
-                {ring_labels}
-              </div>
-            </td>
-            <td style="vertical-align:middle">
-              {legend}
-            </td>
-          </tr>
+        {hero}
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>{cards}</tr>
         </table>
       </div>
     </td>
