@@ -122,14 +122,11 @@ def _kpi_card(value: str, label: str, sub: str = "") -> str:
 
 def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 0, total_commits: int = 0) -> str:
     total_human_h   = sum(g.get("human_hours", 0) for g in goals)
-    n_goals         = len(goals)
     lines_added     = analysis.get("lines_added", 0)
     lines_removed   = analysis.get("lines_removed", 0)
     active_days     = max(1, len(analysis.get("active_dates", ["x"])))
 
     # Total active engagement time across all sessions.
-    # Deduplicate by (date, normalized_project) key since both the original and
-    # the normalized project name appear as separate keys in session_metrics.
     _seen_metric_keys: set = set()
     total_active_min = 0
     for _key, _m in analysis.get("session_metrics", {}).items():
@@ -144,20 +141,26 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
             continue
         _seen_metric_keys.add(_canon_key)
         total_active_min += _m.get("active_minutes", 0)
-    if total_active_min >= 60:
-        active_sub = f"{total_active_min / 60:.1f}h active time"
-    else:
-        active_sub = f"{total_active_min:.0f}m active time"
 
-    # Speed multiplier: human effort / active time
+    # Active time display
+    if total_active_min >= 60:
+        active_val = f"{total_active_min / 60:.1f}h"
+    else:
+        active_val = f"{total_active_min:.0f}m"
+    active_sub = f"{active_days} active day{'s' if active_days != 1 else ''}"
+
+    # Speed multiplier
     if total_active_min > 0:
         speed_x = total_human_h / (total_active_min / 60)
-        speed_label = f"{speed_x:.1f}&times; faster"
+        speed_val = f"{speed_x:.1f}×"
     else:
-        speed_label = ""
+        speed_val = "—"
 
+    # Human effort
     h_str = _fmt_h(total_human_h)
-    days_label = f"{active_days}"
+    effort_sub = (f'<a href="#evidence-hdr" style="color:{C["accent"]};'
+                  f'text-decoration:none;font-size:9px" onclick="toggleDetail(\'evidence\');'
+                  f'return false;">see evidence &#9656;</a>')
 
     # Code impact
     if lines_added or lines_removed:
@@ -171,27 +174,17 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
     pr_commit_val = f"{total_prs}"
     pr_commit_sub = f"{total_commits} commit{'s' if total_commits != 1 else ''}"
 
-    effort_sub = speed_label
-    if speed_label:
-        effort_sub += (f' · <a href="#evidence-hdr" style="color:{C["accent"]};'
-                       f'text-decoration:none;font-size:9px" onclick="toggleDetail(\'evidence\');'
-                       f'return false;">see evidence &#9656;</a>')
-    else:
-        effort_sub = (f'<a href="#evidence-hdr" style="color:{C["accent"]};'
-                      f'text-decoration:none;font-size:9px" onclick="toggleDetail(\'evidence\');'
-                      f'return false;">see evidence &#9656;</a>')
-
     return f"""
   <tr>
     <td style="background:{C['bg']};padding:12px 24px;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <table width="100%" cellpadding="0" cellspacing="0">
         <tr>
-          {_kpi_card(str(n_goals), "Projects<br>Assisted", f"{n_sessions} sessions")}
           {_kpi_card(h_str, "Human Effort<br>Equivalent", effort_sub)}
+          {_kpi_card(active_val, "Active<br>Time", active_sub)}
+          {_kpi_card(speed_val, "Speed<br>Multiplier", "vs. unassisted expert")}
           {_kpi_card(code_val, "Lines of Code<br>Added", code_sub)}
           {_kpi_card(pr_commit_val, "PRs<br>Merged", pr_commit_sub)}
-          {_kpi_card(days_label, "Active Days", active_sub)}
         </tr>
       </table>
     </td>
