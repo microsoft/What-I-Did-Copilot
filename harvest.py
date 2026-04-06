@@ -451,3 +451,83 @@ def aggregate_intents(sessions: list) -> dict:
         "timeline": timeline,
         "total": sum(totals.values()),
     }
+
+
+def compute_active_time_quality(sessions: list) -> dict:
+    """Classify active time into quality modes showing how Copilot contributed.
+
+    Returns dict with mode_name → minutes for:
+      Creative partner    — design, strategy, architecture (Designing + Planning)
+      Research assistant   — explored options, investigated problems (Researching + Investigating)
+      Builder              — heavy lifting: wrote code, ran commands (Building + tools)
+      Refinement partner   — iterating, polishing, getting it right (Iterating)
+      Needed hand-holding  — errors, retries, fixing Copilot's mistakes
+      Grunt work handled   — routine: git, config, installs (Shipping + Configuring + trivial)
+    """
+    from datetime import datetime as _dt
+
+    _ERROR_RX = _re.compile(
+        r'\b(error|fail|exception|traceback|broken|crash|UnicodeError|SyntaxError|KeyError'
+        r'|TypeError|ModuleNotFound|ImportError|rejected|denied)\b', _re.I)
+
+    modes = {
+        "Creative partner":    0.0,
+        "Research assistant":  0.0,
+        "Builder":             0.0,
+        "Refinement partner":  0.0,
+        "Needed hand-holding": 0.0,
+        "Grunt work handled":  0.0,
+    }
+
+    for s in sessions:
+        user_turns = []
+        for m in s.get("messages", []):
+            if m.get("role") != "user":
+                continue
+            ts_str = m.get("timestamp", "")
+            try:
+                ts = _dt.fromisoformat(ts_str.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                ts = None
+
+            text = m.get("text", "").strip()
+            tools = m.get("tools_after", [])
+            intents = classify_message_intent(text)
+
+            # Detect error-fixing: error keywords in tool output descriptions
+            has_errors = any(_ERROR_RX.search(t) for t in tools)
+
+            # Detect trivial turn
+            first_line = text.split("\n")[0].strip()
+            is_trivial = len(first_line) < 20
+
+            user_turns.append({
+                "ts": ts, "intents": intents, "tools": len(tools),
+                "has_errors": has_errors, "is_trivial": is_trivial,
+            })
+
+        # Compute time per turn from timestamp gaps (capped at 5 min for idle)
+        for i in range(len(user_turns)):
+            if i < len(user_turns) - 1 and user_turns[i]["ts"] and user_turns[i + 1]["ts"]:
+                gap = (user_turns[i + 1]["ts"] - user_turns[i]["ts"]).total_seconds() / 60
+                user_turns[i]["minutes"] = min(gap, 5)
+            else:
+                user_turns[i]["minutes"] = 1  # last turn or missing timestamp
+
+        # Classify each turn into a mode
+        for t in user_turns:
+            mins = t["minutes"]
+            if t["has_errors"]:
+                modes["Needed hand-holding"] += mins
+            elif t["is_trivial"] or any(i in t["intents"] for i in ("Shipping", "Configuring")):
+                modes["Grunt work handled"] += mins
+            elif any(i in t["intents"] for i in ("Designing", "Planning")):
+                modes["Creative partner"] += mins
+            elif any(i in t["intents"] for i in ("Researching", "Investigating", "Navigating")):
+                modes["Research assistant"] += mins
+            elif "Iterating" in t["intents"]:
+                modes["Refinement partner"] += mins
+            else:
+                modes["Builder"] += mins
+
+    return {k: round(v, 1) for k, v in modes.items()}

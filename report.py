@@ -762,6 +762,104 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
   </tr>"""
 
 
+def _active_time_quality(sessions: list) -> str:
+    """Section: 'How Copilot Spent Your Time' — stacked bar showing quality modes."""
+    from harvest import compute_active_time_quality
+
+    modes = compute_active_time_quality(sessions)
+    total = sum(modes.values())
+    if total < 1:
+        return ""
+
+    MODE_META = {
+        "Creative partner":    {"icon": "&#127912;", "color": "#7b1fa2", "desc": "Design, strategy, architecture"},
+        "Research assistant":  {"icon": "&#128300;", "color": "#1a7f37", "desc": "Exploring options, investigating"},
+        "Builder":             {"icon": "&#128679;", "color": "#0078d4", "desc": "Writing code, generating files"},
+        "Refinement partner":  {"icon": "&#128260;", "color": "#0969da", "desc": "Iterating, polishing, improving"},
+        "Needed hand-holding": {"icon": "&#128295;", "color": "#e65100", "desc": "Errors, retries, course-correcting AI"},
+        "Grunt work handled":  {"icon": "&#9889;",   "color": "#6a737d", "desc": "Git ops, config, installs, routine"},
+    }
+
+    # Sort by minutes descending
+    sorted_modes = sorted(modes.items(), key=lambda x: -x[1])
+
+    # Build stacked bar
+    bar_cells = ""
+    for mode, mins in sorted_modes:
+        if mins < 0.5:
+            continue
+        pct = mins / total * 100
+        meta = MODE_META.get(mode, {"color": C["muted"]})
+        bar_cells += (f'<td style="width:{pct:.1f}%;background:{meta["color"]};height:18px;'
+                      f'font-size:0;padding:0"></td>')
+
+    # Build legend rows
+    legend = ""
+    for mode, mins in sorted_modes:
+        if mins < 0.5:
+            continue
+        pct = mins / total * 100
+        meta = MODE_META.get(mode, {"icon": "", "color": C["muted"], "desc": ""})
+        mins_str = f"{mins:.0f}m" if mins < 60 else f"{mins / 60:.1f}h"
+        legend += (
+            f'<tr>'
+            f'<td style="padding:4px 0;width:14px;vertical-align:middle">'
+            f'<span style="display:inline-block;width:10px;height:10px;background:{meta["color"]};'
+            f'border-radius:2px"></span></td>'
+            f'<td style="padding:4px 8px;font-size:11px;font-weight:600;color:{C["text"]};'
+            f'white-space:nowrap;vertical-align:middle">{meta["icon"]} {mode}</td>'
+            f'<td style="padding:4px 8px;font-size:11px;color:{C["accent"]};font-weight:700;'
+            f'text-align:right;vertical-align:middle">{mins_str}</td>'
+            f'<td style="padding:4px 8px;font-size:10px;color:{C["muted"]};vertical-align:middle">'
+            f'{pct:.0f}% &mdash; {meta["desc"]}</td>'
+            f'</tr>'
+        )
+
+    # Narrative insight
+    top_mode = sorted_modes[0][0] if sorted_modes else ""
+    top_pct = round(sorted_modes[0][1] / total * 100) if sorted_modes else 0
+    handholding_pct = round(modes.get("Needed hand-holding", 0) / total * 100)
+    grunt_pct = round(modes.get("Grunt work handled", 0) / total * 100)
+    high_value_pct = 100 - handholding_pct - grunt_pct
+
+    insight = (
+        f'<strong style="color:{C["text"]}">{high_value_pct}%</strong> of your time was in '
+        f'high-value work (creating, researching, building, refining). '
+    )
+    if grunt_pct > 0:
+        insight += f'Copilot handled <strong>{grunt_pct}%</strong> of routine grunt work automatically. '
+    if handholding_pct > 0:
+        insight += (f'<span style="color:{MODE_META["Needed hand-holding"]["color"]}">'
+                    f'{handholding_pct}%</span> was spent course-correcting AI output.')
+
+    total_str = f"{total:.0f}m" if total < 60 else f"{total / 60:.1f}h"
+
+    return f"""
+  <tr>
+    <td style="background:{C['card']};padding:0;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">How Copilot Spent Your Time</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          {total_str} of active collaboration &mdash; classified by how Copilot contributed</div>
+      </td></tr></table>
+      <div style="padding:14px 24px 16px">
+        <div style="font-size:11px;color:{C['muted']};margin-bottom:12px;line-height:1.5">
+          {insight}
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-radius:6px;overflow:hidden;margin-bottom:14px">
+          <tr>{bar_cells}</tr>
+        </table>
+        <table cellpadding="0" cellspacing="0" width="100%">
+          {legend}
+        </table>
+      </div>
+    </td>
+  </tr>"""
+
+
 def _skills_mobilized(goals: list) -> str:
     """Ranked horizontal bar chart of professional roles by hours of assistance."""
     from collections import defaultdict
@@ -2208,6 +2306,9 @@ window.onload = function() {
 
   <!-- 3. HOW I WORKED WITH COPILOT (intent) -->
   {_collaboration_intent(sessions, project_label_map)}
+
+  <!-- 3b. HOW COPILOT SPENT YOUR TIME -->
+  {_active_time_quality(sessions)}
 
   <!-- 4. WHEN I WORKED WITH COPILOT -->
   {_work_pattern(sessions)}
