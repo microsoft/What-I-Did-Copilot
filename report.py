@@ -122,14 +122,11 @@ def _kpi_card(value: str, label: str, sub: str = "") -> str:
 
 def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 0, total_commits: int = 0) -> str:
     total_human_h   = sum(g.get("human_hours", 0) for g in goals)
-    n_goals         = len(goals)
     lines_added     = analysis.get("lines_added", 0)
     lines_removed   = analysis.get("lines_removed", 0)
     active_days     = max(1, len(analysis.get("active_dates", ["x"])))
 
     # Total active engagement time across all sessions.
-    # Deduplicate by (date, normalized_project) key since both the original and
-    # the normalized project name appear as separate keys in session_metrics.
     _seen_metric_keys: set = set()
     total_active_min = 0
     for _key, _m in analysis.get("session_metrics", {}).items():
@@ -144,13 +141,26 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
             continue
         _seen_metric_keys.add(_canon_key)
         total_active_min += _m.get("active_minutes", 0)
-    if total_active_min >= 60:
-        active_sub = f"{total_active_min / 60:.1f}h active time"
-    else:
-        active_sub = f"{total_active_min:.0f}m active time"
 
+    # Active time display
+    if total_active_min >= 60:
+        active_val = f"{total_active_min / 60:.1f}h"
+    else:
+        active_val = f"{total_active_min:.0f}m"
+    active_sub = f"{active_days} active day{'s' if active_days != 1 else ''}"
+
+    # Speed multiplier
+    if total_active_min > 0:
+        speed_x = total_human_h / (total_active_min / 60)
+        speed_val = f"{speed_x:.1f}×"
+    else:
+        speed_val = "—"
+
+    # Human effort
     h_str = _fmt_h(total_human_h)
-    days_label = f"{active_days}"
+    effort_sub = (f'<a href="#evidence-hdr" style="color:{C["accent"]};'
+                  f'text-decoration:none;font-size:9px" onclick="toggleDetail(\'evidence\');'
+                  f'return false;">see evidence &#9656;</a>')
 
     # Code impact
     if lines_added or lines_removed:
@@ -170,14 +180,11 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <table width="100%" cellpadding="0" cellspacing="0">
         <tr>
-          {_kpi_card(str(n_goals), "Projects<br>Assisted", f"{n_sessions} sessions")}
-          {_kpi_card(h_str, "Human Effort<br>Equivalent",
-                    f'@ ${HOURLY_RATE}/hr · <a href="#evidence-hdr" style="color:{C["accent"]};'
-                    f'text-decoration:none;font-size:9px" onclick="toggleDetail(\'evidence\');'
-                    f'return false;">see evidence &#9656;</a>')}
+          {_kpi_card(h_str, "Human Effort<br>Equivalent", effort_sub)}
+          {_kpi_card(active_val, "Active<br>Time", active_sub)}
+          {_kpi_card(speed_val, "Speed<br>Multiplier", "vs. unassisted expert")}
           {_kpi_card(code_val, "Lines of Code<br>Added", code_sub)}
           {_kpi_card(pr_commit_val, "PRs<br>Merged", pr_commit_sub)}
-          {_kpi_card(days_label, "Active Days", active_sub)}
         </tr>
       </table>
     </td>
@@ -594,125 +601,91 @@ def _work_pattern(sessions: list) -> str:
 
 
 def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str:
-    """Section: 'How I Collaborated' — intent donut chart with per-project breakdowns."""
-    from harvest import aggregate_intents
-    import harvest as _harvest
+    """Section: 'How I Collaborated' — card grid showing how Copilot contributed."""
+    from harvest import compute_active_time_quality, _QUALITY_COLORS
 
     if project_label_map is None:
         project_label_map = {}
 
-    # Prefer intent metadata from `harvest` when available; fall back to empty mappings.
-    _INTENT_COLORS = getattr(_harvest, "_INTENT_COLORS", {})
-    _INTENT_ICONS  = getattr(_harvest, "_INTENT_ICONS", {})
-
-    intent_data = aggregate_intents(sessions)
-    counts = intent_data["counts"]
-    by_project_raw = intent_data["by_project"]
-    total = intent_data["total"]
-
-    # Remap raw project names to consistent goal labels when possible.
-    # If no mapping exists for a project, preserve its raw name so the
-    # per-project breakdown is not dropped when `project_label_map` is empty
-    # or incomplete.
-    by_project = {}
-    for raw_name, pcounts in by_project_raw.items():
-        display = project_label_map.get(raw_name) or raw_name
-        if display in by_project:
-            for cat, n in pcounts.items():
-                by_project[display][cat] = by_project[display].get(cat, 0) + n
-        else:
-            by_project[display] = dict(pcounts)
-
-    if total == 0:
+    modes = compute_active_time_quality(sessions)
+    total = sum(modes.values())
+    if total < 1:
         return ""
 
-    # Sort categories by count descending, take top 6
-    sorted_cats = sorted(counts.items(), key=lambda x: -x[1])
-    if len(sorted_cats) > 6:
-        top = sorted_cats[:5]
-        other_count = sum(v for _, v in sorted_cats[5:])
-        top.append(("Other", other_count))
-    else:
-        top = sorted_cats
+    MODE_META = {
+        "Creative partner":    {"icon": "&#127912;", "desc": "Design, strategy, architecture"},
+        "Research assistant":  {"icon": "&#128300;", "desc": "Exploring options, investigating"},
+        "Builder":             {"icon": "&#128679;", "desc": "Writing code, generating files"},
+        "Refinement partner":  {"icon": "&#128260;", "desc": "Iterating, polishing, improving"},
+        "Needed hand-holding": {"icon": "&#128295;", "desc": "Errors, retries, course-correcting AI"},
+        "Grunt work handled":  {"icon": "&#9889;",   "desc": "Git ops, config, installs, routine"},
+    }
 
-    # Build conic-gradient stops for donut chart
-    gradient_stops = []
-    cumulative = 0
-    for cat, n in top:
-        pct = n / total * 100
-        color = _INTENT_COLORS.get(cat, C["muted"])
-        gradient_stops.append(f"{color} {cumulative:.1f}% {cumulative + pct:.1f}%")
-        cumulative += pct
-    gradient = ", ".join(gradient_stops)
+    sorted_modes = sorted(modes.items(), key=lambda x: -x[1])
 
-    # Legend items — vertical list beside the donut
-    legend_rows = ""
-    for cat, n in top:
-        pct = n / total * 100
-        if n == 0:
-            continue
-        color = _INTENT_COLORS.get(cat, C["muted"])
-        icon = _INTENT_ICONS.get(cat, "&#128161;")
-        legend_rows += (
-            f'<div style="display:flex;align-items:center;margin-bottom:6px">'
-            f'<span style="display:inline-block;width:10px;height:10px;background:{color};'
-            f'border-radius:2px;margin-right:8px;flex-shrink:0"></span>'
-            f'<span style="font-size:11px;font-weight:600;color:{C["text"]};'
-            f'margin-right:6px;white-space:nowrap">{icon} {cat}</span>'
-            f'<span style="font-size:10px;color:{C["muted"]};white-space:nowrap">'
-            f'{n} ({pct:.0f}%)</span>'
-            f'</div>'
-        )
+    # Narrative stats — compute raw fractions first, round once, clamp to avoid
+    # drift from independent rounding of each term.
+    handholding_raw = modes.get("Needed hand-holding", 0) / total * 100
+    grunt_raw = modes.get("Grunt work handled", 0) / total * 100
+    high_value_raw = 100 - handholding_raw - grunt_raw
+    handholding_pct = round(handholding_raw)
+    grunt_pct = round(grunt_raw)
+    high_value_pct = max(0, min(100, round(high_value_raw)))
+    total_str = f"{total:.0f}m" if total < 60 else f"{total / 60:.1f}h"
+    n_modes = len([m for m in sorted_modes if m[1] >= 0.1])
 
-    # Top intent insight line
-    top_cat, top_n = top[0]
-    top_pct = round(top_n / total * 100)
-    n_modes = len([c for c, n in top if n > 0])
-    insight = (
-        f'Worked across <strong style="color:{C["text"]}">{n_modes} collaboration modes</strong>. '
-        f'Primary mode: <strong style="color:{_INTENT_COLORS.get(top_cat, C["accent"])}">'
-        f'{top_cat}</strong> ({top_pct}% of interactions)'
-    )
+    # Headline insight
+    headline = (f"{high_value_pct}% of your collaboration was high-value work "
+                f"&mdash; creating, researching, building, and refining.")
+    sub_parts = []
+    if grunt_pct > 0:
+        sub_parts.append(f"Copilot automated {grunt_pct}% of routine grunt work")
+    if handholding_pct > 0:
+        sub_parts.append(f"{handholding_pct}% was spent course-correcting AI output")
+    subtitle = " &middot; ".join(sub_parts) if sub_parts else ""
 
-    # Per-project mini-bars (only if multiple projects)
-    project_bars_html = ""
-    if len(by_project) > 1:
-        proj_rows = ""
-        for proj, pcounts in sorted(by_project.items(), key=lambda x: -sum(x[1].values())):
-            ptotal = sum(pcounts.values())
-            if ptotal == 0:
-                continue
-            proj_sorted = sorted(pcounts.items(), key=lambda x: -x[1])
-            proj_bar = ""
-            for cat, n in proj_sorted:
-                pct = n / ptotal * 100
-                if pct < 3:
-                    continue
-                color = _INTENT_COLORS.get(cat, C["muted"])
-                proj_bar += (
-                    f'<td style="width:{pct:.1f}%;background:{color};height:12px;'
-                    f'font-size:0;padding:0"></td>'
-                )
-            top2 = [f'{c} {round(n/ptotal*100)}%' for c, n in proj_sorted[:2] if n > 0]
-            proj_rows += (
-                f'<tr>'
-                f'<td style="padding:4px 10px 4px 0;font-size:10px;font-weight:600;'
-                f'color:{C["text"]};white-space:nowrap;width:120px;vertical-align:middle">{proj}</td>'
-                f'<td style="padding:4px 0;vertical-align:middle">'
-                f'<table width="100%" cellpadding="0" cellspacing="0" '
-                f'style="border-radius:4px;overflow:hidden"><tr>{proj_bar}</tr></table></td>'
-                f'<td style="padding:4px 0 4px 10px;font-size:9px;color:{C["muted"]};'
-                f'white-space:nowrap;width:140px;vertical-align:middle">{" · ".join(top2)}</td>'
-                f'</tr>'
-            )
+    # Card grid — build explicit <tr> rows to avoid mismatched nesting.
+    visible = [(mode, mins) for mode, mins in sorted_modes if mins >= 0.1]
+    grid_rows = []
+    for pair_start in range(0, len(visible), 2):
+        pair = visible[pair_start:pair_start + 2]
+        cells = ""
+        for mode, mins in pair:
+            pct = mins / total * 100
+            meta = MODE_META.get(mode, {"icon": "", "desc": ""})
+            color = _QUALITY_COLORS.get(mode, C["muted"])
+            mins_str = f"{mins:.0f}m" if mins < 60 else f"{mins / 60:.1f}h"
+            bar_width = max(pct, 4)
+            cells += f"""
+          <td style="padding:5px;width:50%;vertical-align:top">
+            <table width="100%" cellpadding="0" cellspacing="0"
+                   style="border:1px solid {C['border']};border-left:4px solid {color};
+                          border-radius:6px;overflow:hidden">
+              <tr>
+                <td style="padding:10px 12px">
+                  <div style="display:flex;align-items:baseline;margin-bottom:6px">
+                    <span style="font-size:18px;margin-right:6px">{meta['icon']}</span>
+                    <span style="font-size:12px;font-weight:700;color:{C['text']}">{mode}</span>
+                    <span style="font-size:16px;font-weight:800;color:{color};margin-left:auto">
+                      {pct:.0f}%</span>
+                  </div>
+                  <div style="background:{C['bg']};border-radius:3px;height:8px;margin-bottom:6px;
+                              overflow:hidden">
+                    <div style="width:{bar_width:.0f}%;background:{color};height:100%;
+                                border-radius:3px"></div>
+                  </div>
+                  <div style="font-size:11px;color:{C['muted']};line-height:1.3">
+                    {meta['desc']} &middot; <strong style="color:{C['text']}">{mins_str}</strong></div>
+                </td>
+              </tr>
+            </table>
+          </td>"""
+        # Pad last row if it has only one card
+        if len(pair) == 1:
+            cells += '<td style="padding:5px;width:50%"></td>'
+        grid_rows.append(f"<tr>{cells}</tr>")
 
-        if proj_rows:
-            project_bars_html = f"""
-            <div style="border-top:1px solid {C['border']};margin-top:14px;padding-top:10px">
-              <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
-                          color:{C['muted']};margin-bottom:6px">By Project</div>
-              <table width="100%" cellpadding="0" cellspacing="0">{proj_rows}</table>
-            </div>"""
+    grid_html = "\n          ".join(grid_rows)
 
     return f"""
   <tr>
@@ -722,34 +695,16 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
         <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
                     color:rgba(255,255,255,0.7)">How I Collaborated</div>
         <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-          Intent behind every interaction &mdash; from research to shipping</div>
+          The different types of work Copilot handled for you</div>
       </td></tr></table>
-      <div style="padding:14px 24px 16px">
-        <div style="font-size:11px;color:{C['muted']};margin-bottom:14px;line-height:1.5">
-          {insight}
-        </div>
-        <table cellpadding="0" cellspacing="0" width="100%">
-          <tr>
-            <td style="width:140px;vertical-align:middle;text-align:center;padding-right:20px">
-              <div style="width:130px;height:130px;border-radius:50%;
-                          background:conic-gradient({gradient});
-                          display:inline-block;position:relative">
-                <div style="position:absolute;top:25px;left:25px;width:80px;height:80px;
-                            border-radius:50%;background:{C['card']}">
-                  <div style="text-align:center;padding-top:22px">
-                    <div style="font-size:22px;font-weight:800;color:{C['accent']};line-height:1">{total}</div>
-                    <div style="font-size:8px;font-weight:600;color:{C['muted']};text-transform:uppercase;
-                                letter-spacing:0.5px;margin-top:2px">interactions</div>
-                  </div>
-                </div>
-              </div>
-            </td>
-            <td style="vertical-align:middle;padding-left:10px">
-              {legend_rows}
-            </td>
-          </tr>
+      <div style="padding:16px 24px 18px">
+        <div style="font-size:14px;font-weight:700;color:{C['text']};margin-bottom:4px;line-height:1.4">
+          {headline}</div>
+        <div style="font-size:11px;color:{C['muted']};margin-bottom:16px">
+          {total_str} of active collaboration across {n_modes} modes &middot; {subtitle}</div>
+        <table width="100%" cellpadding="0" cellspacing="0">
+          {grid_html}
         </table>
-        {project_bars_html}
       </div>
     </td>
   </tr>"""

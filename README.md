@@ -13,9 +13,6 @@
 
 ---
 
-> **"In March, Copilot delivered $4,380 worth of professional services for a $39/mo seat — a 112× return on investment."**
-> — *Real output from this tool*
-
 *"Where did the tokens go? What am I actually building with Copilot? Am I accessing skills I didn't have before?"*
 
 If you can't answer these confidently, you're not alone. Most developers know Copilot helps — but can't show *how much*, *at what*, or *why it matters*. This tool turns your local session logs into a single report that makes the invisible visible — what got built, what skills were augmented, and what it would have cost to do it alone.
@@ -166,5 +163,7 @@ See [`.github/agents/whatidid.agent.md`](.github/agents/whatidid.agent.md) for t
 MIT
 
 ---
+
+> ⭐ **If you find this useful, consider [starring the repo](https://github.com/microsoft/What-I-Did-Copilot)** — it helps others discover it and signals to the community that research-grounded AI productivity tools matter.
 
 <sub>**Keywords:** GitHub Copilot ROI, Copilot usage report, Copilot activity tracker, AI productivity metrics, token usage analysis, Copilot impact measurement, developer productivity, AI-assisted development analytics</sub>

@@ -451,3 +451,111 @@ def aggregate_intents(sessions: list) -> dict:
         "timeline": timeline,
         "total": sum(totals.values()),
     }
+
+
+def _load_quality_config() -> tuple:
+    """Load active time quality classification from prompts/active_time_quality.txt."""
+    path = Path(__file__).parent / "prompts" / "active_time_quality.txt"
+    user_rx = None
+    tool_rx = None
+    modes_order = []  # [(name, intents_set, desc)]
+    colors = {}
+    section = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            section = line.strip("[]")
+            continue
+        if section == "hand_holding_user_patterns":
+            user_rx = _re.compile(line, _re.I)
+        elif section == "hand_holding_tool_patterns":
+            tool_rx = _re.compile(line, _re.I)
+        elif section == "modes":
+            parts = [p.strip() for p in line.split("|", 2)]
+            if len(parts) == 3:
+                name, intents_str, desc = parts
+                intents = set(i.strip() for i in intents_str.split(","))
+                modes_order.append((name, intents, desc))
+        elif section == "mode_colors":
+            parts = [p.strip() for p in line.split("|", 1)]
+            if len(parts) == 2:
+                colors[parts[0]] = parts[1]
+    return user_rx, tool_rx, modes_order, colors
+
+
+_QUALITY_USER_RX, _QUALITY_TOOL_RX, _QUALITY_MODES, _QUALITY_COLORS = _load_quality_config()
+
+
+def compute_active_time_quality(sessions: list) -> dict:
+    """Classify active time into quality modes showing how Copilot contributed.
+
+    Returns dict with mode_name → minutes. Uses two detection layers:
+    1. Hand-holding: user correcting Copilot OR error signals in tool output
+    2. Mode: based on intent classification of message content
+    """
+    from datetime import datetime as _dt
+
+    modes = {name: 0.0 for name, _, _ in _QUALITY_MODES}
+    modes["Needed hand-holding"] = 0.0
+
+    for s in sessions:
+        user_turns = []
+        for m in s.get("messages", []):
+            if m.get("role") != "user":
+                continue
+            ts_str = m.get("timestamp", "")
+            try:
+                ts = _dt.fromisoformat(ts_str.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                ts = None
+
+            text = m.get("text", "").strip()
+            tools = m.get("tools_after", [])
+            intents = classify_message_intent(text)
+            tools_text = " ".join(tools)
+
+            # Layer 1: hand-holding detection
+            user_correcting = bool(_QUALITY_USER_RX and _QUALITY_USER_RX.search(text[:300]))
+            tool_errors = bool(_QUALITY_TOOL_RX and _QUALITY_TOOL_RX.search(tools_text))
+            needs_handholding = user_correcting or tool_errors
+
+            # Detect trivial turn
+            first_line = text.split("\n")[0].strip()
+            is_trivial = len(first_line) < 20
+
+            user_turns.append({
+                "ts": ts, "intents": intents, "tools": len(tools),
+                "needs_handholding": needs_handholding, "is_trivial": is_trivial,
+            })
+
+        # Compute time per turn from timestamp gaps (capped at 5 min for idle)
+        for i in range(len(user_turns)):
+            if i < len(user_turns) - 1 and user_turns[i]["ts"] and user_turns[i + 1]["ts"]:
+                gap = (user_turns[i + 1]["ts"] - user_turns[i]["ts"]).total_seconds() / 60
+                user_turns[i]["minutes"] = min(gap, 5)
+            else:
+                user_turns[i]["minutes"] = 1
+
+        # Classify each turn
+        for t in user_turns:
+            mins = t["minutes"]
+            if t["needs_handholding"]:
+                modes["Needed hand-holding"] += mins
+                continue
+            # Trivial turns → grunt work
+            if t["is_trivial"]:
+                modes["Grunt work handled"] = modes.get("Grunt work handled", 0) + mins
+                continue
+            # Match against mode rules (first match wins)
+            matched = False
+            for mode_name, intent_set, _ in _QUALITY_MODES:
+                if any(i in intent_set for i in t["intents"]):
+                    modes[mode_name] += mins
+                    matched = True
+                    break
+            if not matched:
+                modes["Builder"] = modes.get("Builder", 0) + mins
+
+    return {k: round(v, 1) for k, v in modes.items() if v > 0}

@@ -1,0 +1,34 @@
+# Active Time Quality Classification
+# Classifies each user message into a mode showing how Copilot contributed.
+# Used by the "How I Collaborated" section in the report.
+#
+# Two detection layers:
+# 1. HAND-HOLDING: user correcting, redirecting, or Copilot producing errors
+# 2. MODE: based on intent classification of the message content
+
+[hand_holding_user_patterns]
+# User correcting or redirecting Copilot (regex, case-insensitive)
+\b(no|wrong|not what i|that.s not|didn.t work|try again|still broken|not right|instead|i said|i meant|i asked|that.s incorrect|you missed|go back|undo|revert|abort|stop|don.t|shouldn.t|not impressed|didn.t like|not what|why did you|the issue is|the problem is|that broke|you broke|can you fix|fix this|fix that|fix the|still not|i already told|read (my|the) (previous|last)|look at what i said)\b
+
+[hand_holding_tool_patterns]
+# Error signals in tool output (regex, case-insensitive)
+\b(error|fail|exception|traceback|broken|crash|UnicodeError|SyntaxError|KeyError|TypeError|ModuleNotFound|ImportError|rejected|denied|exited with exit code [1-9])\b
+
+[modes]
+# mode_name | intent_match | description
+# First matching rule wins. Hand-holding is checked before these rules.
+# Refinement BEFORE Builder — a message with both Iterating+Building intents
+# is refinement (e.g. "also add X" matches both patterns).
+Creative partner    | Designing,Planning      | Design, strategy, architecture
+Research assistant  | Researching,Investigating,Navigating | Exploring options, investigating
+Refinement partner  | Iterating               | Iterating, polishing, improving
+Builder             | Building                | Writing code, generating files, running commands
+Grunt work handled  | Shipping,Configuring    | Git ops, config, installs, routine tasks
+
+[mode_colors]
+Creative partner    | #7b1fa2
+Research assistant  | #1a7f37
+Builder             | #0078d4
+Refinement partner  | #0969da
+Needed hand-holding | #e65100
+Grunt work handled  | #6a737d
