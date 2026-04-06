@@ -6,9 +6,10 @@
 # Split on first 2 pipes only (regex patterns contain | characters).
 # The regex is applied to the first 300 characters of each user message.
 # If no pattern matches, the message defaults to "Building".
-# IMPORTANT: Iterating is checked before Building. A message matching both
-# (e.g. "also add X") will be classified as Iterating, not Building.
-# Order matters: first match in the code wins for the quality mode assignment.
+# IMPORTANT: A message can match multiple categories. Iterating is checked
+# before Building so overlapping messages (e.g. "also add X") still include
+# Iterating first; downstream consumers that use only the first match treat it
+# as the primary intent.
 
 Iterating     | #0969da | \b(adjust|simplify|change the|not impressed|didn.t like|better|improve|also like|also add|also include|also ensure|refine|tweak|move this|swap|resize|reorder|reduce|remove the|instead|rather|prefer|make it|make that|make sure|ensure|i want|i need|i.d like|i.d love|i would like|i also|keep the|don.t remove|what about|how about|can you also|could you also|update the|modify|try a different)\b
 Building      | #0078d4 | \b(create|generate|implement|write|build|produce|set up|initialize|scaffold|install|open it|rerun|run)\b

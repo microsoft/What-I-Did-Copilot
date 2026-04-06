@@ -623,10 +623,14 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
 
     sorted_modes = sorted(modes.items(), key=lambda x: -x[1])
 
-    # Narrative stats
-    handholding_pct = round(modes.get("Needed hand-holding", 0) / total * 100)
-    grunt_pct = round(modes.get("Grunt work handled", 0) / total * 100)
-    high_value_pct = 100 - handholding_pct - grunt_pct
+    # Narrative stats — compute raw fractions first, round once, clamp to avoid
+    # drift from independent rounding of each term.
+    handholding_raw = modes.get("Needed hand-holding", 0) / total * 100
+    grunt_raw = modes.get("Grunt work handled", 0) / total * 100
+    high_value_raw = 100 - handholding_raw - grunt_raw
+    handholding_pct = round(handholding_raw)
+    grunt_pct = round(grunt_raw)
+    high_value_pct = max(0, min(100, round(high_value_raw)))
     total_str = f"{total:.0f}m" if total < 60 else f"{total / 60:.1f}h"
     n_modes = len([m for m in sorted_modes if m[1] >= 0.1])
 
@@ -640,18 +644,19 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
         sub_parts.append(f"{handholding_pct}% was spent course-correcting AI output")
     subtitle = " &middot; ".join(sub_parts) if sub_parts else ""
 
-    # Card grid — each mode gets a tile with icon, label, bold %, bar, time
-    cards = ""
-    for i, (mode, mins) in enumerate(sorted_modes):
-        if mins < 0.1:
-            continue
-        pct = mins / total * 100
-        meta = MODE_META.get(mode, {"icon": "", "desc": ""})
-        color = _QUALITY_COLORS.get(mode, C["muted"])
-        mins_str = f"{mins:.0f}m" if mins < 60 else f"{mins / 60:.1f}h"
-        bar_width = max(pct, 4)
-
-        cards += f"""
+    # Card grid — build explicit <tr> rows to avoid mismatched nesting.
+    visible = [(mode, mins) for mode, mins in sorted_modes if mins >= 0.1]
+    grid_rows = []
+    for pair_start in range(0, len(visible), 2):
+        pair = visible[pair_start:pair_start + 2]
+        cells = ""
+        for mode, mins in pair:
+            pct = mins / total * 100
+            meta = MODE_META.get(mode, {"icon": "", "desc": ""})
+            color = _QUALITY_COLORS.get(mode, C["muted"])
+            mins_str = f"{mins:.0f}m" if mins < 60 else f"{mins / 60:.1f}h"
+            bar_width = max(pct, 4)
+            cells += f"""
           <td style="padding:5px;width:50%;vertical-align:top">
             <table width="100%" cellpadding="0" cellspacing="0"
                    style="border:1px solid {C['border']};border-left:4px solid {color};
@@ -675,12 +680,12 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
               </tr>
             </table>
           </td>"""
-        if i % 2 == 1:
-            cards += "</tr><tr>"
+        # Pad last row if it has only one card
+        if len(pair) == 1:
+            cells += '<td style="padding:5px;width:50%"></td>'
+        grid_rows.append(f"<tr>{cells}</tr>")
 
-    # Pad if odd
-    if len([m for m in sorted_modes if m[1] >= 0.1]) % 2 == 1:
-        cards += '<td style="padding:5px"></td>'
+    grid_html = "\n          ".join(grid_rows)
 
     return f"""
   <tr>
@@ -698,7 +703,7 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
         <div style="font-size:11px;color:{C['muted']};margin-bottom:16px">
           {total_str} of active collaboration across {n_modes} modes &middot; {subtitle}</div>
         <table width="100%" cellpadding="0" cellspacing="0">
-          <tr>{cards}</tr>
+          {grid_html}
         </table>
       </div>
     </td>
