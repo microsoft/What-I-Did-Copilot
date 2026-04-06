@@ -17,10 +17,12 @@
 [modes]
 # mode_name | intent_match | description
 # First matching rule wins. Hand-holding is checked before these rules.
+# Refinement BEFORE Builder — a message with both Iterating+Building intents
+# is refinement (e.g. "also add X" matches both patterns).
 Creative partner    | Designing,Planning      | Design, strategy, architecture
 Research assistant  | Researching,Investigating,Navigating | Exploring options, investigating
-Builder             | Building                | Writing code, generating files, running commands
 Refinement partner  | Iterating               | Iterating, polishing, improving
+Builder             | Building                | Writing code, generating files, running commands
 Grunt work handled  | Shipping,Configuring    | Git ops, config, installs, routine tasks
 
 [mode_colors]
