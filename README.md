@@ -167,4 +167,6 @@ MIT
 
 ---
 
+> ⭐ **If you find this useful, consider [starring the repo](https://github.com/microsoft/What-I-Did-Copilot)** — it helps others discover it and signals to the community that research-grounded AI productivity tools matter.
+
 <sub>**Keywords:** GitHub Copilot ROI, Copilot usage report, Copilot activity tracker, AI productivity metrics, token usage analysis, Copilot impact measurement, developer productivity, AI-assisted development analytics</sub>
