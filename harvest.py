@@ -11,6 +11,13 @@ from pathlib import Path
 
 SESSION_DIR = Path.home() / ".copilot" / "session-state"
 
+_LOGIC_EXTS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java", ".cs",
+    ".cpp", ".c", ".h", ".hpp", ".sh", ".bash", ".zsh", ".ps1", ".rb",
+    ".php", ".r", ".sql", ".kt", ".swift", ".dart", ".scala", ".ex", ".exs",
+    ".vue", ".svelte", ".tf", ".hcl",
+}
+
 _APPROVALS = {
     "yes", "y", "yep", "yeah", "yup", "no", "n", "nope",
     "ok", "okay", "sure", "fine", "right", "correct",
@@ -220,6 +227,20 @@ def get_sessions_for_date(target_date: str) -> list:
         if all_modified and not shutdown_files:
             code_changes.setdefault("filesModified", sorted(all_modified))
 
+        # Split lines into logic vs boilerplate by file extension.
+        # Copilot sessions don't give per-file line counts, so estimate from
+        # the proportion of modified files with logic extensions.
+        total_lines = code_changes.get("linesAdded", 0)
+        if all_modified:
+            import os
+            logic_files = sum(1 for f in all_modified
+                              if os.path.splitext(f)[1].lower() in _LOGIC_EXTS)
+            logic_frac = logic_files / len(all_modified)
+        else:
+            logic_frac = 1.0  # no file info → assume all logic
+        lines_logic = round(total_lines * logic_frac)
+        lines_boilerplate = total_lines - lines_logic
+
         user_messages = [m for m in messages if m["role"] == "user"]
         if not user_messages:
             continue
@@ -247,6 +268,8 @@ def get_sessions_for_date(target_date: str) -> list:
             "workspace_summary": workspace.get("summary", ""),
             "tool_invocations":  sum(len(m.get("tools_after", [])) for m in messages if m["role"] == "user"),
             "files_touched":     sorted(all_modified),
+            "lines_logic":       lines_logic,
+            "lines_boilerplate": lines_boilerplate,
         })
 
     return sessions

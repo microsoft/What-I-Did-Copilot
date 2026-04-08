@@ -85,80 +85,76 @@ GOOD framing:
 RULE 3 — EFFORT ESTIMATES (research-calibrated)
 ═══════════════════════════════════════════
 
-human_hours = what a skilled professional would need WITHOUT Copilot assistance.
-Estimate realistically — what would an expert actually bill for this work?
+human_hours = what a skilled professional would need WITHOUT AI assistance.
 
-RESEARCH CONTEXT (Alaswad et al. 2026, Cambon et al. 2023, Ziegler et al. 2024):
-- LLM-assisted work completes 1.4–4× faster than unassisted work (Microsoft studies)
-- 78% of tasks humans rated "high complexity" completed with <25% of human effort using LLM
-- BUT the human EQUIVALENT is what matters: reverse the speedup to estimate what it would take WITHOUT AI
-- No single metric captures effort — use MULTIPLE signals together (SPACE framework, Forsgren 2021)
-- Iteration count and oversight effort are the strongest new predictors of true complexity
+RESEARCH FOUNDATION:
+- LLM-assisted work completes 1.4–4× faster than unassisted work
+  (Cambon et al. 2023, Peng et al. 2023)
+- The human EQUIVALENT is what matters: reverse the speedup to get what
+  it would take without AI
+- Three signals independently explain AI-assisted effort (OLS, 48 days):
+    1. Conversation turns — each substantive turn = expert thinking
+    2. Logic code lines — .py/.ts/.go/.rs/.java/.sh only; HTML/CSS/JSON/MD excluded
+    3. Read/search calls — file reads + grep/glob/search; captures investigation
+- Boilerplate lines (HTML/CSS/JSON/MD/YAML) correlate NEGATIVELY with effort
+  (r=−0.14); logic lines r=+0.41
 
-Each session includes a SIGNALS block. USE IT to calibrate — do not ignore these numbers.
+THE FORMULA IS A FLOOR, NOT A CEILING.
+The deterministic formula (turns_h + lines_h + reads_h) gives the minimum
+plausible estimate based on mechanical counts. Your semantic judgment about
+QUALITY — what decisions were made, what expertise was required, what would
+an expert firm bill — should land AT OR ABOVE the formula floor, not below.
+The formula cannot see business value; you can.
 
-STEP 1 — Classify the task type using the SIGNALS block:
-  Mechanical (install, deploy, git push, config)    → 0.25-0.5h regardless of other signals
-  Research/Analysis (read-heavy tools, low edits)   → estimate from conversation turns × 5-10 min
-  Implementation (edit-heavy, lines added)           → estimate from lines ÷ 125 LoC/hr + research overhead
-  Debugging (run-heavy, high iteration depth)        → estimate from base + 50% debugging premium
-  Complex multi-step (balanced reads+edits+runs)     → use highest signal as base, apply multipliers
+STEP 1 — Classify task type:
+  Mechanical (install, deploy, git push, config)       → 0.25–0.5h max, always
+  Research/Analysis (read-heavy, low edits)             → active_minutes × 2–3 anchor
+  Implementation (edit-heavy, logic lines added)        → logic lines ÷ 100 LoC/hr + overhead
+  Debugging (run-heavy, high iteration)                 → base + 50% rework premium
+  Complex multi-step (balanced)                         → highest signal as floor, judgment upward
 
-STEP 2 — Compute base estimate from the STRONGEST primary signal:
-  Conversation turns (PRIMARY interaction signal — only SUBSTANTIVE turns count):
-    Trivial turns ('yes', 'commit', 'looks good', short confirmations) are excluded.
-    Each substantive turn ≈ 5-7 min of human thinking.
-    1-3 = 0.25h, 4-8 = 0.75h, 9-15 = 1.5h, 16-30 = 3h, 31-60 = 5h, 61-100 = 8h, 100+ = 10h
-  Tool invocations (WEIGHTED by action type — expert is more deliberate than AI):
-    The SIGNALS block shows the breakdown: reads, edits, runs.
-    reads (file views, searches) ≈ 0.3 min each — quick scan
-    edits (file edits, creates) ≈ 1.5 min each — expert makes fewer, targeted edits
-    runs (commands, tests) ≈ 0.75 min each — execution + glance at result
-    other (agent overhead, intent reporting) ≈ 0 min — not human work
-    Example: 200 tools (60 reads, 40 edits, 30 runs, 70 other) =
-      60×0.3 + 40×1.5 + 30×0.75 = 18+60+22.5 = 100.5 min = 1.7h
-  Active engagement time: active_minutes × 3 (midpoint of 1.4–4× research range, Cambon 2023)
-  Lines of code (ADDITIVE — added on top of the base, not part of max):
-    Expert writes 100-150 LoC/hr. 50-150 lines = 0.75h, 150-300 = 1.5h, 300-500 = 2.5h, 500+ = 4h+
-  Premium requests: USE ONLY when conversation turns = 0 (older sessions).
-    Premium requests include automated completions — they inflate wildly.
+STEP 2 — Estimate from multiple signals; use the HIGHEST as your base:
 
-  base = max(turns_h, tools_h, active_h)
-  total = (base × complexity multipliers, capped at 1.5×) + lines_h
+  ACTIVE TIME (primary real-world anchor):
+    active_minutes × 2 = conservative (routine/mechanical work, 1.4× lower bound)
+    active_minutes × 3 = standard (implementation, feature building)
+    active_minutes × 4 = generous (design, debugging, research, decision-making)
+    Example: 90 min active on feature design → 3–4h human equivalent.
 
-STEP 3 — Apply complexity multipliers from the SIGNALS block:
-  These reflect research findings that iteration, scope, and rework can MORE THAN DOUBLE
-  the base effort (Alaswad 2026: 22% of tasks took >180% expected effort):
+  CONVERSATION TURNS (substantive only — exclude 'yes'/'commit'/'ok'/confirmations):
+    1–3 = 0.25h  |  4–8 = 0.75h  |  9–15 = 1.5h  |  16–30 = 2.5–3h
+    31–60 = 3–5h  |  61–100 = 5–8h  |  100+ = 8–12h
+    Heavy iteration on the same problem → estimate toward the upper end of range.
 
-  Conversation turns > 15: +15% (Chen 2023: ambiguous tasks → lengthy dialogues)
-  Conversation turns > 40: +20% more (genuinely hard iterative problem-solving)
-  Iteration depth > 5 edits/file: +15% (Alaswad 2026: iterative reasoning cycles)
-  Iteration depth > 12 edits/file: +20% more (extensive debugging/rework)
-  Files touched > 3: +10% (Morcov 2020: integration overhead starts early)
-  Files touched > 10: +20% more (Tregubov 2017: 17% time lost to context-switching)
-  Engagement ratio < 10%: task was thinking-heavy — active_minutes understates true effort
-  Lines removed > 30% of lines added: refactoring work, add 10-20%
+  LOGIC CODE LINES (logic files ONLY — not boilerplate):
+    INCLUDE: .py .js .ts .jsx .tsx .go .rs .java .cs .cpp .c .sh .rb .sql .kt .swift
+    EXCLUDE: .html .css .json .md .yaml .yml .csv .xml .toml .lock
+    Expert writes 80–130 LoC/hr of logic code.
+    100 lines ≈ 1h  |  300 lines ≈ 2.5h  |  800 lines ≈ 6h
 
-  Maximum combined multiplier: ~2.2× — a heavily iterative, broad-scope, debugging-heavy
-  task can more than double the base estimate.
+  READ/SEARCH CALLS (investigation and analysis):
+    Heavy read sessions (40+ reads/searches) add 0.5–1h for navigation and judgment
+    even when no code was written.
 
-STEP 4 — Reality-check against anchors:
-  0.25h  — Trivial: install a package, run a CLI command, toggle a config, copy files, push to git
-  0.5h   — Simple: minor code edit, format/style tweak, rename, answer a question
-  0.75h  — Light: write a helper function, fix a known bug, small template change
-  1.0-1.5h — Moderate: implement a small feature, debug an unknown issue, draft a short document
-  2-3h   — Substantial: design + implement a feature, write a detailed report, complex data analysis
-  4-8h   — Major: architect a new module, build a complete tool, comprehensive multi-step research
-  8-16h  — Large: build a full system from scratch, multi-day design-implement-test cycle
+STEP 3 — Apply upward semantic adjustments based on transcript content:
+  Significant rework or debugging cycles:                    +25–50% on base
+  Broad scope (10+ files, multiple systems touched):         +20–30%
+  Architecturally significant decisions (APIs, schemas):     scale to upper anchors
+  Novel problem-solving (creative synthesis, not routine):   scale to upper anchors
+  Pure mechanical execution only:                            cap at 0.25–0.5h
+
+STEP 4 — Reality-check against outcome anchors:
+  0.25h    — Trivial: install package, run CLI command, toggle config, push to git
+  0.5h     — Simple: minor code edit, rename, format tweak, answer a question
+  1.0–1.5h — Moderate: implement small feature, debug known issue, draft short doc
+  2–4h     — Substantial: design + implement feature, complex analysis, detailed report
+  4–8h     — Major: architect new module, build complete tool, comprehensive research
+  8–16h    — Large: full system from scratch, multi-day design-implement-test cycle
 
 CAPS AND FLOORS:
-- Mechanical execution (installing, deploying, git ops, copying files) → 0.25-0.5h max always
-- If a session used <5 premium requests AND <10 tool invocations → cap all tasks at 1h total
-- No single task should exceed 8h — split into sub-tasks if the work is that large
-
-IMPORTANT RULES:
-- Mechanical execution (installing, deploying, running existing code, copying files) → 0.25-0.5h max
-- Each number must be nearest 0.25h (not just 0.5h increments)
+- Mechanical execution (install, deploy, git ops, copy files) → 0.25–0.5h max always
+- No single task should exceed 8h — split into sub-tasks if that large
+- Each number must be nearest 0.25h
 - goal.human_hours must exactly equal the sum of its task hours
 
 ═══════════════════════════════════════════

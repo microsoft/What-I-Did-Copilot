@@ -280,12 +280,17 @@ def _merge_analyses(day_analyses: list) -> dict:
             # across days to avoid overstating scope (and avoid erroneously
             # tripping the >10 files multiplier on aggregated multi-day counts).
             agg = {"tokens": 0, "tool_invocations": 0, "premium_requests": 0,
-                   "lines_added": 0, "lines_removed": 0, "active_minutes": 0,
+                   "lines_added": 0, "lines_removed": 0,
+                   "lines_logic": 0, "lines_boilerplate": 0,
+                   "active_minutes": 0,
                    "wall_clock_minutes": 0, "sessions": 0,
                    "conversation_turns": 0, "substantive_turns": 0,
-                   "reads": 0, "edits": 0, "runs": 0,
+                   "reads": 0, "edits": 0, "runs": 0, "searches": 0,
                    "files_touched_count": 0, "_total_file_edits": 0, "_total_files_edited": 0}
             per_day_formula_total = 0.0
+            per_day_turns_h = 0.0
+            per_day_lines_h = 0.0
+            per_day_reads_h = 0.0
             for d in all_dates:
                 found = False
                 for pname in equiv_names:
@@ -297,7 +302,11 @@ def _merge_analyses(day_analyses: list) -> dict:
                                     agg[k] = max(agg[k], m.get(k, 0))
                                 else:
                                     agg[k] += m.get(k, 0)
-                            per_day_formula_total += _cfe(m)["total"]
+                            cfe = _cfe(m)
+                            per_day_formula_total += cfe["total"]
+                            per_day_turns_h += cfe["turns_h"]
+                            per_day_lines_h += cfe["lines_h"]
+                            per_day_reads_h += cfe["reads_h"]
                             found = True
                             break
                     if found:
@@ -306,8 +315,11 @@ def _merge_analyses(day_analyses: list) -> dict:
             total_e = agg.pop("_total_file_edits", 0)
             total_f = agg.pop("_total_files_edited", 0)
             agg["iteration_depth"] = round(total_e / max(total_f, 1), 1)
-            # Store the per-day formula sum so the evidence table can use it
+            # Store per-day formula sums so the evidence table components add up correctly
             agg["_per_day_formula_total"] = round(per_day_formula_total * 4) / 4
+            agg["_per_day_turns_h"] = per_day_turns_h
+            agg["_per_day_lines_h"] = per_day_lines_h
+            agg["_per_day_reads_h"] = per_day_reads_h
             # Store aggregated metrics under the earliest date key
             merged_session_metrics[all_dates[0] + "|" + proj] = agg
             merged_session_metrics[all_dates[0] + "|" + norm] = agg
