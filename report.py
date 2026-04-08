@@ -889,49 +889,86 @@ def _reads_h(read_calls: int) -> float:
     return 0.10 * _math.log2(read_calls + 1)
 
 
-def compute_formula_estimate(metrics: dict) -> dict:
-    """Deterministic effort estimate — additive log formula (no multipliers).
+def _tools_h(n: int) -> float:
+    """Total tool invocations → hours (log₂ curve, low coefficient).
+    Captures execution work (browser, commands, image processing) not already
+    counted by reads_h. Essential for non-coding tasks where lines_h ≈ 0.
+    tools_h = 0.07 × log₂(tool_invocations + 1)"""
+    if n <= 0:
+        return 0.0
+    return 0.07 * _math.log2(n + 1)
 
-    Formula: total = turns_h + lines_h + reads_h
+
+def _reqs_h(n: int) -> float:
+    """Premium requests → hours (log curve, fallback when turns unavailable).
+    Premium requests include automated completions so the coefficient is lower
+    than turns_h. Used ONLY when substantive_turns == 0.
+    reqs_h = max(0, −0.10 + 0.45 × ln(reqs + 1))"""
+    if n <= 0:
+        return 0.0
+    return max(0.0, -0.10 + 0.45 * _math.log(n + 1))
+
+
+def compute_formula_estimate(metrics: dict) -> dict:
+    """Deterministic effort estimate — additive log formula.
+
+    Formula: total = interaction_h + lines_h + reads_h + tools_h
+      interaction_h = turns_h when turns > 0, else reqs_h (fallback)
       turns_h = max(0, −0.15 + 0.67 × ln(turns + 1))
+      reqs_h  = max(0, −0.10 + 0.45 × ln(reqs + 1))     [fallback]
       lines_h = 0.40 × log₂(lines_logic ÷ 100 + 1)
       reads_h = 0.10 × log₂(read_calls + 1)
+      tools_h = 0.07 × log₂(tool_invocations + 1)
 
-    Calibration: OLS regression on 48 days. R²≈0.40 per goal.
-    The remaining variance is explained by AI semantic judgment — this
-    is why the formula is the floor, not the target.
+    tools_h ensures non-coding work (image analysis, doc synthesis, browser
+    tasks) gets meaningful credit even when lines_h ≈ 0.
+    reqs_h is a fallback for older sessions without conversation turn data.
     """
     turns = metrics.get("substantive_turns")
     if turns is None:
         turns = metrics.get("conversation_turns", 0)
+    reqs        = metrics.get("premium_requests", 0)
     logic_lines = metrics.get("lines_logic")
     if logic_lines is None:
         logic_lines = metrics.get("lines_added", 0)
     read_calls  = metrics.get("reads", 0) + metrics.get("searches", 0)
+    tools       = metrics.get("tool_invocations", 0)
 
     th = _turns_h(turns)
+    rqh = _reqs_h(reqs)
     lh = _lines_h(logic_lines)
     rh = _reads_h(read_calls)
+    tlh = _tools_h(tools)
+
+    # Use turns as the interaction signal; fall back to premium requests
+    # for older sessions that lack conversation turn data.
+    interaction_h = th if turns > 0 else rqh
 
     # For multi-day merged goals, use pre-computed per-day sums so that
     # the component breakdown is consistent with the displayed total.
     per_day_total = metrics.get("_per_day_formula_total")
     if per_day_total is not None:
         return {
-            "turns_h":  metrics.get("_per_day_turns_h", th),
-            "lines_h":  metrics.get("_per_day_lines_h", lh),
-            "reads_h":  metrics.get("_per_day_reads_h", rh),
-            "total":    per_day_total,
+            "turns_h":       metrics.get("_per_day_turns_h", th),
+            "reqs_h":        rqh,
+            "lines_h":       metrics.get("_per_day_lines_h", lh),
+            "reads_h":       metrics.get("_per_day_reads_h", rh),
+            "tools_h":       tlh,
+            "interaction_h": interaction_h,
+            "total":         per_day_total,
         }
 
-    total = th + lh + rh
+    total = interaction_h + lh + rh + tlh
     total = max(total, 0.25)  # floor at 15 min
 
     return {
-        "turns_h":  th,
-        "lines_h":  lh,
-        "reads_h":  rh,
-        "total":    round(total * 4) / 4,  # nearest 0.25h
+        "turns_h":       th,
+        "reqs_h":        rqh,
+        "lines_h":       lh,
+        "reads_h":       rh,
+        "tools_h":       tlh,
+        "interaction_h": interaction_h,
+        "total":         round(total * 4) / 4,  # nearest 0.25h
     }
 
 
@@ -961,10 +998,15 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
             logic_lines = metrics.get("lines_added", 0)
         bp_lines    = metrics.get("lines_boilerplate", 0)
         read_calls  = metrics.get("reads", 0) + metrics.get("searches", 0)
+        tools       = metrics.get("tool_invocations", 0)
         active      = metrics.get("active_minutes", 0)
         active_str  = f"{active:.0f}m" if active else "&mdash;"
         ai_h        = _fmt_h(g.get("human_hours", 0))
         formula_h   = _fmt_h(fe["total"])
+
+        # Formula sub-row: show which interaction signal was used
+        int_label = f"turns {_fmt_h(fe['turns_h'])}" if turns > 0 else f"reqs {_fmt_h(fe['reqs_h'])}"
+        formula_parts = f"{int_label} + lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])} + tools {_fmt_h(fe['tools_h'])}"
 
         # Lines display: logic lines prominent, boilerplate in grey
         if logic_lines or bp_lines:
@@ -987,7 +1029,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
                      var show=rows.length && rows[0].style.display==='none';
                      for(var j=0;j<rows.length;j++){{rows[j].style.display=show?'':'none';}}
                      this.style.display='none';">
-          <td colspan="7" style="padding:6px 10px;text-align:center;font-size:11px;
+          <td colspan="8" style="padding:6px 10px;text-align:center;font-size:11px;
                      font-weight:600;color:{C['accent']}">
             &#9660; Show {n_extra} more project{'s' if n_extra != 1 else ''}</td>
         </tr>"""
@@ -1008,6 +1050,8 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
                      font-weight:600">{lines_display}</td>
           <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
                      font-weight:600">{read_calls}</td>
+          <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600">{tools}</td>
           <td style="padding:4px 5px;font-size:11px;color:{C['muted']};text-align:center">{active_str}</td>
           <td class="formula-col" style="padding:4px 5px;text-align:center;vertical-align:middle;display:none" rowspan="2">
             <div style="font-size:14px;font-weight:700;color:{C['accent']}">{formula_h}</div>
@@ -1019,16 +1063,16 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           </td>
         </tr>
         <tr{extra_attrs}>
-          <td colspan="4" style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']};
+          <td colspan="5" style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']};
                      font-size:9px;color:{C['muted']}">
-            turns {_fmt_h(fe['turns_h'])} + logic lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])}</td>
+            {formula_parts}</td>
         </tr>"""
 
     # Total row
     rows += f"""
         <tr style="background:{C['accent_lt']}">
           <td style="padding:8px 8px;border-top:2px solid {C['border']};
-                     font-size:11px;font-weight:700;color:{C['accent']};text-align:right" colspan="5">
+                     font-size:11px;font-weight:700;color:{C['accent']};text-align:right" colspan="6">
             Total</td>
           <td class="formula-col" style="padding:8px 5px;border-top:2px solid {C['border']};text-align:center;display:none">
             <div style="font-size:16px;font-weight:700;color:{C['accent']}">{_fmt_h(total_formula_h)}</div>
@@ -1060,7 +1104,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
       </div>
       <div style="font-size:10px;color:{C['muted']};margin-bottom:10px;padding:8px 12px;
                   background:{C['subtle']};border-radius:6px;border:1px solid {C['border']}">
-        Det. Est. = turns_h + lines_h + reads_h (deterministic formula) &nbsp;&middot;&nbsp;
+        Det. Est. = interaction_h + lines_h + reads_h + tools_h (deterministic formula) &nbsp;&middot;&nbsp;
         Lines = logic code only (.py/.ts/.go/&hellip; &mdash; HTML/CSS/JSON/MD excluded) &nbsp;&middot;&nbsp;
         <span style="color:{C['green']}">&#9632;</span> AI Est. = semantic AI analysis
         &nbsp;&nbsp;
@@ -1073,13 +1117,14 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
         <tr style="background:{C['accent_lt']}">
-          <th style="{th_style};text-align:left;width:22%">Project</th>
-          <th style="{th_style};width:10%">Turns</th>
-          <th style="{th_style};width:14%">Lines</th>
-          <th style="{th_style};width:10%">Reads</th>
-          <th style="{th_muted};width:10%">Active</th>
-          <th class="formula-col" style="{th_style};width:10%;display:none">Formula</th>
-          <th style="{th_style.replace(f"color:{C['accent']}", f"color:{C['green']}")};width:10%">AI Est.</th>
+          <th style="{th_style};text-align:left;width:20%">Project</th>
+          <th style="{th_style};width:9%">Turns</th>
+          <th style="{th_style};width:12%">Lines</th>
+          <th style="{th_style};width:9%">Reads</th>
+          <th style="{th_style};width:9%">Tools</th>
+          <th style="{th_muted};width:9%">Active</th>
+          <th class="formula-col" style="{th_style};width:9%;display:none">Formula</th>
+          <th style="{th_style.replace(f"color:{C['accent']}", f"color:{C['green']}")};width:9%">AI Est.</th>
         </tr>
         {rows}
       </table>
@@ -1087,17 +1132,20 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
                   background:{C['subtle']};border:1px solid {C['border']};border-radius:6px">
         <div style="font-size:10px;color:{C['text']};line-height:1.6;margin-bottom:6px">
           <strong>About the deterministic formula:</strong>
-          Three signals added together: How deep was the collaboration? How much logic code
-          was written (not HTML/CSS/JSON/MD)? How much investigation happened?
-          This is a transparent, reproducible floor &mdash; the AI estimate captures
-          semantic understanding and should land at or above this number.
+          Four signals added together: How deep was the collaboration? How much logic code
+          was written? How much investigation happened? How much tool execution occurred?
+          Tool invocations capture non-coding work (image analysis, document synthesis,
+          browser tasks) where logic lines are zero. Premium requests serve as a fallback
+          interaction signal when conversation turn data is unavailable.
         </div>
         <div style="font-family:monospace;font-size:10px;color:{C['muted']};line-height:1.5;
                     padding:6px 8px;background:{C['card']};border-radius:4px">
           turns_h &nbsp;= max(0, &minus;0.15 + 0.67 &times; ln(turns + 1))<br>
+          reqs_h &nbsp;&nbsp;= max(0, &minus;0.10 + 0.45 &times; ln(reqs + 1)) &nbsp; <em>[fallback when turns=0]</em><br>
           lines_h &nbsp;= 0.40 &times; log&#8322;(logic_lines &divide; 100 + 1)<br>
           reads_h &nbsp;= 0.10 &times; log&#8322;(read_calls + 1)<br>
-          total &nbsp;&nbsp;&nbsp;= turns_h + lines_h + reads_h &nbsp;&nbsp;(floor 0.25h)
+          tools_h &nbsp;= 0.07 &times; log&#8322;(tool_invocations + 1)<br>
+          total &nbsp;&nbsp;&nbsp;= interaction_h + lines_h + reads_h + tools_h &nbsp;&nbsp;(floor 0.25h)
         </div>
       </div>"""
 
@@ -1117,6 +1165,8 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
         turns = metrics.get("conversation_turns", 0)
     if turns:
         parts.append(f"<strong>{turns}</strong> turns &rarr; {_fmt_h(fe['turns_h'])}")
+    elif metrics.get("premium_requests", 0):
+        parts.append(f"<strong>{metrics['premium_requests']}</strong> reqs &rarr; {_fmt_h(fe['reqs_h'])}")
     logic_lines = metrics.get("lines_logic")
     if logic_lines is None:
         logic_lines = metrics.get("lines_added", 0)
@@ -1125,6 +1175,9 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
     read_calls = metrics.get("reads", 0) + metrics.get("searches", 0)
     if read_calls:
         parts.append(f"<strong>{read_calls}</strong> reads &rarr; {_fmt_h(fe['reads_h'])}")
+    tools = metrics.get("tool_invocations", 0)
+    if tools:
+        parts.append(f"<strong>{tools}</strong> tools &rarr; {_fmt_h(fe['tools_h'])}")
 
     if not parts:
         return ""
@@ -1134,6 +1187,8 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
     import hashlib as _hl
     _key = (goal.get('title', '') + goal.get('date', '')).encode()
     fid  = "fs-" + _hl.sha1(_key).hexdigest()[:12]
+
+    int_label = f"turns {_fmt_h(fe['turns_h'])}" if turns > 0 else f"reqs {_fmt_h(fe['reqs_h'])}"
 
     return f"""
             <div style="padding:8px 24px;background:{C['subtle']};border-bottom:1px solid {C['border']}">
@@ -1149,7 +1204,7 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
               </div>
               <div id="{fid}" style="display:none;margin-top:4px;font-size:10px;color:{C['muted']}">
                 <code style="font-size:9px;background:{C['bg']};padding:1px 5px;border-radius:3px;
-                             color:{C['text']}">turns {_fmt_h(fe['turns_h'])} + lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])}</code>
+                             color:{C['text']}">{int_label} + lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])} + tools {_fmt_h(fe['tools_h'])}</code>
                 = <strong style="color:{C['accent']}">{formula_h}</strong> deterministic
               </div>
             </div>"""
@@ -1208,10 +1263,14 @@ def _signal_guide() -> str:
     for term, formula, samples in [
         ("turns_h", "max(0, &minus;0.15 + 0.67 &times; ln(turns + 1))",
          "3&rarr;0.75h &nbsp; 8&rarr;1.21h &nbsp; 15&rarr;1.57h &nbsp; 30&rarr;2.02h &nbsp; 60&rarr;2.50h &nbsp; 100&rarr;2.82h"),
+        ("reqs_h", "max(0, &minus;0.10 + 0.45 &times; ln(reqs + 1)) <em>[fallback when turns=0]</em>",
+         "3&rarr;0.52h &nbsp; 8&rarr;0.89h &nbsp; 15&rarr;1.16h &nbsp; 30&rarr;1.44h &nbsp; 60&rarr;1.75h"),
         ("lines_h", "0.40 &times; log&#8322;(logic_lines &divide; 100 + 1)",
          "100&rarr;0.40h &nbsp; 200&rarr;0.63h &nbsp; 500&rarr;1.03h &nbsp; 1000&rarr;1.33h &nbsp; 3000&rarr;1.68h"),
         ("reads_h", "0.10 &times; log&#8322;(read_calls + 1)",
          "5&rarr;0.26h &nbsp; 10&rarr;0.35h &nbsp; 20&rarr;0.44h &nbsp; 50&rarr;0.57h &nbsp; 100&rarr;0.67h"),
+        ("tools_h", "0.07 &times; log&#8322;(tool_invocations + 1)",
+         "10&rarr;0.24h &nbsp; 50&rarr;0.40h &nbsp; 100&rarr;0.47h &nbsp; 200&rarr;0.54h &nbsp; 500&rarr;0.63h"),
     ]:
         term_rows += (
             f'<tr>'
@@ -1227,12 +1286,13 @@ def _signal_guide() -> str:
                     border:1px solid {C['border']};border-radius:6px">
           <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
                       color:{C['accent']};margin-bottom:6px">&#128270; Example: 22 substantive turns,
-            +400 logic lines (+800 boilerplate), 35 reads + 15 searches</div>
+            +400 logic lines (+800 boilerplate), 35 reads + 15 searches, 120 tool invocations</div>
           <div style="font-family:monospace;font-size:10px;line-height:1.7;color:{C['text']}">
             turns_h = max(0, &minus;0.15 + 0.67 &times; ln(23)) = <strong>1.95h</strong><br>
             lines_h = 0.40 &times; log&#8322;(400 &divide; 100 + 1) = 0.40 &times; 2.32 = <strong>0.93h</strong><br>
             reads_h = 0.10 &times; log&#8322;(50 + 1) = 0.10 &times; 5.67 = <strong>0.57h</strong><br>
-            <strong style="color:{C['accent']}">Total = 1.95 + 0.93 + 0.57 = 3.45h &rarr; 3.50h</strong>
+            tools_h = 0.07 &times; log&#8322;(120 + 1) = 0.07 &times; 6.93 = <strong>0.49h</strong><br>
+            <strong style="color:{C['accent']}">Total = 1.95 + 0.93 + 0.57 + 0.49 = 3.94h &rarr; 4.00h</strong>
             &nbsp;&nbsp;<span style="color:{C['muted']}">(nearest 0.25h)</span>
           </div>
         </div>"""
@@ -1244,11 +1304,13 @@ def _signal_guide() -> str:
           <div style="font-size:10px;color:{C['muted']};line-height:1.5;margin-bottom:8px">
             <code style="font-size:10px;background:{C['subtle']};padding:2px 6px;border-radius:3px;
                          color:{C['accent']}">
-              total = turns_h + lines_h + reads_h
+              total = interaction_h + lines_h + reads_h + tools_h
             </code>
-            &nbsp;&mdash;&nbsp; three questions added together: How deep was the collaboration?
+            &nbsp;&mdash;&nbsp; four questions added together: How deep was the collaboration?
             How much logic code was written (not HTML/CSS/JSON/MD)?
-            How much investigation happened?
+            How much investigation happened? How much tool execution occurred?
+            Tool invocations capture non-coding work (image analysis, synthesis, browser tasks).
+            Premium requests serve as a fallback interaction signal when turn data is unavailable.
             <a href="https://github.com/microsoft/What-I-Did-Copilot/blob/main/docs/effort-estimation-methodology.md"
                style="color:{C['accent']};text-decoration:none;font-weight:600">
               Full methodology &amp; research basis &#8599;</a>

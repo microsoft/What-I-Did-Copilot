@@ -44,7 +44,7 @@ code (LOC) and function points (FP). However:
 
 | System | Approach | Strength | Limitation |
 |--------|----------|----------|------------|
-| Deterministic formula | `turns_h + lines_h + reads_h` (additive log curves) | Transparent, reproducible, auditable floor | Cannot see context, business value, or qualitative complexity |
+| Deterministic formula | `interaction_h + lines_h + reads_h + tools_h` (additive log curves) | Transparent, reproducible, auditable floor | Cannot see context, business value, or qualitative complexity |
 | AI semantic estimate | Reads full transcript, applies judgment using active time × 2–4 as anchor | Understands what was done, distinguishes boilerplate from architecture | Depends on prompt quality, may vary across model versions |
 
 **Our response:** We use two complementary systems — a deterministic formula as
@@ -203,7 +203,8 @@ effort in LLM-assisted work:
 | 2 | **Context completeness** | Did the task need external lookups/clarification | `read_calls` (via `reads_h` log curve) | Reads tool distribution and investigation patterns |
 | 3 | **Transformation scope** | Breadth and impact of changes | `lines_logic` (via `lines_h` log curve) | Distinguishes logic from boilerplate, assesses architectural impact |
 | 4 | **Iterative reasoning cycles** | Back-and-forth to reach a solution | Embedded in `turns_h` (diminishing returns) | +25–50% qualitative adjustment for heavy iteration |
-| 5 | **Human oversight effort** | Review, testing, correction by the human | Not in formula | `active_minutes` × 2–4 as primary anchor |
+| 5 | **Tool execution breadth** | Total tool calls including non-coding work | `tool_invocations` (via `tools_h` log curve) | Recognises image analysis, synthesis, browser tasks |
+| 6 | **Human oversight effort** | Review, testing, correction by the human | Not in formula | `active_minutes` × 2–4 as primary anchor |
 
 ---
 
@@ -237,10 +238,13 @@ primary output shown as the "AI Est." column. The AI uses these anchors:
 
 ```
 turns_h  = max(0,  −0.15 + 0.67 × ln(turns + 1))
+reqs_h   = max(0,  −0.10 + 0.45 × ln(reqs + 1))     ← fallback when turns = 0
 lines_h  = 0.40 × log₂(lines_logic ÷ 100 + 1)
 reads_h  = 0.10 × log₂(read_calls + 1)
+tools_h  = 0.07 × log₂(tool_invocations + 1)
 
-total    = turns_h + lines_h + reads_h
+interaction_h = turns_h if turns > 0, else reqs_h
+total    = interaction_h + lines_h + reads_h + tools_h
 total    = max(total, 0.25)          ← floor at 15 min
 total    = round to nearest 0.25h
 ```
@@ -250,10 +254,16 @@ total    = round to nearest 0.25h
 - **turns** = substantive conversation turns only. Trivial confirmations like
   "yes", "commit", "looks good" (under 20 characters) are excluded, as they
   represent near-zero human thinking effort.
+- **reqs** = premium requests (API calls). Used as a fallback interaction signal
+  when conversation turn data is unavailable (e.g., older Copilot sessions).
 - **lines_logic** = lines added to logic code files only (`.py` `.js` `.ts` `.go`
   `.rs` `.java` `.cs` `.cpp` etc.) — excludes `.html` `.css` `.json` `.md`
   `.yaml` and other non-logic files.
 - **read_calls** = file-read tool calls + grep/glob/search/find calls combined.
+- **tool_invocations** = total tool calls across a session. Captures non-coding
+  work (image analysis, document synthesis, browser automation, data exploration)
+  where `lines_logic` = 0 but meaningful work still occurred. Uses a low
+  coefficient (0.07) to avoid double-counting with `reads_h` for coding tasks.
 
 For multi-day merged goals: compute per-day, then sum (matches how the AI
 analyses each day independently).
@@ -262,14 +272,15 @@ analyses each day independently).
 ### 4C. Worked example
 
 > **Project:** Built a reporting tool — 22 substantive turns, +400 logic lines,
-> +800 boilerplate lines, 35 reads + 15 searches
+> +800 boilerplate lines, 35 reads + 15 searches, 120 tool invocations
 
 ```
 turns_h = max(0, −0.15 + 0.67 × ln(23)) = 1.95h
 lines_h = 0.40 × log₂(400 ÷ 100 + 1)   = 0.40 × 2.32 = 0.93h
 reads_h = 0.10 × log₂(50 + 1)           = 0.10 × 5.67 = 0.57h
+tools_h = 0.07 × log₂(120 + 1)          = 0.07 × 6.93 = 0.49h
 
-Total   = 1.95 + 0.93 + 0.57 = 3.45h → 3.50h (nearest 0.25h)
+Total   = 1.95 + 0.93 + 0.57 + 0.49 = 3.94h → 4.00h (nearest 0.25h)
 ```
 
 Note: The 800 boilerplate lines (HTML/CSS/config) are excluded from `lines_logic`
