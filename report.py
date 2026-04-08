@@ -901,21 +901,26 @@ def compute_formula_estimate(metrics: dict) -> dict:
     The remaining variance is explained by AI semantic judgment — this
     is why the formula is the floor, not the target.
     """
-    turns       = metrics.get("substantive_turns", 0) or metrics.get("conversation_turns", 0)
-    logic_lines = metrics.get("lines_logic", 0) or metrics.get("lines_added", 0)
+    turns = metrics.get("substantive_turns")
+    if turns is None:
+        turns = metrics.get("conversation_turns", 0)
+    logic_lines = metrics.get("lines_logic")
+    if logic_lines is None:
+        logic_lines = metrics.get("lines_added", 0)
     read_calls  = metrics.get("reads", 0) + metrics.get("searches", 0)
 
     th = _turns_h(turns)
     lh = _lines_h(logic_lines)
     rh = _reads_h(read_calls)
 
-    # For multi-day merged goals, use pre-computed per-day formula sum
+    # For multi-day merged goals, use pre-computed per-day sums so that
+    # the component breakdown is consistent with the displayed total.
     per_day_total = metrics.get("_per_day_formula_total")
     if per_day_total is not None:
         return {
-            "turns_h":  th,
-            "lines_h":  lh,
-            "reads_h":  rh,
+            "turns_h":  metrics.get("_per_day_turns_h", th),
+            "lines_h":  metrics.get("_per_day_lines_h", lh),
+            "reads_h":  metrics.get("_per_day_reads_h", rh),
             "total":    per_day_total,
         }
 
@@ -948,8 +953,12 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         fe = compute_formula_estimate(metrics)
         total_formula_h += fe["total"]
 
-        turns       = metrics.get("substantive_turns", 0) or metrics.get("conversation_turns", 0)
-        logic_lines = metrics.get("lines_logic", 0) or metrics.get("lines_added", 0)
+        turns = metrics.get("substantive_turns")
+        if turns is None:
+            turns = metrics.get("conversation_turns", 0)
+        logic_lines = metrics.get("lines_logic")
+        if logic_lines is None:
+            logic_lines = metrics.get("lines_added", 0)
         bp_lines    = metrics.get("lines_boilerplate", 0)
         read_calls  = metrics.get("reads", 0) + metrics.get("searches", 0)
         active      = metrics.get("active_minutes", 0)
@@ -1103,10 +1112,14 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
     fe = compute_formula_estimate(metrics)
 
     parts = []
-    turns = metrics.get("substantive_turns", 0) or metrics.get("conversation_turns", 0)
+    turns = metrics.get("substantive_turns")
+    if turns is None:
+        turns = metrics.get("conversation_turns", 0)
     if turns:
         parts.append(f"<strong>{turns}</strong> turns &rarr; {_fmt_h(fe['turns_h'])}")
-    logic_lines = metrics.get("lines_logic", 0) or metrics.get("lines_added", 0)
+    logic_lines = metrics.get("lines_logic")
+    if logic_lines is None:
+        logic_lines = metrics.get("lines_added", 0)
     if logic_lines:
         parts.append(f"<strong>+{logic_lines}</strong> logic lines &rarr; {_fmt_h(fe['lines_h'])}")
     read_calls = metrics.get("reads", 0) + metrics.get("searches", 0)

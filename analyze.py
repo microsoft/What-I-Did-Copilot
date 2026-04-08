@@ -233,7 +233,7 @@ def _build_transcript(sessions: list) -> str:
         bp_l = s.get("lines_boilerplate", 0)
         if cc.get("linesAdded") or cc.get("linesRemoved"):
             signals.append(f"  Lines: +{cc.get('linesAdded', 0)} / -{cc.get('linesRemoved', 0)}"
-                           f" (logic: {logic_l}, boilerplate: {bp_l})")
+                           f" (added lines split: logic {logic_l}, boilerplate {bp_l})")
         signals.append(f"  Active time: {active_min:.0f}m of {wall_min:.0f}m wall clock ({engagement}% engagement)")
         if iter_depth > 1:
             signals.append(f"  Iteration depth: {iter_depth} edits/file avg")
