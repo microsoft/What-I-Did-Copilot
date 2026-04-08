@@ -200,12 +200,14 @@ def _build_transcript(sessions: list) -> str:
         # Enriched quantitative signals for effort calibration
         user_msgs = [m for m in s["messages"] if m["role"] == "user"]
         n_tools = sum(len(m.get("tools_after", [])) for m in s["messages"] if m["role"] == "user")
-        reads, edits, runs = 0, 0, 0
+        reads, edits, runs, searches = 0, 0, 0, 0
         edit_targets: dict = {}
         for m in s["messages"]:
             for t in m.get("tools_after", []):
                 tl = t.lower()
-                if any(w in tl for w in ("view", "read", "grep", "glob", "search", "find", "explore")):
+                if any(w in tl for w in ("grep", "glob", "search", "find")):
+                    searches += 1
+                elif any(w in tl for w in ("view", "read", "explore")):
                     reads += 1
                 elif any(w in tl for w in ("edit", "create", "write", "replace")):
                     edits += 1
@@ -222,13 +224,16 @@ def _build_transcript(sessions: list) -> str:
         engagement = round(active_min / max(wall_min, 1) * 100, 1)
         files_touched = list(set(cc.get("filesModified", []) + s.get("files_touched", [])))
 
-        signals = [f"SIGNALS: {n_tools} tools ({reads} reads, {edits} edits, {runs} runs)"]
+        signals = [f"SIGNALS: {n_tools} tools ({reads} reads, {searches} searches, {edits} edits, {runs} runs)"]
         signals.append(f"  Conversation turns: {len(user_msgs)}")
         if s.get("premium_requests"):
             signals.append(f"  Premium requests: {s['premium_requests']}")
         signals.append(f"  Files touched: {len(files_touched)}")
+        logic_l = s.get("lines_logic", 0)
+        bp_l = s.get("lines_boilerplate", 0)
         if cc.get("linesAdded") or cc.get("linesRemoved"):
-            signals.append(f"  Lines: +{cc.get('linesAdded', 0)} / -{cc.get('linesRemoved', 0)}")
+            signals.append(f"  Lines: +{cc.get('linesAdded', 0)} / -{cc.get('linesRemoved', 0)}"
+                           f" (logic: {logic_l}, boilerplate: {bp_l})")
         signals.append(f"  Active time: {active_min:.0f}m of {wall_min:.0f}m wall clock ({engagement}% engagement)")
         if iter_depth > 1:
             signals.append(f"  Iteration depth: {iter_depth} edits/file avg")
@@ -323,12 +328,14 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
         files_count = len(files_touched)
 
         # Classify tool types from tool_after descriptions
-        reads, edits, runs = 0, 0, 0
+        reads, edits, runs, searches = 0, 0, 0, 0
         edit_targets: dict = {}  # filename → edit count for iteration depth
         for m in s["messages"]:
             for t in m.get("tools_after", []):
                 tl = t.lower()
-                if any(w in tl for w in ("view", "read", "grep", "glob", "search", "find", "explore")):
+                if any(w in tl for w in ("grep", "glob", "search", "find")):
+                    searches += 1
+                elif any(w in tl for w in ("view", "read", "explore")):
                     reads += 1
                 elif any(w in tl for w in ("edit", "create", "write", "replace")):
                     edits += 1
@@ -351,6 +358,8 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
             m["premium_requests"] += s.get("premium_requests", 0)
             m["lines_added"]      += cc.get("linesAdded", 0)
             m["lines_removed"]    += cc.get("linesRemoved", 0)
+            m["lines_logic"]      += s.get("lines_logic", 0)
+            m["lines_boilerplate"] += s.get("lines_boilerplate", 0)
             m["active_minutes"]   += active_min
             m["wall_clock_minutes"] += wall_min
             m["sessions"]         += 1
@@ -359,6 +368,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
             m["reads"]            += reads
             m["edits"]            += edits
             m["runs"]             += runs
+            m["searches"]         += searches
             m["files_touched_count"] = len(set(
                 files_touched + [f for f in all_files if f in s.get("files_touched", [])]
             )) or m["files_touched_count"]
@@ -379,6 +389,8 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
                 "premium_requests":  s.get("premium_requests", 0),
                 "lines_added":       cc.get("linesAdded", 0),
                 "lines_removed":     cc.get("linesRemoved", 0),
+                "lines_logic":       s.get("lines_logic", 0),
+                "lines_boilerplate": s.get("lines_boilerplate", 0),
                 "active_minutes":    active_min,
                 "wall_clock_minutes": wall_min,
                 "sessions":          1,
@@ -387,6 +399,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
                 "reads":             reads,
                 "edits":             edits,
                 "runs":              runs,
+                "searches":          searches,
                 "files_touched_count": files_count,
                 "iteration_depth":   iter_depth,
                 "_total_file_edits": sum(edit_targets.values()),

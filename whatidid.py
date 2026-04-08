@@ -280,10 +280,12 @@ def _merge_analyses(day_analyses: list) -> dict:
             # across days to avoid overstating scope (and avoid erroneously
             # tripping the >10 files multiplier on aggregated multi-day counts).
             agg = {"tokens": 0, "tool_invocations": 0, "premium_requests": 0,
-                   "lines_added": 0, "lines_removed": 0, "active_minutes": 0,
+                   "lines_added": 0, "lines_removed": 0,
+                   "lines_logic": 0, "lines_boilerplate": 0,
+                   "active_minutes": 0,
                    "wall_clock_minutes": 0, "sessions": 0,
                    "conversation_turns": 0, "substantive_turns": 0,
-                   "reads": 0, "edits": 0, "runs": 0,
+                   "reads": 0, "edits": 0, "runs": 0, "searches": 0,
                    "files_touched_count": 0, "_total_file_edits": 0, "_total_files_edited": 0}
             per_day_formula_total = 0.0
             for d in all_dates:

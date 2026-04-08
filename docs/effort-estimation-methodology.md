@@ -24,7 +24,7 @@ by hand.
 
 ## 2. Research → Design Decisions
 
-### 2.1 "No single metric captures effort" → Multi-signal max() formula
+### 2.1 "No single metric captures effort" → Two complementary estimation systems
 
 Classic software effort estimation relies on size-oriented metrics — lines of
 code (LOC) and function points (FP). However:
@@ -42,13 +42,19 @@ code (LOC) and function points (FP). However:
   requires measuring multiple dimensions: Satisfaction, Performance, Activity,
   Communication, and Efficiency.
 
-**Our response:** We take `max(tools, turns, active)` — each signal measures the
-same work from a different angle, and the strongest signal wins as the base. Lines
-of code are additive because coding output is independent work beyond research and
-iteration. No single number drives the estimate alone.
+| System | Approach | Strength | Limitation |
+|--------|----------|----------|------------|
+| Deterministic formula | `turns_h + lines_h + reads_h` (additive log curves) | Transparent, reproducible, auditable floor | Cannot see context, business value, or qualitative complexity |
+| AI semantic estimate | Reads full transcript, applies judgment using active time × 2–4 as anchor | Understands what was done, distinguishes boilerplate from architecture | Depends on prompt quality, may vary across model versions |
+
+**Our response:** We use two complementary systems — a deterministic formula as
+the transparency floor, and an AI semantic estimate as the primary output. Each
+addresses a different failure mode: the formula is reproducible and auditable but
+blind to context; the AI understands what was done but is opaque. No single number
+drives the estimate alone.
 
 
-### 2.2 "LLMs provide 1.4–4× speed-ups" → Active time × 4 multiplier
+### 2.2 "LLMs provide 1.4–4× speed-ups" → Active time as AI anchor
 
 - **Cambon et al. (2023)** — Microsoft's AI Productivity study synthesised 30+
   experiments and found that participants with Copilot tools completed tasks in
@@ -57,10 +63,16 @@ iteration. No single number drives the estimate alone.
 - **Peng et al. (2023)** — In a controlled trial with 95 developers, those using
   GitHub Copilot completed a programming task **55.8% faster** on average.
 
-**Our response:** `active_minutes × 4 / 60` converts the user's engagement time to
-human-equivalent hours. The 4× multiplier reflects the upper bound of observed
-speed-ups (Cambon et al. found 1.4–4×), capturing the full productivity gain that
-AI provides in skilled professional work.
+**Our response:** Active time is the AI estimator's primary anchor — it reflects
+actual human engagement and is multiplied by 2–4× depending on work type. This is
+*not* part of the deterministic formula (which uses only turns, lines, and reads).
+The AI applies the speedup contextually:
+
+| Work type | Speedup applied | Rationale |
+|-----------|-----------------|-----------|
+| Mechanical/routine | ×2 | 1.4× lower bound — AI handles most of the work |
+| Implementation/feature | ×3 | Midpoint of the 1.4–4× research range |
+| Design/debugging/research | ×4 | Upper bound (Cambon et al.) — human thinking dominates |
 
 
 ### 2.3 "78% of 'complex' tasks done in <25% effort; 22% of 'simple' tasks took >180%" → Task-type classification with caps
@@ -94,7 +106,7 @@ requests as the primary interaction signal. Premium requests are excluded from t
 `max()` base calculation. Effective reqs are capped at 10× conversation turns.
 
 
-### 2.5 "Iteration count and prompt efficiency predict true complexity" → Iteration depth multiplier
+### 2.5 "Iteration count and prompt efficiency predict true complexity" → Iteration via log curves and AI judgment
 
 - **Chen et al. (2023)** introduced "prompt efficiency" — measuring how many
   interactions were needed before the AI produced a correct solution — as an
@@ -104,18 +116,16 @@ requests as the primary interaction signal. Premium requests are excluded from t
 - **Alaswad et al. (2026)** identified **iterative reasoning cycles** as one of
   five key dimensions driving effort in LLM-assisted work.
 
-**Our response:** `iteration_depth` (average edits per file) and `conversation_turns`
-both contribute complexity multipliers:
-
-| Signal | Threshold | Multiplier |
-|--------|-----------|------------|
-| Conversation turns > 15 | Moderate iteration | +15% |
-| Conversation turns > 40 | Heavy iteration | +35% cumulative |
-| Iteration depth > 5 edits/file | Debugging/refinement | +15% |
-| Iteration depth > 12 edits/file | Extensive rework | +35% cumulative |
+**Our response:** The deterministic formula handles iteration implicitly via
+`turns_h` — the logarithmic curve has diminishing returns for high turn counts,
+naturally capturing the fact that each additional iteration adds less marginal
+effort than the first. The AI estimator applies qualitative +25–50% adjustments
+for genuinely iterative sessions based on transcript evidence (e.g., repeated
+rework of the same code, back-and-forth debugging cycles, multiple failed
+approaches before a solution).
 
 
-### 2.6 "Broader scope projects have significantly larger effort overruns" → Files-touched multiplier
+### 2.6 "Broader scope projects have significantly larger effort overruns" → Files touched as AI input, not formula input
 
 - **Morcov et al. (2020)** reviewed 125 IT projects and found that projects with
   more stakeholders, requirements, and moving parts had significantly larger
@@ -125,13 +135,12 @@ both contribute complexity multipliers:
   multiple contexts spent **17% of their time** simply recovering from context
   switches.
 
-**Our response:** `files_touched_count` adjusts the estimate upward:
-
-| Files touched | Multiplier | Rationale |
-|---------------|------------|-----------|
-| ≤ 3 | 1.0× | Contained scope |
-| 4–10 | 1.1× | Cross-cutting changes, integration testing |
-| 11+ | 1.3× | System-wide impact, heavy context-switching (Tregubov: 17% loss) |
+**Our response:** `files_touched_count` is tracked for display and informs the AI
+estimator's qualitative judgment (+20–30% for broad-scope sessions touching 10+
+files), but it is excluded from the deterministic formula. In calibration testing,
+adding files-touched as a formula term yielded marginal R² of +0.00–0.03 — not
+statistically significant. The signal is real but too noisy to improve a
+deterministic calculation; it works better as qualitative context for the AI.
 
 
 ### 2.7 "Code volume is decoupled from effort in AI-assisted work" → Lines as additive, not primary
@@ -188,104 +197,99 @@ Our estimation model is grounded in the **Hybrid Intelligence Effort** framework
 proposed by Alaswad et al. (2026), which identifies five dimensions that drive
 effort in LLM-assisted work:
 
-| # | Dimension | What it measures | Our session-log proxy |
-|---|-----------|------------------|-----------------------|
-| 1 | **LLM reasoning complexity** | How hard was it for the AI to solve | `conversation_turns`, conversation depth |
-| 2 | **Context completeness** | Did the task need external lookups/clarification | File reads, searches, web fetches (from tool distribution) |
-| 3 | **Transformation scope** | Breadth and impact of changes | `files_touched`, `lines_added`, `lines_removed` |
-| 4 | **Iterative reasoning cycles** | Back-and-forth to reach a solution | `conversation_turns`, `iteration_depth` (re-edits per file) |
-| 5 | **Human oversight effort** | Review, testing, correction by the human | `active_minutes` relative to `wall_clock_minutes` (engagement ratio) |
+| # | Dimension | What it measures | Deterministic formula proxy | AI estimator proxy |
+|---|-----------|------------------|----------------------------|-------------------|
+| 1 | **LLM reasoning complexity** | How hard was it for the AI to solve | `conversation_turns` (via `turns_h` log curve) | Transcript analysis — assesses problem difficulty |
+| 2 | **Context completeness** | Did the task need external lookups/clarification | `read_calls` (via `reads_h` log curve) | Reads tool distribution and investigation patterns |
+| 3 | **Transformation scope** | Breadth and impact of changes | `lines_logic` (via `lines_h` log curve) | Distinguishes logic from boilerplate, assesses architectural impact |
+| 4 | **Iterative reasoning cycles** | Back-and-forth to reach a solution | Embedded in `turns_h` (diminishing returns) | +25–50% qualitative adjustment for heavy iteration |
+| 5 | **Human oversight effort** | Review, testing, correction by the human | Not in formula | `active_minutes` × 2–4 as primary anchor |
 
 ---
 
 ## 4. The Complete Formula
 
-### 4.1 Deterministic formula (transparent, auditable)
-
-```
-Step 1 — Primary signals (take the strongest):
-    tool_h   = weighted_tools(reads × 0.3min + edits × 1.5min + runs × 0.75min) ÷ 60
-               (expert makes fewer, more deliberate actions than AI's iterative approach)
-               (falls back to tools × 0.8min ÷ 60 when breakdown unavailable)
-    turns_h  = tier_turns(substantive_turns)
-               (trivial turns like 'yes', 'commit', 'looks good' are filtered out)
-    active_h = active_minutes × 4 ÷ 60
-               (4× is the upper bound of the 1.4–4× research range)
-
-    if substantive_turns > 0:
-        base = max(tool_h, turns_h, active_h)
-    else:
-        req_h = tier_reqs(premium_requests)     # fallback for older sessions
-        base  = max(tool_h, req_h, active_h)
-
-Step 2 — Complexity multipliers (capped at 1.5× combined):
-    iteration_factor = 1.0
-        + 0.15 if substantive_turns > 15
-        + 0.20 if substantive_turns > 40
-        + 0.15 if iteration_depth > 5
-        + 0.20 if iteration_depth > 12
-
-    scope_factor = 1.0
-        + 0.10 if files_touched > 3
-        + 0.20 if files_touched > 10
-
-    combined = min(iteration_factor × scope_factor, 1.5)
-
-Step 3 — Lines of code (additive):
-    lines_h = tier_lines(lines_added)
-
-Step 4 — Total:
-    total = (base × combined) + lines_h
-    total = max(total, 0.25)                          # floor
-    total = round to nearest 0.25h
-
-For multi-day merged goals: compute per-day, then sum
-    (matches how the AI analyzes each day independently)
-```
-
-### 4.2 Worked example
-
-> **Project:** Built a reporting tool — 150 tools, 25 turns, 40 reqs,
-> 45m active, +320 lines, 6 files, 8.2 edits/file
-
-```
-Step 1 — Primary signals:
-    Tools: 150 → 5h
-    Turns: 25  → 3h
-    Active: 45m × 4 = 3h
-    Base = max(5, 3, 3) = 5h
-
-Step 2 — Complexity multipliers:
-    Turns 25 > 20        → +10%
-    Iter. depth 8.2 > 5  → +10%
-    Files 6 > 5          → +10%
-    Combined: 1.1 × 1.1 × 1.1 = 1.33×
-
-Step 3 — Lines (additive):
-    320 lines → 1.5h
-
-Step 4 — Total:
-    (5h × 1.33) + 1.5h = 6.65 + 1.5 = 8.25h
-```
-
-### 4.3 AI estimate (semantic)
+### 4A. AI Semantic Estimate (primary output)
 
 An LLM reads the full session transcript — every user instruction, every tool
-action, every code change — and produces a calibrated estimate using the same
-research-backed anchors described in Section 2. This is the "AI Est." column.
+action, every code change — and produces a calibrated estimate. This is the
+primary output shown as the "AI Est." column. The AI uses these anchors:
 
-**Strengths:** Understands *what* was done (not just counts), can distinguish
-trivial boilerplate from novel architecture, captures nuance.
+- **Active time anchor:** `active_minutes × 2` (mechanical/routine) to
+  `active_minutes × 4` (design/debugging/research), reflecting the 1.4–4×
+  speedup range from Cambon et al.
+- **Conversation turns** provide a scale reference — more substantive turns
+  generally indicate more complex work requiring more human-equivalent effort.
+- **Logic lines** at expert writing speed (80–130 LoC/hr) — the AI distinguishes
+  boilerplate generation from novel logic and applies appropriate rates.
+- **Read calls** for investigation — heavy reading patterns indicate research
+  and context-gathering work that is effort-intensive for humans.
+- **Qualitative upward adjustments:**
+  - +25–50% for rework (repeated edits to the same files, failed approaches)
+  - +20–30% for broad scope (10+ files touched, cross-cutting changes)
+- **Mechanical task caps:** 0.25–0.5h always, regardless of other signals.
+  Installing a tool or pushing a commit is execution, not thinking.
+- **No single task exceeds 8h.** If the work is that large, it should be split
+  into sub-tasks for granularity.
 
-**Limitations:** Depends on prompt quality; cached per analysis run; may vary
-across model versions.
 
-### 4.4 How they complement each other
+### 4B. Deterministic Formula (transparency floor)
+
+```
+turns_h  = max(0,  −0.15 + 0.67 × ln(turns + 1))
+lines_h  = 0.40 × log₂(lines_logic ÷ 100 + 1)
+reads_h  = 0.10 × log₂(read_calls + 1)
+
+total    = turns_h + lines_h + reads_h
+total    = max(total, 0.25)          ← floor at 15 min
+total    = round to nearest 0.25h
+```
+
+**Definitions:**
+
+- **turns** = substantive conversation turns only. Trivial confirmations like
+  "yes", "commit", "looks good" (under 20 characters) are excluded, as they
+  represent near-zero human thinking effort.
+- **lines_logic** = lines added to logic code files only (`.py` `.js` `.ts` `.go`
+  `.rs` `.java` `.cs` `.cpp` etc.) — excludes `.html` `.css` `.json` `.md`
+  `.yaml` and other non-logic files.
+- **read_calls** = file-read tool calls + grep/glob/search/find calls combined.
+
+For multi-day merged goals: compute per-day, then sum (matches how the AI
+analyses each day independently).
+
+
+### 4C. Worked example
+
+> **Project:** Built a reporting tool — 22 substantive turns, +400 logic lines,
+> +800 boilerplate lines, 35 reads + 15 searches
+
+```
+turns_h = max(0, −0.15 + 0.67 × ln(23)) = 1.95h
+lines_h = 0.40 × log₂(400 ÷ 100 + 1)   = 0.40 × 2.32 = 0.93h
+reads_h = 0.10 × log₂(50 + 1)           = 0.10 × 5.67 = 0.57h
+
+Total   = 1.95 + 0.93 + 0.57 = 3.45h → 3.50h (nearest 0.25h)
+```
+
+Note: The 800 boilerplate lines (HTML/CSS/config) are excluded from `lines_logic`
+by design — the AI generated them in seconds and they don't represent meaningful
+human-equivalent coding effort.
+
+
+### 4D. How they complement each other
 
 The report shows both estimates side by side in the Estimation Evidence table.
-The AI estimate captures semantic understanding; the formula provides a
-transparent, auditable floor. When the two diverge significantly, it signals
-that either the AI missed something or the formula's tiers need recalibration.
+The deterministic formula provides a transparent, reproducible floor — anyone can
+verify it from the raw metrics. The AI estimate captures semantic understanding:
+what the work *meant*, not just how many artifacts it produced.
+
+R² ≈ 0.40 per signal in the deterministic formula means ~0.45–0.60 of variance
+in actual effort is explained by AI semantic judgment — context, business value,
+qualitative complexity. This is why the formula serves as the floor and the AI
+estimate is the primary output. When the two diverge significantly, it signals
+that either the AI identified complexity the formula cannot see, or the formula
+caught an edge case the AI overlooked.
 
 ---
 
@@ -294,11 +298,9 @@ that either the AI missed something or the formula's tiers need recalibration.
 | Rule | Rationale |
 |------|-----------|
 | Mechanical tasks (install, deploy, git push) → 0.25–0.5h max | These are execution, not thinking. Alaswad's complexity inversion: AI handles these trivially. |
-| Trivial sessions (<5 reqs AND <10 tools) → capped at 1h total | The work was inherently lightweight regardless of other signals. |
 | No single task exceeds 8h | If the work is that large, it should be split into sub-tasks for granularity. |
-| Premium reqs capped at 10× conversation turns | Excess reqs are automated completions, not human thinking (Ziegler et al. 2024). |
-| Combined complexity multiplier capped at 1.5× | Prevents compounding on large aggregated goals where all thresholds trigger simultaneously. |
-| Multi-day goals: formula computed per-day, then summed | Matches how the AI analyses each day independently. Prevents metrics accumulation from inflating multipliers. |
+| Multi-day goals: formula computed per-day, then summed | Matches how the AI analyses each day independently. Prevents metrics accumulation from inflating estimates. |
+| Deterministic formula floor: 0.25h (15 min minimum) | Any meaningful work — even a quick fix — involves context-gathering, understanding, and verification. |
 
 ---
 

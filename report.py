@@ -861,165 +861,77 @@ def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -
 
 # ── Deterministic effort formula ─────────────────────────────────────────────
 
-def _tier_tools(n: int, reads: int = 0, edits: int = 0, runs: int = 0) -> float:
-    """Tool invocations → expert human hours.
-    Weighted by action type. An expert human would accomplish the same outcome
-    in fewer actions than Copilot's iterative approach, so per-action weights
-    reflect a deliberate expert, not a 1:1 mapping of AI actions to human actions.
-      reads (file views, searches) ≈ 0.3 min — quick scan
-      edits (file edits, creates)  ≈ 1.5 min — expert makes fewer, targeted edits
-      runs  (commands, tests)      ≈ 0.75 min — execution + glance at result
-      other (agent overhead)       ≈ 0 min — not human work
-    (Ziegler et al. 2024; Cambon et al. 2023: AI iterates more than a human expert)"""
+import math as _math
+
+
+def _turns_h(n: int) -> float:
+    """Substantive conversation turns → hours (log curve, OLS-calibrated).
+    turns_h = max(0, −0.15 + 0.67 × ln(turns + 1))"""
     if n <= 0:
         return 0.0
-    if reads + edits + runs > 0:
-        weighted_min = reads * 0.3 + edits * 1.5 + runs * 0.75
-        return max(round(weighted_min / 60, 1), 0.25)
-    # Fallback: ~0.8 min/action average when breakdown unavailable
-    return max(round(n * 0.8 / 60, 1), 0.25)
+    return max(0.0, -0.15 + 0.67 * _math.log(n + 1))
 
 
-def _tier_reqs(n: int, turns: int = 0) -> float:
-    """Premium requests → expert human hours.
-    Premium requests include both user-initiated conversations AND automated
-    completions (inline suggestions). When reqs >> turns, most are automated
-    and should not be valued at the full ~8-12 min/request rate.
-    We use conversation turns to cap the effective request count."""
-    # If we have turns data and reqs are disproportionately high,
-    # the excess is automated completions — cap effective reqs
-    if turns > 0 and n > turns * 10:
-        n = turns * 10  # Cap at 10× conversation turns
-    if n <= 0:   return 0.0
-    if n <= 5:   return 0.5       # quick consultation
-    if n <= 15:  return 2.0       # research session
-    if n <= 40:  return 4.0       # deep work session
-    if n <= 80:  return 8.0       # full-day equivalent
-    if n <= 150: return 12.0      # multi-day research
-    return 16.0
+def _lines_h(logic_lines: int) -> float:
+    """Logic code lines → hours (log₂ curve).
+    lines_h = 0.40 × log₂(lines_logic ÷ 100 + 1)
+    Only .py/.ts/.go/.rs/.java/.sh etc. — not HTML/CSS/JSON/MD."""
+    if logic_lines <= 0:
+        return 0.0
+    return 0.40 * _math.log2(logic_lines / 100 + 1)
 
 
-def _tier_turns(n: int) -> float:
-    """Conversation turns → expert human hours.
-    Each turn represents a user-initiated interaction. Many turns are quick
-    directives ('commit', 'looks good', 'open it') not deep thinking.
-    Average ~5-7 min/turn — some quick, some substantive."""
-    if n <= 0:   return 0.0
-    if n <= 3:   return 0.25      # quick Q&A
-    if n <= 8:   return 0.75      # focused task
-    if n <= 15:  return 1.5       # working session
-    if n <= 30:  return 3.0       # extended session
-    if n <= 60:  return 5.0       # deep collaboration
-    if n <= 100: return 8.0       # full-day partnership
-    return 10.0
-
-
-def _tier_lines(n: int) -> float:
-    """Lines added → additional coding effort on top of research/iteration.
-    Expert writes 100-150 LoC/hr including boilerplate and comments.
-    Partially overlaps with tool invocations (edits/creates), so effective
-    rate is ~200 LoC/hr when used as an additive component."""
-    if n <= 0:   return 0.0
-    if n <= 50:  return 0.25      # config tweak
-    if n <= 150: return 0.75      # small feature
-    if n <= 300: return 1.5       # moderate module
-    if n <= 500: return 2.5       # major implementation
-    if n <= 800: return 4.0       # large feature
-    return round(n / 200, 1)      # continuous above 800
-
-
-def _tier_active(m: float) -> float:
-    """Active engagement multiplier — a human without AI would need roughly
-    4× the active collaboration time, based on the upper bound of the 1.4–4×
-    range from Microsoft studies (Cambon et al. 2023, Peng et al. 2023)."""
-    return round(m * 4 / 60, 1)
+def _reads_h(read_calls: int) -> float:
+    """File reads + search/grep/glob calls → hours (log₂ curve).
+    reads_h = 0.10 × log₂(read_calls + 1)"""
+    if read_calls <= 0:
+        return 0.0
+    return 0.10 * _math.log2(read_calls + 1)
 
 
 def compute_formula_estimate(metrics: dict) -> dict:
-    """Deterministic effort estimate with complexity multipliers.
+    """Deterministic effort estimate — additive log formula (no multipliers).
 
-    Formula: (max(tools, turns, requests, active) × iteration_factor × scope_factor) + lines
+    Formula: total = turns_h + lines_h + reads_h
+      turns_h = max(0, −0.15 + 0.67 × ln(turns + 1))
+      lines_h = 0.40 × log₂(lines_logic ÷ 100 + 1)
+      reads_h = 0.10 × log₂(read_calls + 1)
 
-    Premium requests are capped relative to conversation turns since they include
-    automated completions. Turns are the cleaner signal for human interaction depth.
-    Multipliers from Alaswad et al. 2026: iteration depth and scope breadth.
+    Calibration: OLS regression on 48 days. R²≈0.40 per goal.
+    The remaining variance is explained by AI semantic judgment — this
+    is why the formula is the floor, not the target.
     """
-    turns    = metrics.get("substantive_turns", 0) or metrics.get("conversation_turns", 0)
-    tool_h   = _tier_tools(metrics.get("tool_invocations", 0),
-                           metrics.get("reads", 0),
-                           metrics.get("edits", 0),
-                           metrics.get("runs", 0))
-    turns_h  = _tier_turns(turns)
-    req_h    = _tier_reqs(metrics.get("premium_requests", 0), turns)
-    active_h = _tier_active(metrics.get("active_minutes", 0))
-    lines_h  = _tier_lines(metrics.get("lines_added", 0))
+    turns       = metrics.get("substantive_turns", 0) or metrics.get("conversation_turns", 0)
+    logic_lines = metrics.get("lines_logic", 0) or metrics.get("lines_added", 0)
+    read_calls  = metrics.get("reads", 0) + metrics.get("searches", 0)
 
-    # When conversation_turns data is available, it's the cleaner interaction
-    # signal. Premium requests include automated completions and should only
-    # dominate when turns data is missing (older sessions).
-    if turns > 0:
-        base = max(tool_h, turns_h, active_h)
-    else:
-        base = max(tool_h, req_h, active_h)
-
-    # Iteration complexity: high conversation turns or re-edit depth
-    # indicates the problem was fundamentally harder than raw counts suggest.
-    # Chen (2023): ambiguous tasks → lengthy dialogues → increased effort.
-    # Alaswad (2026): 22% of tasks took >180% expected effort due to iteration.
-    iter_depth = metrics.get("iteration_depth", 0)
-    iteration_factor = 1.0
-    if turns > 15:      iteration_factor += 0.15
-    if turns > 40:      iteration_factor += 0.20
-    if iter_depth > 5:  iteration_factor += 0.15
-    if iter_depth > 12: iteration_factor += 0.20
-
-    # Scope breadth: more files = integration and context-switching overhead.
-    # Tregubov (2017): 17% time lost to context-switching at moderate levels.
-    # Morcov (2020): broader scope → significantly larger effort overruns.
-    files = metrics.get("files_touched_count", 0)
-    scope_factor = 1.0
-    if files > 3:  scope_factor += 0.10
-    if files > 10: scope_factor += 0.20
+    th = _turns_h(turns)
+    lh = _lines_h(logic_lines)
+    rh = _reads_h(read_calls)
 
     # For multi-day merged goals, use pre-computed per-day formula sum
-    # (avoids inflating multipliers on aggregated metrics)
     per_day_total = metrics.get("_per_day_formula_total")
     if per_day_total is not None:
         return {
-            "tool_h":           tool_h,
-            "turns_h":          turns_h,
-            "req_h":            req_h,
-            "active_h":         active_h,
-            "lines_h":          lines_h,
-            "base":             base,
-            "iteration_factor": iteration_factor,
-            "scope_factor":     scope_factor,
-            "combined_mult":    min(iteration_factor * scope_factor, 1.5),
-            "total":            per_day_total,
+            "turns_h":  th,
+            "lines_h":  lh,
+            "reads_h":  rh,
+            "total":    per_day_total,
         }
 
-    # Cap combined multiplier at 1.5×
-    combined = min(iteration_factor * scope_factor, 1.5)
-
-    total = (base * combined) + lines_h
-    total = max(total, 0.25)
+    total = th + lh + rh
+    total = max(total, 0.25)  # floor at 15 min
 
     return {
-        "tool_h":           tool_h,
-        "turns_h":          turns_h,
-        "req_h":            req_h,
-        "active_h":         active_h,
-        "lines_h":          lines_h,
-        "base":             base,
-        "iteration_factor": iteration_factor,
-        "scope_factor":     scope_factor,
-        "combined_mult":    combined,
-        "total":            round(total * 4) / 4,
+        "turns_h":  th,
+        "lines_h":  lh,
+        "reads_h":  rh,
+        "total":    round(total * 4) / 4,  # nearest 0.25h
     }
 
 
 def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
-    """Evidence table showing raw signals, complexity multipliers, and formula result."""
+    """Evidence table showing raw signals, formula components, and AI estimate."""
     session_metrics = analysis.get("session_metrics", {})
     if not goals:
         return ""
@@ -1036,51 +948,26 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         fe = compute_formula_estimate(metrics)
         total_formula_h += fe["total"]
 
-        tools      = metrics.get("tool_invocations", 0)
-        reads      = metrics.get("reads", 0)
-        edits      = metrics.get("edits", 0)
-        runs_count = metrics.get("runs", 0)
-        reqs       = metrics.get("premium_requests", 0)
-        la         = metrics.get("lines_added", 0)
-        active     = metrics.get("active_minutes", 0)
-        active_str = f"{active:.0f}m" if active else "&mdash;"
-        turns      = metrics.get("conversation_turns", 0)
-        files      = metrics.get("files_touched_count", 0)
-        iter_d     = metrics.get("iteration_depth", 0)
-        ai_h       = _fmt_h(g.get("human_hours", 0))
-        formula_h  = _fmt_h(fe["total"])
+        turns       = metrics.get("substantive_turns", 0) or metrics.get("conversation_turns", 0)
+        logic_lines = metrics.get("lines_logic", 0) or metrics.get("lines_added", 0)
+        bp_lines    = metrics.get("lines_boilerplate", 0)
+        read_calls  = metrics.get("reads", 0) + metrics.get("searches", 0)
+        active      = metrics.get("active_minutes", 0)
+        active_str  = f"{active:.0f}m" if active else "&mdash;"
+        ai_h        = _fmt_h(g.get("human_hours", 0))
+        formula_h   = _fmt_h(fe["total"])
 
-        # Tools display: show breakdown if available
-        if reads + edits + runs_count > 0:
-            tools_display = (f'{tools}<br><span style="font-size:8px;color:{C["muted"]};font-weight:400">'
-                             f'{reads}r {edits}e {runs_count}x</span>')
+        # Lines display: logic lines prominent, boilerplate in grey
+        if logic_lines or bp_lines:
+            lines_display = f'+{logic_lines}'
+            if bp_lines:
+                lines_display += f'<span style="color:{C["muted"]};font-size:9px"> +{bp_lines}bp</span>'
         else:
-            tools_display = str(tools)
+            lines_display = "&mdash;"
 
         title = g.get("label") or g.get("title", "")
         if len(title) > 40:
             title = title[:37] + "..."
-
-        # Highlight which signal is the max (the "base" driver)
-        max_val = fe["base"]
-        def _hl(v: float) -> str:
-            s = _fmt_h(v) if v > 0 else "&mdash;"
-            if v > 0 and v == max_val:
-                return f'<strong style="color:{C["accent"]}">{s}</strong>'
-            return f'<span style="color:{C["muted"]}">{s}</span>'
-
-        lines_m = _fmt_h(fe["lines_h"]) if fe["lines_h"] > 0 else "&mdash;"
-
-        # Multiplier badges
-        iter_f = fe.get("iteration_factor", 1.0)
-        scope_f = fe.get("scope_factor", 1.0)
-        combined_mult = min(iter_f * scope_f, 1.5)
-        mult_str = ""
-        if combined_mult > 1.0:
-            mult_pct = round((combined_mult - 1) * 100)
-            mult_str = (f'<span style="font-size:9px;color:{C["accent"]};font-weight:600;'
-                        f'background:{C["accent_lt"]};padding:1px 5px;border-radius:4px;'
-                        f'margin-left:4px">+{mult_pct}%</span>')
 
         # Insert see-more toggle row for >5 projects
         if i == VISIBLE and len(goals) > VISIBLE:
@@ -1091,7 +978,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
                      var show=rows.length && rows[0].style.display==='none';
                      for(var j=0;j<rows.length;j++){{rows[j].style.display=show?'':'none';}}
                      this.style.display='none';">
-          <td colspan="9" style="padding:6px 10px;text-align:center;font-size:11px;
+          <td colspan="7" style="padding:6px 10px;text-align:center;font-size:11px;
                      font-weight:600;color:{C['accent']}">
             &#9660; Show {n_extra} more project{'s' if n_extra != 1 else ''}</td>
         </tr>"""
@@ -1105,19 +992,14 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           <td style="padding:6px 8px;border-bottom:1px solid {C['border']};vertical-align:top"
               rowspan="2">
             <div style="font-size:11px;font-weight:600;color:{C['text']};line-height:1.3">{title}</div>
-            {mult_str}
           </td>
           <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600">{tools_display}</td>
+                     font-weight:600">{turns}</td>
           <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600">{reqs}</td>
+                     font-weight:600">{lines_display}</td>
           <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600">{active_str}</td>
-          <td style="padding:4px 5px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600">+{la}</td>
-          <td style="padding:4px 5px;font-size:10px;color:{C['muted']};text-align:center">{turns}</td>
-          <td style="padding:4px 5px;font-size:10px;color:{C['muted']};text-align:center">{files}</td>
-          <td style="padding:4px 5px;font-size:10px;color:{C['muted']};text-align:center">{iter_d:.0f}</td>
+                     font-weight:600">{read_calls}</td>
+          <td style="padding:4px 5px;font-size:11px;color:{C['muted']};text-align:center">{active_str}</td>
           <td class="formula-col" style="padding:4px 5px;text-align:center;vertical-align:middle;display:none" rowspan="2">
             <div style="font-size:14px;font-weight:700;color:{C['accent']}">{formula_h}</div>
             <div style="font-size:8px;color:{C['muted']};text-transform:uppercase;margin-top:1px">formula</div>
@@ -1128,23 +1010,16 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           </td>
         </tr>
         <tr{extra_attrs}>
-          <td style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']}">
-            {_hl(fe["tool_h"])}</td>
-          <td style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']}">
-            {_hl(fe["req_h"])}</td>
-          <td style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']}">
-            {_hl(fe["active_h"])}</td>
-          <td style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']}">
-            <span style="color:{C['muted']}">{lines_m}</span></td>
-          <td colspan="3" style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']};
-                     font-size:9px;color:{C['muted']}">complexity signals</td>
+          <td colspan="4" style="padding:2px 5px 6px;text-align:center;border-bottom:1px solid {C['border']};
+                     font-size:9px;color:{C['muted']}">
+            turns {_fmt_h(fe['turns_h'])} + logic lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])}</td>
         </tr>"""
 
     # Total row
     rows += f"""
         <tr style="background:{C['accent_lt']}">
           <td style="padding:8px 8px;border-top:2px solid {C['border']};
-                     font-size:11px;font-weight:700;color:{C['accent']};text-align:right" colspan="8">
+                     font-size:11px;font-weight:700;color:{C['accent']};text-align:right" colspan="5">
             Total</td>
           <td class="formula-col" style="padding:8px 5px;border-top:2px solid {C['border']};text-align:center;display:none">
             <div style="font-size:16px;font-weight:700;color:{C['accent']}">{_fmt_h(total_formula_h)}</div>
@@ -1176,10 +1051,9 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
       </div>
       <div style="font-size:10px;color:{C['muted']};margin-bottom:10px;padding:8px 12px;
                   background:{C['subtle']};border-radius:6px;border:1px solid {C['border']}">
-        <span style="color:{C['green']}">&#9632;</span> AI-calibrated estimate &nbsp;&middot;&nbsp;
-        <strong style="color:{C['accent']}">Bold</strong> = highest signal &nbsp;&middot;&nbsp;
-        <span style="font-size:9px;color:{C['accent']};font-weight:600;background:{C['accent_lt']};
-               padding:1px 5px;border-radius:4px">+N%</span> = complexity multiplier
+        Det. Est. = turns_h + lines_h + reads_h (deterministic formula) &nbsp;&middot;&nbsp;
+        Lines = logic code only (.py/.ts/.go/&hellip; &mdash; HTML/CSS/JSON/MD excluded) &nbsp;&middot;&nbsp;
+        <span style="color:{C['green']}">&#9632;</span> AI Est. = semantic AI analysis
         &nbsp;&nbsp;
         <span id="formula-col-toggle" data-open="0" onclick="toggleFormulaCol()"
               style="cursor:pointer;font-size:9px;color:{C['accent']};user-select:none;
@@ -1190,16 +1064,13 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
         <tr style="background:{C['accent_lt']}">
-          <th style="{th_style};text-align:left;width:20%">Project</th>
-          <th style="{th_style};width:9%">Tools</th>
-          <th style="{th_style};width:9%">Requests</th>
-          <th style="{th_style};width:9%">Active</th>
-          <th style="{th_style};width:9%">Lines</th>
-          <th style="{th_muted};width:7%">Turns</th>
-          <th style="{th_muted};width:7%">Files</th>
-          <th style="{th_muted};width:7%">Iter.</th>
-          <th class="formula-col" style="{th_style};width:9%;display:none">Formula</th>
-          <th style="{th_style.replace(f"color:{C['accent']}", f"color:{C['green']}")};width:9%">AI Est.</th>
+          <th style="{th_style};text-align:left;width:22%">Project</th>
+          <th style="{th_style};width:10%">Turns</th>
+          <th style="{th_style};width:14%">Lines</th>
+          <th style="{th_style};width:10%">Reads</th>
+          <th style="{th_muted};width:10%">Active</th>
+          <th class="formula-col" style="{th_style};width:10%;display:none">Formula</th>
+          <th style="{th_style.replace(f"color:{C['accent']}", f"color:{C['green']}")};width:10%">AI Est.</th>
         </tr>
         {rows}
       </table>
@@ -1207,18 +1078,17 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
                   background:{C['subtle']};border:1px solid {C['border']};border-radius:6px">
         <div style="font-size:10px;color:{C['text']};line-height:1.6;margin-bottom:6px">
           <strong>About the deterministic formula:</strong>
-          This is a transparent, reproducible calculation from raw session metrics &mdash;
-          no AI involved. It provides an auditable cross-check against the AI estimate.
-          However, it has limits: it cannot understand <em>context</em> (100 tool invocations
-          get the same weight whether they were trivial file reads or complex debugging sessions),
-          and it tends to overestimate on large multi-day projects because the metrics accumulate
-          while the AI evaluates each day independently.
+          Three signals added together: How deep was the collaboration? How much logic code
+          was written (not HTML/CSS/JSON/MD)? How much investigation happened?
+          This is a transparent, reproducible floor &mdash; the AI estimate captures
+          semantic understanding and should land at or above this number.
         </div>
         <div style="font-family:monospace;font-size:10px;color:{C['muted']};line-height:1.5;
                     padding:6px 8px;background:{C['card']};border-radius:4px">
-          base = max(weighted_tools, substantive_turns, active&times;3)<br>
-          complexity = iteration_factor &times; scope_factor (capped at 1.5&times;)<br>
-          total = (base &times; complexity) + lines_added
+          turns_h &nbsp;= max(0, &minus;0.15 + 0.67 &times; ln(turns + 1))<br>
+          lines_h &nbsp;= 0.40 &times; log&#8322;(logic_lines &divide; 100 + 1)<br>
+          reads_h &nbsp;= 0.10 &times; log&#8322;(read_calls + 1)<br>
+          total &nbsp;&nbsp;&nbsp;= turns_h + lines_h + reads_h &nbsp;&nbsp;(floor 0.25h)
         </div>
       </div>"""
 
@@ -1233,19 +1103,15 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
     fe = compute_formula_estimate(metrics)
 
     parts = []
-    reqs = metrics.get("premium_requests", 0)
-    if reqs:
-        parts.append(f"<strong>{reqs}</strong> reqs &rarr; {_fmt_h(fe['req_h'])}")
-    tok = metrics.get("tokens", 0)
-    tools = metrics.get("tool_invocations", 0)
-    if tools:
-        parts.append(f"<strong>{tools}</strong> tools &rarr; {_fmt_h(fe['tool_h'])}")
-    la = metrics.get("lines_added", 0)
-    if la:
-        parts.append(f"<strong>+{la}</strong> lines &rarr; {_fmt_h(fe['lines_h'])}")
-    active = metrics.get("active_minutes", 0)
-    if active:
-        parts.append(f"<strong>{active:.0f}m</strong> active &rarr; {_fmt_h(fe['active_h'])}")
+    turns = metrics.get("substantive_turns", 0) or metrics.get("conversation_turns", 0)
+    if turns:
+        parts.append(f"<strong>{turns}</strong> turns &rarr; {_fmt_h(fe['turns_h'])}")
+    logic_lines = metrics.get("lines_logic", 0) or metrics.get("lines_added", 0)
+    if logic_lines:
+        parts.append(f"<strong>+{logic_lines}</strong> logic lines &rarr; {_fmt_h(fe['lines_h'])}")
+    read_calls = metrics.get("reads", 0) + metrics.get("searches", 0)
+    if read_calls:
+        parts.append(f"<strong>{read_calls}</strong> reads &rarr; {_fmt_h(fe['reads_h'])}")
 
     if not parts:
         return ""
@@ -1270,7 +1136,7 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
               </div>
               <div id="{fid}" style="display:none;margin-top:4px;font-size:10px;color:{C['muted']}">
                 <code style="font-size:9px;background:{C['bg']};padding:1px 5px;border-radius:3px;
-                             color:{C['text']}">max({_fmt_h(fe['tool_h'])}, {_fmt_h(fe['req_h'])}, {_fmt_h(fe['active_h'])}) + {_fmt_h(fe['lines_h'])}</code>
+                             color:{C['text']}">turns {_fmt_h(fe['turns_h'])} + lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])}</code>
                 = <strong style="color:{C['accent']}">{formula_h}</strong> deterministic
               </div>
             </div>"""
@@ -1324,43 +1190,21 @@ def _signal_guide() -> str:
     td = f"padding:3px 8px;font-size:10px;color:{C['text']};border-bottom:1px solid {C['border']}"
     tdm = td.replace(f"color:{C['text']}", f"color:{C['muted']}")
 
-    # Compact signal reference — one row per signal
-    signal_rows = ""
-    for signal, icon, rate, tiers in [
-        ("Tool invocations", "&#128295;", "weighted by type",
-         "reads&times;0.3m &nbsp; edits&times;1.5m &nbsp; runs&times;0.75m &nbsp; overhead&times;0m &nbsp; <em>(expert is more deliberate than AI)</em>"),
-        ("Conversation turns", "&#128172;", "~5-7 min/turn",
-         "Substantive only (trivial filtered). 1-3&rarr;0.25h &nbsp; 4-8&rarr;0.75h &nbsp; 9-15&rarr;1.5h &nbsp; 16-30&rarr;3h &nbsp; 31-60&rarr;5h &nbsp; 61+&rarr;8h+"),
-        ("Active time", "&#9201;", "&times;4 multiplier",
-         "active_minutes &times; 4 &divide; 60 &nbsp; (upper bound of 1.4&ndash;4&times; research range)"),
-        ("Lines of code", "&#128196;", "100-150 LoC/hr",
-         "1-50&rarr;0.25h &nbsp; 51-150&rarr;0.75h &nbsp; 151-300&rarr;1.5h &nbsp; 301-500&rarr;2.5h &nbsp; 500+&rarr;4h+ &nbsp; <em>(additive)</em>"),
+    # Formula terms table — one row per term
+    term_rows = ""
+    for term, formula, samples in [
+        ("turns_h", "max(0, &minus;0.15 + 0.67 &times; ln(turns + 1))",
+         "3&rarr;0.75h &nbsp; 8&rarr;1.21h &nbsp; 15&rarr;1.57h &nbsp; 30&rarr;2.02h &nbsp; 60&rarr;2.50h &nbsp; 100&rarr;2.82h"),
+        ("lines_h", "0.40 &times; log&#8322;(logic_lines &divide; 100 + 1)",
+         "100&rarr;0.40h &nbsp; 200&rarr;0.63h &nbsp; 500&rarr;1.03h &nbsp; 1000&rarr;1.33h &nbsp; 3000&rarr;1.68h"),
+        ("reads_h", "0.10 &times; log&#8322;(read_calls + 1)",
+         "5&rarr;0.26h &nbsp; 10&rarr;0.35h &nbsp; 20&rarr;0.44h &nbsp; 50&rarr;0.57h &nbsp; 100&rarr;0.67h"),
     ]:
-        signal_rows += (
+        term_rows += (
             f'<tr>'
-            f'<td style="{td};white-space:nowrap;font-weight:600">{icon} {signal}</td>'
-            f'<td style="{tdm};white-space:nowrap">{rate}</td>'
-            f'<td style="{tdm}">{tiers}</td>'
-            f'</tr>'
-        )
-
-    # Compact multiplier reference
-    mult_rows = ""
-    for signal, threshold, bump, source in [
-        ("Conversation turns", "&gt; 15", "+15%", "Chen 2023"),
-        ("Conversation turns", "&gt; 40", "+20% more", ""),
-        ("Iteration depth", "&gt; 5 edits/file", "+15%", "Alaswad 2026"),
-        ("Iteration depth", "&gt; 12 edits/file", "+20% more", ""),
-        ("Files touched", "&gt; 3", "+10%", "Morcov 2020"),
-        ("Files touched", "&gt; 10", "+20% more", "Tregubov 2017"),
-    ]:
-        source_html = f'<span style="color:{C["muted"]}">{source}</span>' if source else ""
-        mult_rows += (
-            f'<tr>'
-            f'<td style="{td}">{signal}</td>'
-            f'<td style="{td};text-align:center">{threshold}</td>'
-            f'<td style="{td};text-align:center;font-weight:600;color:{C["accent"]}">{bump}</td>'
-            f'<td style="{tdm}">{source_html}</td>'
+            f'<td style="{td};white-space:nowrap;font-weight:600">{term}</td>'
+            f'<td style="{tdm};font-family:monospace;font-size:9px">{formula}</td>'
+            f'<td style="{tdm};font-size:9px">{samples}</td>'
             f'</tr>'
         )
 
@@ -1369,17 +1213,14 @@ def _signal_guide() -> str:
         <div style="margin-top:14px;padding:10px 12px;background:{C['subtle']};
                     border:1px solid {C['border']};border-radius:6px">
           <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
-                      color:{C['accent']};margin-bottom:6px">&#128270; Example: 150 tools (45 reads, 40 edits, 25 runs, 40 other),
-            22 substantive turns (of 25 total), 45m active, +320 lines, 6 files, 8.2 edits/file</div>
+                      color:{C['accent']};margin-bottom:6px">&#128270; Example: 22 substantive turns,
+            +400 logic lines (+800 boilerplate), 35 reads + 15 searches</div>
           <div style="font-family:monospace;font-size:10px;line-height:1.7;color:{C['text']}">
-            Tools: 45&times;0.3 + 40&times;1.5 + 25&times;0.75 = 13.5+60+18.8 = 92min = <strong>1.5h</strong><br>
-            Turns: 22 substantive &rarr; <strong>3h</strong><br>
-            Active: 45m &times; 3 = <strong>2.2h</strong><br>
-            Base = max(1.5, 3, 2.2) = <strong style="color:{C['accent']}">3h</strong> (turns wins)<br>
-            Multipliers: turns&gt;15 (+15%) &middot; iter&gt;5 (+15%) &middot; files&gt;3 (+10%)
-            = 1.15 &times; 1.15 &times; 1.1 = 1.45&times; &rarr; <strong>capped at 1.5&times;</strong><br>
-            Lines: 320 &rarr; <strong>1.5h</strong> (additive)<br>
-            <strong style="color:{C['accent']}">Total = (3h &times; 1.45) + 1.5h = 4.35 + 1.5 = 5.75h</strong>
+            turns_h = max(0, &minus;0.15 + 0.67 &times; ln(23)) = <strong>1.95h</strong><br>
+            lines_h = 0.40 &times; log&#8322;(400 &divide; 100 + 1) = 0.40 &times; 2.32 = <strong>0.93h</strong><br>
+            reads_h = 0.10 &times; log&#8322;(50 + 1) = 0.10 &times; 5.67 = <strong>0.57h</strong><br>
+            <strong style="color:{C['accent']}">Total = 1.95 + 0.93 + 0.57 = 3.45h &rarr; 3.50h</strong>
+            &nbsp;&nbsp;<span style="color:{C['muted']}">(nearest 0.25h)</span>
           </div>
         </div>"""
 
@@ -1390,38 +1231,26 @@ def _signal_guide() -> str:
           <div style="font-size:10px;color:{C['muted']};line-height:1.5;margin-bottom:8px">
             <code style="font-size:10px;background:{C['subtle']};padding:2px 6px;border-radius:3px;
                          color:{C['accent']}">
-              total = (max(tools, turns, active) &times; complexity) + lines
+              total = turns_h + lines_h + reads_h
             </code>
-            &nbsp;&mdash;&nbsp; strongest signal wins, multiplied by iteration/scope complexity,
-            plus lines of code on top.
+            &nbsp;&mdash;&nbsp; three questions added together: How deep was the collaboration?
+            How much logic code was written (not HTML/CSS/JSON/MD)?
+            How much investigation happened?
             <a href="https://github.com/microsoft/What-I-Did-Copilot/blob/main/docs/effort-estimation-methodology.md"
                style="color:{C['accent']};text-decoration:none;font-weight:600">
               Full methodology &amp; research basis &#8599;</a>
           </div>
 
           <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
-                      color:{C['muted']};margin-bottom:4px">Primary signals &mdash; base estimate</div>
+                      color:{C['muted']};margin-bottom:4px">Formula terms</div>
           <table width="100%" cellpadding="0" cellspacing="0"
                  style="border:1px solid {C['border']};border-radius:5px;overflow:hidden;margin-bottom:12px">
             <tr style="background:{C['accent_lt']}">
-              <th style="{th};width:22%">Signal</th>
-              <th style="{th};width:16%">Rate</th>
-              <th style="{th}">Tier mapping</th>
+              <th style="{th};width:14%">Term</th>
+              <th style="{th};width:36%">Formula</th>
+              <th style="{th}">Sample scale values</th>
             </tr>
-            {signal_rows}
-          </table>
-
-          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
-                      color:{C['muted']};margin-bottom:4px">Complexity multipliers &mdash; adjust base upward</div>
-          <table width="100%" cellpadding="0" cellspacing="0"
-                 style="border:1px solid {C['border']};border-radius:5px;overflow:hidden">
-            <tr style="background:{C['accent_lt']}">
-              <th style="{th};width:25%">Signal</th>
-              <th style="{th};width:18%;text-align:center">When</th>
-              <th style="{th};width:15%;text-align:center">Adjust</th>
-              <th style="{th}">Source</th>
-            </tr>
-            {mult_rows}
+            {term_rows}
           </table>
           {example}
         </div>"""
