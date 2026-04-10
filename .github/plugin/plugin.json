@@ -1,0 +1,14 @@
+{
+  "name": "whatidid",
+  "description": "Turn your Copilot sessions into proof of impact — research-grounded HTML reports with effort estimation, skills analysis, and ROI metrics from local session logs.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Microsoft",
+    "url": "https://www.microsoft.com"
+  },
+  "repository": "https://github.com/microsoft/What-I-Did-Copilot",
+  "license": "MIT",
+  "keywords": ["copilot", "productivity", "impact", "report", "estimation", "roi", "session-logs"],
+  "agents": [".github/agents/whatidid.agent.md"],
+  "skills": ["skills/whatidid/"]
+}
