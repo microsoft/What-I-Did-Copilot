@@ -9,6 +9,6 @@
   "repository": "https://github.com/microsoft/What-I-Did-Copilot",
   "license": "MIT",
   "keywords": ["copilot", "productivity", "impact", "report", "estimation", "roi", "session-logs"],
-  "agents": ["./agents/whatidid.agent.md"],
-  "skills": ["./skills/whatidid/"]
+  "agents": [".github/agents/whatidid.agent.md"],
+  "skills": ["skills/whatidid/"]
 }
