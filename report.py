@@ -613,35 +613,38 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
         return ""
 
     MODE_META = {
-        "Creative partner":    {"icon": "&#127912;", "desc": "Design, strategy, architecture"},
-        "Research assistant":  {"icon": "&#128300;", "desc": "Exploring options, investigating"},
-        "Builder":             {"icon": "&#128679;", "desc": "Writing code, generating files"},
-        "Refinement partner":  {"icon": "&#128260;", "desc": "Iterating, polishing, improving"},
-        "Needed hand-holding": {"icon": "&#128295;", "desc": "Errors, retries, course-correcting AI"},
-        "Grunt work handled":  {"icon": "&#9889;",   "desc": "Git ops, config, installs, routine"},
+        "Designing":         {"icon": "&#127912;", "desc": "Design, strategy, architecture",       "high_value": True},
+        "Researching":       {"icon": "&#128300;", "desc": "Exploring options, investigating",      "high_value": True},
+        "Building":          {"icon": "&#128679;", "desc": "Writing code, generating files",        "high_value": True},
+        "Refining":          {"icon": "&#128260;", "desc": "Iterating, polishing, improving",       "high_value": True},
+        "Course-correcting": {"icon": "&#128295;", "desc": "Errors, retries, course-correcting AI", "high_value": False},
+        "Delegating":        {"icon": "&#9889;",   "desc": "Git ops, config, installs, routine",    "high_value": False},
     }
 
     sorted_modes = sorted(modes.items(), key=lambda x: -x[1])
 
-    # Narrative stats — compute raw fractions first, round once, clamp to avoid
-    # drift from independent rounding of each term.
-    handholding_raw = modes.get("Needed hand-holding", 0) / total * 100
-    grunt_raw = modes.get("Grunt work handled", 0) / total * 100
-    high_value_raw = 100 - handholding_raw - grunt_raw
-    handholding_pct = round(handholding_raw)
-    grunt_pct = round(grunt_raw)
+    # Narrative stats — high-value vs low-value based on mode metadata
+    low_value_mins = sum(
+        mins for mode, mins in sorted_modes
+        if not MODE_META.get(mode, {}).get("high_value", True)
+    )
+    high_value_raw = (total - low_value_mins) / total * 100
+    course_raw = modes.get("Course-correcting", 0) / total * 100
+    delegating_raw = modes.get("Delegating", 0) / total * 100
     high_value_pct = max(0, min(100, round(high_value_raw)))
+    course_pct = round(course_raw)
+    delegating_pct = round(delegating_raw)
     total_str = f"{total:.0f}m" if total < 60 else f"{total / 60:.1f}h"
     n_modes = len([m for m in sorted_modes if m[1] >= 0.1])
 
     # Headline insight
     headline = (f"{high_value_pct}% of your collaboration was high-value work "
-                f"&mdash; creating, researching, building, and refining.")
+                f"&mdash; designing, researching, building, and refining.")
     sub_parts = []
-    if grunt_pct > 0:
-        sub_parts.append(f"Copilot automated {grunt_pct}% of routine grunt work")
-    if handholding_pct > 0:
-        sub_parts.append(f"{handholding_pct}% was spent course-correcting AI output")
+    if delegating_pct > 0:
+        sub_parts.append(f"Copilot automated {delegating_pct}% of routine tasks")
+    if course_pct > 0:
+        sub_parts.append(f"{course_pct}% was spent course-correcting AI output")
     subtitle = " &middot; ".join(sub_parts) if sub_parts else ""
 
     # Card grid — build explicit <tr> rows to avoid mismatched nesting.

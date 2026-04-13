@@ -521,7 +521,7 @@ def compute_active_time_quality(sessions: list) -> dict:
     from datetime import datetime as _dt
 
     modes = {name: 0.0 for name, _, _ in _QUALITY_MODES}
-    modes["Needed hand-holding"] = 0.0
+    modes["Course-correcting"] = 0.0
 
     for s in sessions:
         user_turns = []
@@ -565,11 +565,11 @@ def compute_active_time_quality(sessions: list) -> dict:
         for t in user_turns:
             mins = t["minutes"]
             if t["needs_handholding"]:
-                modes["Needed hand-holding"] += mins
+                modes["Course-correcting"] += mins
                 continue
             # Trivial turns → grunt work
             if t["is_trivial"]:
-                modes["Grunt work handled"] = modes.get("Grunt work handled", 0) + mins
+                modes["Delegating"] = modes.get("Delegating", 0) + mins
                 continue
             # Match against mode rules (first match wins)
             matched = False
@@ -579,6 +579,6 @@ def compute_active_time_quality(sessions: list) -> dict:
                     matched = True
                     break
             if not matched:
-                modes["Builder"] = modes.get("Builder", 0) + mins
+                modes["Building"] = modes.get("Building", 0) + mins
 
     return {k: round(v, 1) for k, v in modes.items() if v > 0}
