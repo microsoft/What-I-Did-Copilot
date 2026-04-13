@@ -16,7 +16,7 @@
 
 [modes]
 # mode_name | intent_match | description
-# First matching rule wins. Hand-holding is checked before these rules.
+# First matching rule wins. Course-correcting is checked before these rules.
 # Refining BEFORE Building — a message with both Iterating+Building intents
 # is refinement (e.g. "also add X" matches both patterns).
 Designing           | Designing,Planning      | Design, strategy, architecture
