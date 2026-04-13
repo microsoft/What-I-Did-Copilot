@@ -643,12 +643,15 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
     n_modes = len([m for m in sorted_modes if m[1] >= 0.1])
 
     # Headline insight — list all high-value mode names from MODE_META so the
-    # copy stays consistent as modes are added or renamed.
-    hv_names = [m.lower() for m, meta in MODE_META.items() if meta.get("high_value")]
+    # copy stays consistent as modes are added or renamed. Sort alphabetically
+    # for a stable, readable order across runs.
+    hv_names = sorted(m.lower() for m, meta in MODE_META.items() if meta.get("high_value"))
     if len(hv_names) > 1:
         hv_list = ", ".join(hv_names[:-1]) + ", and " + hv_names[-1]
+    elif hv_names:
+        hv_list = hv_names[0]
     else:
-        hv_list = hv_names[0] if hv_names else "focused work"
+        hv_list = "various activities"
     headline = (f"{high_value_pct}% of your collaboration was high-value work "
                 f"&mdash; {hv_list}.")
     sub_parts = []
