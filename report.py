@@ -626,10 +626,12 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
 
     sorted_modes = sorted(modes.items(), key=lambda x: -x[1])
 
-    # Narrative stats — high-value vs low-value based on mode metadata
+    # Narrative stats — high-value vs low-value based on mode metadata.
+    # Unknown modes default to low-value so unexpected labels do not silently
+    # inflate the high-value percentage.
     low_value_mins = sum(
         mins for mode, mins in sorted_modes
-        if not MODE_META.get(mode, {}).get("high_value", True)
+        if not MODE_META.get(mode, {}).get("high_value", False)
     )
     high_value_raw = (total - low_value_mins) / total * 100
     course_raw = modes.get("Course-correcting", 0) / total * 100
