@@ -1,20 +1,29 @@
 ---
 name: whatidid
-description: "Generate a branded HTML impact report showing what GitHub Copilot helped you accomplish — goals delivered, human effort equivalent, skills augmented, collaboration patterns, and estimation evidence grounded in peer-reviewed research. Works with any Copilot CLI or VS Code agent session."
+description: "Generate a daily analytics report of what GitHub Copilot helped accomplish. Shows tasks completed, human effort equivalent, token usage, and a narrative story. Sends a formatted email summary. Use when the user asks about their daily activity, what Copilot helped with today, or wants a digest of the day's work."
 ---
 
-# What I Did (Copilot)
+# What I Did (Copilot) — Impact Report Generator
 
-This is the canonical skill entry for the What-I-Did-Copilot report generator.
+Run the following from the repo root to generate and email today's activity report:
 
-Use this skill to turn local GitHub Copilot session logs into a branded HTML impact report that summarizes:
+```bash
+python whatidid.py --email user@example.com
+```
 
-- goals delivered
-- human-effort-equivalent estimates
-- skills augmented
-- collaboration patterns
-- estimation evidence grounded in the project's research methodology
+If the user asks for a specific date range, use:
+```bash
+python whatidid.py --date 30D --email user@example.com
+```
 
-The tool works with Copilot CLI and VS Code agent sessions and keeps data local-first.
+After running, tell the user:
+- How many sessions and projects were found
+- The headline and primary focus identified
+- The total human effort estimate vs elapsed time (leverage ratio)
+- That the email has been sent (or HTML saved)
 
-For full setup, workflow, and methodology, see [README.md](../../README.md) and [effort-estimation-methodology.md](../../docs/effort-estimation-methodology.md).
+The report is always opened in the browser automatically — no need to add --html.
+
+If there are no sessions for the date, explain that Copilot session data is stored in the user's Copilot session-state directory (for example, `~/.copilot/session-state/` on macOS/Linux or `%USERPROFILE%\.copilot\session-state\` on Windows) and suggest checking the date.
+
+For full methodology, see [effort-estimation-methodology.md](../../docs/effort-estimation-methodology.md).
