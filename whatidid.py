@@ -199,6 +199,7 @@ def _merge_analyses(day_analyses: list) -> dict:
     all_goals   = []
     all_sessions = []
     total_tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "total": 0}
+    total_tokens_by_model = {}  # {model_name: {input, output, cache_read, cache_creation}}
     total_premium     = 0
     total_api_ms      = 0
     total_lines_added = 0
@@ -214,6 +215,11 @@ def _merge_analyses(day_analyses: list) -> dict:
             all_goals.append(g)
         for k in total_tokens:
             total_tokens[k] += analysis.get("tokens", {}).get(k, 0)
+        for model, toks in analysis.get("tokens_by_model", {}).items():
+            if model not in total_tokens_by_model:
+                total_tokens_by_model[model] = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+            for k in ("input", "output", "cache_read", "cache_creation"):
+                total_tokens_by_model[model][k] += toks.get(k, 0)
         total_premium       += analysis.get("premium_requests", 0)
         total_api_ms        += analysis.get("total_api_ms", 0)
         total_lines_added   += analysis.get("lines_added", 0)
@@ -345,6 +351,7 @@ def _merge_analyses(day_analyses: list) -> dict:
         "day_narrative":    narrative,
         "goals":            all_goals,
         "tokens":           total_tokens,
+        "tokens_by_model":  total_tokens_by_model,
         "premium_requests": total_premium,
         "total_api_ms":     total_api_ms,
         "lines_added":      total_lines_added,

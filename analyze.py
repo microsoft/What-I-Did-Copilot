@@ -286,7 +286,16 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
     }
     total_tokens["total"] = sum(total_tokens.values())
 
-    total_premium     = sum(s.get("premium_requests", 0)           for s in sessions)
+    # Aggregate per-model token breakdown across sessions
+    total_tokens_by_model: dict = {}
+    for s in sessions:
+        for model, toks in s.get("tokens_by_model", {}).items():
+            if model not in total_tokens_by_model:
+                total_tokens_by_model[model] = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+            for k in ("input", "output", "cache_read", "cache_creation"):
+                total_tokens_by_model[model][k] += toks.get(k, 0)
+
+    total_premium= sum(s.get("premium_requests", 0)           for s in sessions)
     total_api_ms      = sum(s.get("total_api_ms", 0)               for s in sessions)
     total_lines_added = sum(s.get("code_changes", {}).get("linesAdded", 0)   for s in sessions)
     total_lines_removed = sum(s.get("code_changes", {}).get("linesRemoved", 0) for s in sessions)
@@ -413,6 +422,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
 
     def _attach_metrics(result: dict) -> dict:
         result["tokens"]           = total_tokens
+        result["tokens_by_model"]  = total_tokens_by_model
         result["premium_requests"] = total_premium
         result["total_api_ms"]     = total_api_ms
         result["lines_added"]      = total_lines_added
