@@ -8,12 +8,12 @@ description: "Generate a daily analytics report of what GitHub Copilot helped ac
 Run the following from the repo root to generate and email today's activity report:
 
 ```bash
-python whatidid.py --email shahegde@microsoft.com
+python whatidid.py --email user@example.com
 ```
 
 If the user asks for a specific date range, use:
 ```bash
-python whatidid.py --date 30D --email shahegde@microsoft.com
+python whatidid.py --date 30D --email user@example.com
 ```
 
 After running, tell the user:

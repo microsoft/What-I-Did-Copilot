@@ -642,9 +642,15 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
     total_str = f"{total:.0f}m" if total < 60 else f"{total / 60:.1f}h"
     n_modes = len([m for m in sorted_modes if m[1] >= 0.1])
 
-    # Headline insight
+    # Headline insight — list all high-value mode names from MODE_META so the
+    # copy stays consistent as modes are added or renamed.
+    hv_names = [m.lower() for m, meta in MODE_META.items() if meta.get("high_value")]
+    if len(hv_names) > 1:
+        hv_list = ", ".join(hv_names[:-1]) + ", and " + hv_names[-1]
+    else:
+        hv_list = hv_names[0] if hv_names else "focused work"
     headline = (f"{high_value_pct}% of your collaboration was high-value work "
-                f"&mdash; designing, researching, building, and refining.")
+                f"&mdash; {hv_list}.")
     sub_parts = []
     if delegating_pct > 0:
         sub_parts.append(f"Copilot automated {delegating_pct}% of routine tasks")
