@@ -298,11 +298,11 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
                 </td>
                 <td style="width:33%;text-align:center;padding:8px 8px">
                   <div style="font-size:10px;font-weight:700;text-transform:uppercase;
-                              letter-spacing:0.8px;color:rgba(255,255,255,0.55)">API Token<br>Savings</div>
+                              letter-spacing:0.8px;color:rgba(255,255,255,0.55)">API Token<br>Cost</div>
                   <div style="font-size:18px;font-weight:700;color:#fff;margin-top:4px">
-                    ${api_savings:,.0f}</div>
+                    ${market_cost:,.0f}</div>
                   <div style="font-size:11px;color:rgba(255,255,255,0.7);margin-top:2px">
-                    vs. ${market_cost:,.0f} at market rate</div>
+                    {"included in seat — no extra charge" if market_cost <= seat_cost else f"${api_savings:,.0f} saved vs. seat cost"}</div>
                 </td>
               </tr>
             </table>
@@ -1864,7 +1864,7 @@ def _share_bar(target_date: str, goals: list, headline: str, total_human_h: floa
 
 
 def generate_html(target_date: str, analysis: dict, sessions: list,
-                  max_width: int = 960) -> str:
+                  max_width: int = 1080) -> str:
     goals      = analysis.get("goals", [])
     # Sort goals once by hours descending so all sections are consistent
     goals      = sorted(goals, key=lambda g: g.get("human_hours", 0), reverse=True)
@@ -2046,6 +2046,25 @@ window.onload = function() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>What I Did (Copilot) — {target_date}</title>
+<style>
+  /* Browser-friendly responsive overrides */
+  body {{ -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }}
+  .report-wrap {{ max-width: {max_width}px; width: 100%; margin: 0 auto; }}
+  @media screen and (min-width: 1200px) {{
+    .report-wrap {{ max-width: 1200px; }}
+  }}
+  @media screen and (max-width: 640px) {{
+    .report-wrap {{ max-width: 100% !important; }}
+  }}
+  /* Smooth collapsible toggles */
+  details summary {{ cursor: pointer; user-select: none; }}
+  details summary::-webkit-details-marker {{ display: none; }}
+  /* Scrollbar styling for browser */
+  ::-webkit-scrollbar {{ width: 8px; }}
+  ::-webkit-scrollbar-track {{ background: {C['bg']}; }}
+  ::-webkit-scrollbar-thumb {{ background: {C['border']}; border-radius: 4px; }}
+  ::-webkit-scrollbar-thumb:hover {{ background: {C['muted']}; }}
+</style>
 {js}
 </head>
 <body style="margin:0;padding:0;background:{C['bg']};
@@ -2053,7 +2072,7 @@ window.onload = function() {
 
 <table width="100%" cellpadding="0" cellspacing="0" style="background:{C['bg']};padding:24px 16px">
 <tr><td align="center">
-<table width="{max_width}" cellpadding="0" cellspacing="0" style="max-width:{max_width}px;width:100%">
+<table class="report-wrap" width="{max_width}" cellpadding="0" cellspacing="0" style="max-width:{max_width}px;width:100%">
 
   <!-- HEADER -->
   <tr>
