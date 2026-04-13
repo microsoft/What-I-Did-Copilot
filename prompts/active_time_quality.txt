@@ -23,6 +23,7 @@ Designing           | Designing,Planning      | Design, strategy, architecture
 Analyzing           | Analyzing               | Data analysis, metrics, interpretation
 Reviewing           | Reviewing               | Code review, auditing, feedback
 Researching         | Researching,Investigating,Navigating | Exploring options, investigating
+Learning            | Learning                | Understanding concepts, knowledge transfer
 Refining            | Iterating               | Iterating, polishing, improving
 Building            | Building                | Writing code, generating files, running commands
 Delegating          | Shipping,Configuring    | Git ops, config, installs, routine tasks
@@ -34,5 +35,6 @@ Reviewing           | #795548
 Researching         | #1a7f37
 Building            | #0078d4
 Refining            | #0969da
+Learning            | #0288d1
 Course-correcting   | #e65100
 Delegating          | #6a737d

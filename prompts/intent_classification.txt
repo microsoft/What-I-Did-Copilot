@@ -17,7 +17,8 @@ Investigating | #e65100 | \b(examine|why does|why is|what.s going on|debug|diagn
 Analyzing     | #00838f | \b(analy[sz]e|summarize|summarise|breakdown|break down|correlat|insight|trend|pattern|distribution|aggregate|metric|statistic|visuali[sz]e|chart|graph|pivot|interpret|assess|evaluate|classify|cluster|segment|benchmark|report on|data)\b
 Reviewing     | #795548 | \b(review|audit|critique|check (this|the|my)|look over|go over|give feedback|sanity.check|PR review|code review|inspect|proofread|double.check|approval|approve|nit|comment on|what do you think)\b
 Designing     | #7b1fa2 | \b(redesign|prominent|visual|layout|style|look like|look more|distinction|spacing|story|compelling|section|appearance|prototype|mockup|wireframe|branding|banner)\b
-Researching   | #1a7f37 | \b(what.s the|how does|how do|are there|can i do|do they|what can|what would|how come|cost|limit|explain|compare|difference|option)\b
+Researching   | #1a7f37 | \b(what.s the|how does|how do|are there|can i do|do they|what can|what would|how come|cost|limit|compare|difference|option)\b
+Learning      | #0288d1 | \b(explain|teach|walk me through|help me understand|what is|what are|why is it|why do we|how does .+ work|what.s the difference|show me how|learn|tutorial|example of|meaning of|concept|understand)\b
 Shipping      | #cf222e | \b(commit|push|pr\b|pull request|merge|deploy|ship|tag|release|check.?in)\b
 Planning      | #8250df | \b(plan|propose|approach|strategy|stages|phases|priority|before that|options|go ahead|wait for)\b
 Testing       | #1a7f37 | \b(test|verify|validate|check if|smoke|does it work|try it|confirm)\b
