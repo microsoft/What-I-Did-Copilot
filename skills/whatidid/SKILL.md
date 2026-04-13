@@ -24,6 +24,6 @@ After running, tell the user:
 
 The report is always opened in the browser automatically — no need to add --html.
 
-If there are no sessions for the date, explain that Copilot session data is stored in ~/.copilot/session-state/ and suggest checking the date.
+If there are no sessions for the date, explain that Copilot session data is stored in the user's Copilot session-state directory (for example, `~/.copilot/session-state/` on macOS/Linux or `%USERPROFILE%\.copilot\session-state\` on Windows) and suggest checking the date.
 
 For full methodology, see [effort-estimation-methodology.md](../../docs/effort-estimation-methodology.md).
