@@ -614,6 +614,8 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
 
     MODE_META = {
         "Designing":         {"icon": "&#127912;", "desc": "Design, strategy, architecture",       "high_value": True},
+        "Analyzing":         {"icon": "&#128202;", "desc": "Data analysis, metrics, interpretation", "high_value": True},
+        "Reviewing":         {"icon": "&#128269;", "desc": "Code review, auditing, feedback",       "high_value": True},
         "Researching":       {"icon": "&#128300;", "desc": "Exploring options, investigating",      "high_value": True},
         "Building":          {"icon": "&#128679;", "desc": "Writing code, generating files",        "high_value": True},
         "Refining":          {"icon": "&#128260;", "desc": "Iterating, polishing, improving",       "high_value": True},

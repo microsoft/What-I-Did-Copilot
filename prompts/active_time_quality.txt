@@ -20,6 +20,8 @@
 # Refining BEFORE Building — a message with both Iterating+Building intents
 # is refinement (e.g. "also add X" matches both patterns).
 Designing           | Designing,Planning      | Design, strategy, architecture
+Analyzing           | Analyzing               | Data analysis, metrics, interpretation
+Reviewing           | Reviewing               | Code review, auditing, feedback
 Researching         | Researching,Investigating,Navigating | Exploring options, investigating
 Refining            | Iterating               | Iterating, polishing, improving
 Building            | Building                | Writing code, generating files, running commands
@@ -27,6 +29,8 @@ Delegating          | Shipping,Configuring    | Git ops, config, installs, routi
 
 [mode_colors]
 Designing           | #7b1fa2
+Analyzing           | #00838f
+Reviewing           | #795548
 Researching         | #1a7f37
 Building            | #0078d4
 Refining            | #0969da
