@@ -319,9 +319,13 @@ def _vscode_epoch_to_iso(epoch_ms: int | float) -> str:
 
 def _extract_file_path_from_markdown(text: str) -> str:
     """Extract a local file path from VS Code markdown-link tool messages."""
-    m = _re.search(r'file:///([^\s\)\]]+)', text)
+    m = _re.search(r'file://(/[^\s\)\]]+)', text)
     if m:
-        return _url_unquote(m.group(1)).replace("/", _os.sep)
+        path = _url_unquote(m.group(1))
+        # Strip leading slash for Windows drive paths (e.g. /C:/Users/...)
+        if _re.match(r'^/[A-Za-z]:/', path):
+            path = path[1:]
+        return path.replace("/", _os.sep)
     return ""
 
 

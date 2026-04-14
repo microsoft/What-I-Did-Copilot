@@ -1671,7 +1671,8 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
         project      = g.get("project", "")
         goal_date    = g.get("date", "")
         metrics      = _resolve_metrics(project, session_metrics, goal_date)
-        goal_tokens  = metrics.get("tokens", 0)
+        goal_tok_raw = metrics.get("tokens", 0)
+        goal_tokens  = goal_tok_raw.get("total", 0) if isinstance(goal_tok_raw, dict) else goal_tok_raw
         tokens_html  = _fmt_tokens(goal_tokens)
         tokens_cell  = f"""
           <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
@@ -1742,7 +1743,7 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
         label = f"Show {n_extra} more project{'s' if n_extra != 1 else ''}"
         rows += f"""
         <tr>
-          <td colspan="5" style="padding:0;border-bottom:1px solid {C['border']}">">
+          <td colspan="5" style="padding:0;border-bottom:1px solid {C['border']}">>
             <button id="goals-show-more" onclick="toggleExtraGoals({n_extra})"
                     style="width:100%;background:{C['subtle']};border:none;border-top:1px solid {C['border']};
                            padding:8px 16px;font-size:11px;font-weight:600;color:{C['accent']};
