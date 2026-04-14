@@ -1,108 +1,64 @@
 <div align="center">
 
-# 🤖 What I Did — GitHub Copilot Impact Report
+# What I Did — GitHub Copilot Impact Report
 
-**Turn invisible AI collaboration into a visible story of impact.**
+**One command. See everything you built with Copilot — and the leverage you're getting from your seat.**
 
-*One command generates a polished report on what you built with Copilot, the skills it augmented, and the leverage it delivered.*
-
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://python.org)
-[![GitHub Copilot](https://img.shields.io/badge/GitHub%20Copilot-powered-green)](https://github.com/features/copilot)
+<img src="docs/images/sample-report.gif" alt="Sample Impact Report" width="680">
 
 </div>
 
 ---
 
-*"Where did the tokens go? What am I actually building with Copilot? Am I accessing skills I didn't have before?"*
+## Try it now
 
-If you can't answer these confidently, you're not alone. Most developers know Copilot helps — but can't show *how much*, *at what*, or *why it matters*. This tool turns your local session logs into a single report that makes the invisible visible — what got built, what skills were augmented, and what it would have cost to do it alone.
+**Option A — Install as a Copilot plugin** *(recommended)*
 
-**Built for anyone who works with Copilot** — developers, PMs, analysts, vibe coders, and anyone building with AI. Use it to recap what you created, share progress with your team and manager, or generate evidence for performance reviews. If Copilot helped you build it, this tool makes sure the story gets told.
+```bash
+/plugin install whatidid@awesome-copilot
+```
 
-### ✅ What Got Accomplished — and the Leverage Behind It
-Every project broken down into tasks with **human effort equivalents** — see that a 10-minute Copilot session replaced 3 hours of manual work. The ROI banner distills it to one number: how many multiples of your $39/mo seat Copilot delivered in professional services value.
+Then just run:
 
-### 📦 What Got Produced
-Tangible artifacts — scripts, reports, documents, presentations, config files — categorized and counted. Not "Copilot helped me code" but "Copilot helped me ship 4 Python modules, 2 HTML reports, and a PowerShell deployment script."
+```bash
+whatidid                # defaults to a 7-day lookback
+```
 
-### 🧠 Skills Copilot Augmented
-Hours of assistance mapped across **20+ professional roles** — Software Engineer, Data Analyst, UX Designer, Solutions Architect, and more. See exactly which disciplines Copilot staffed for you, on demand, at zero headcount cost.
-
-### 🎯 How You Collaborated
-Every interaction classified by intent — **Building, Researching, Designing, Investigating, Iterating, Shipping**. Discover your collaboration signature and whether Copilot is an always-on tax or a targeted force multiplier.
-
-### ⏰ When You Collaborated
-Time-of-day activity patterns with a daily heatmap — spot whether you're an early-morning builder or a late-night debugger, and whether AI assistance is concentrated or spread across your day.
-
-### 📐 Complexity Evidence
-Collapsible estimation detail showing the quantitative signals behind every effort number — tool invocations, conversation turns, iteration depth, and the deterministic formula. Evidence that Copilot isn't just handling boilerplate — it's tackling real complexity. [Grounded in peer-reviewed research →](docs/effort-estimation-methodology.md)
-
-## 📸 Sample Report
-
-<div align="center">
-<em>Report generated with <code>python whatidid.py --14D</code></em>
-
-<img src="docs/images/sample-report.gif" alt="Sample Impact Report" width="680">
-</div>
-
-## 🚀 Quick Start
-
-### 1. Clone the repo
+**Option B — Clone the repo**
 
 ```bash
 git clone https://github.com/microsoft/What-I-Did-Copilot.git
 cd What-I-Did-Copilot
+python whatidid.py      # defaults to a 7-day lookback
 ```
 
-### 2. Open in GitHub Copilot CLI or VS Code
-   
+That's it. A report opens in your browser showing your last 7 days with Copilot.
+
+---
+
+## What you'll see
+
+| | |
+|---|---|
+| ✅ **Goals & leverage** | Every project with human effort equivalents — see that a 10-min session replaced 3 hours of work. *What did Copilot actually deliver?* |
+| 📦 **Artifacts produced** | Scripts, reports, docs, configs — counted and categorized. *What tangible output came out of your AI sessions?* |
+| 🧠 **Skills augmented** | Hours mapped across 20+ roles — engineer, analyst, designer, architect. *What skills did Copilot make accessible to you?* |
+| 🎯 **Collaboration style** | Building, researching, designing, iterating — your AI signature. *How are you directing AI across your work?* |
+| ⏰ **Activity heatmap** | When you collaborate and how your day breaks down. *When is AI most useful in your workflow?* |
+| 📐 **Estimation evidence** | Transparent methodology grounded in [13 peer-reviewed sources](docs/effort-estimation-methodology.md). *Why should anyone trust these numbers?* |
+
+---
+
+## More options
+
 ```bash
-# Option A: Open in VS Code with Copilot
-code What-I-Did-Copilot
-   
-# Option B: Use GitHub Copilot in the terminal
-cd What-I-Did-Copilot
-gh copilot
-```
-
-### 3. Run your first report
-
-```bash
-# Last 7 days (default)
-python whatidid.py
-
-# Lookback shortcuts — any number of days
-python whatidid.py --7D
-python whatidid.py --14D
-python whatidid.py --30D
-
-# Specific date
-python whatidid.py --date 2026-03-19
-
-# Date range (e.g., all of March)
-python whatidid.py --from 2026-03-01 --to 2026-03-31
-
-# Send report via Outlook (auto-detects your email from GitHub auth)
-python whatidid.py --email
-
-# Send to a specific address
-python whatidid.py --14D --email you@company.com
-
-# Force re-analysis (bypass cache)
-python whatidid.py --refresh
-```
-
-### 4. (Optional) Set up a shortcut
-
-Add this to your PowerShell profile (`$PROFILE`) so you can run `whatidid` from anywhere:
-
-```powershell
-function whatidid { python "C:/path/to/What-I-Did-Copilot/whatidid.py" @args }
-```
-
-Then:
-```bash
-whatidid --14D --email
+whatidid --14D                        # last 14 days
+whatidid --30D                        # last 30 days
+whatidid --date 2026-03-19            # specific date
+whatidid --from 2026-03-01 --to 2026-03-31   # date range
+whatidid --7D --email                 # send via Outlook
+whatidid --7D --email you@company.com # send to a specific address
+whatidid --refresh                    # force re-analysis
 ```
 
 ## 🏗️ How It Works
