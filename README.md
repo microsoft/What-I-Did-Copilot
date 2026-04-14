@@ -29,7 +29,10 @@ whatidid                # defaults to a 7-day lookback
 ```bash
 git clone https://github.com/microsoft/What-I-Did-Copilot.git
 cd What-I-Did-Copilot
-copilot or code [to open Copilot CLI or VS Code]
+```
+
+```bash
+copilot or code         # to open Copilot CLI or VS Code
 python whatidid.py      # defaults to a 7-day lookback
 ```
 
