@@ -199,6 +199,7 @@ def get_sessions_for_date(target_date: str) -> list:
 
         # Pull shutdown metrics (tokens, code changes, premium requests)
         tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+        tokens_by_model = {}  # {model_name: {input, output, cache_read, cache_creation}}
         premium_requests = 0
         total_api_ms     = 0
         code_changes     = {}
@@ -211,12 +212,17 @@ def get_sessions_for_date(target_date: str) -> list:
                 total_api_ms     = d.get("totalApiDurationMs", 0)
                 code_changes     = d.get("codeChanges", {})
                 model_used       = d.get("currentModel", "")
-                for model_data in d.get("modelMetrics", {}).values():
+                for model_name, model_data in d.get("modelMetrics", {}).items():
                     usage = model_data.get("usage", {})
-                    tokens["input"]          += usage.get("inputTokens", 0)
-                    tokens["output"]         += usage.get("outputTokens", 0)
-                    tokens["cache_read"]     += usage.get("cacheReadTokens", 0)
-                    tokens["cache_creation"] += usage.get("cacheWriteTokens", 0)
+                    mt = {
+                        "input":          usage.get("inputTokens", 0),
+                        "output":         usage.get("outputTokens", 0),
+                        "cache_read":     usage.get("cacheReadTokens", 0),
+                        "cache_creation": usage.get("cacheWriteTokens", 0),
+                    }
+                    tokens_by_model[model_name] = mt
+                    for k in tokens:
+                        tokens[k] += mt[k]
                 break
 
         tokens["total"] = sum(tokens.values())
@@ -257,6 +263,7 @@ def get_sessions_for_date(target_date: str) -> list:
             "date":              target_date,
             "messages":          messages,
             "tokens":            tokens,
+            "tokens_by_model":   tokens_by_model,
             "premium_requests":  premium_requests,
             "total_api_ms":      total_api_ms,
             "code_changes":      code_changes,

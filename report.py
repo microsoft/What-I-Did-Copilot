@@ -61,13 +61,63 @@ def _fmt_ms(ms: int) -> str:
     return f"{s // 60}m {s % 60}s"
 
 
+# Per-model token pricing ($ per 1M tokens).
+# Keys are matched by longest-prefix against model names from session data.
+# Keep more-specific prefixes before less-specific ones for readability
+# (e.g. "gpt-4o-mini" before "gpt-4o"); the algorithm always picks the
+# longest matching prefix regardless of insertion order.
+_MODEL_PRICING = {
+    # Anthropic (Claude) — via GitHub Copilot
+    "claude-opus-4":    {"input": 15.00, "output": 75.00, "cache_read": 1.50,  "cache_creation": 18.75},
+    "claude-sonnet-4":  {"input":  3.00, "output": 15.00, "cache_read": 0.30,  "cache_creation":  3.75},
+    "claude-haiku":     {"input":  0.80, "output":  4.00, "cache_read": 0.08,  "cache_creation":  1.00},
+    # OpenAI — via GitHub Copilot
+    "gpt-5":            {"input":  2.50, "output": 10.00, "cache_read": 1.25,  "cache_creation":  2.50},
+    "gpt-4.1":          {"input":  2.00, "output":  8.00, "cache_read": 0.50,  "cache_creation":  2.00},
+    "gpt-4o-mini":      {"input":  0.15, "output":  0.60, "cache_read": 0.075, "cache_creation":  0.15},
+    "gpt-4o":           {"input":  2.50, "output": 10.00, "cache_read": 1.25,  "cache_creation":  2.50},
+    "o3":               {"input": 10.00, "output": 40.00, "cache_read": 2.50,  "cache_creation": 10.00},
+    "o4-mini":          {"input":  1.10, "output":  4.40, "cache_read": 0.275, "cache_creation":  1.10},
+    # Google (Gemini) — via GitHub Copilot
+    "gemini-2.5-pro":   {"input":  1.25, "output": 10.00, "cache_read": 0.315, "cache_creation":  1.25},
+    "gemini-2.5-flash": {"input":  0.15, "output":  0.60, "cache_read": 0.0375,"cache_creation":  0.15},
+    "gemini-2.0-flash": {"input":  0.10, "output":  0.40, "cache_read": 0.025, "cache_creation":  0.10},
+}
+# Fallback: if model name doesn't match any prefix, use mid-range pricing
+_DEFAULT_PRICING = {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_creation": 3.75}
+
+
+def _get_model_pricing(model_name: str) -> dict:
+    """Return pricing dict for a model name, matching by longest prefix."""
+    name = model_name.lower()
+    best_prefix = ""
+    best_rates = _DEFAULT_PRICING
+    for prefix, rates in _MODEL_PRICING.items():
+        if name.startswith(prefix) and len(prefix) > len(best_prefix):
+            best_prefix = prefix
+            best_rates = rates
+    return best_rates
+
+
 def _cost(tokens: dict) -> str:
-    """Calculate API cost using Anthropic token pricing (Copilot sessions use Claude models)."""
-    c = (tokens.get("input", 0)          * 3.00
-       + tokens.get("output", 0)         * 15.00
-       + tokens.get("cache_read", 0)     * 0.30
-       + tokens.get("cache_creation", 0) * 3.75) / 1_000_000
+    """Calculate API cost using per-token pricing for models used by GitHub Copilot."""
+    c = (tokens.get("input", 0)          * _DEFAULT_PRICING["input"]
+       + tokens.get("output", 0)         * _DEFAULT_PRICING["output"]
+       + tokens.get("cache_read", 0)     * _DEFAULT_PRICING["cache_read"]
+       + tokens.get("cache_creation", 0) * _DEFAULT_PRICING["cache_creation"]) / 1_000_000
     return f"~${c:.2f}"
+
+
+def _cost_by_model(tokens_by_model: dict) -> float:
+    """Calculate total API cost using per-model pricing. Returns dollar amount."""
+    total = 0.0
+    for model_name, toks in tokens_by_model.items():
+        rates = _get_model_pricing(model_name)
+        total += (toks.get("input", 0)          * rates["input"]
+                + toks.get("output", 0)         * rates["output"]
+                + toks.get("cache_read", 0)     * rates["cache_read"]
+                + toks.get("cache_creation", 0) * rates["cache_creation"]) / 1_000_000
+    return total
 
 
 HOURLY_RATE = 72  # $/hr — blended professional services rate (conservative)
@@ -198,12 +248,16 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
     seat_cost, n_months = _prorated_seat_cost(analysis)
     leverage      = round(human_value / seat_cost) if seat_cost > 0 else 0
 
-    # Market API cost
-    tokens = analysis.get("tokens", {})
-    market_cost = (tokens.get("input", 0) * 3.00
-                 + tokens.get("output", 0) * 15.00
-                 + tokens.get("cache_read", 0) * 0.30
-                 + tokens.get("cache_creation", 0) * 3.75) / 1_000_000
+    # Market API cost — use per-model pricing when available
+    tokens_by_model = analysis.get("tokens_by_model", {})
+    if tokens_by_model:
+        market_cost = _cost_by_model(tokens_by_model)
+    else:
+        tokens = analysis.get("tokens", {})
+        market_cost = (tokens.get("input", 0) * _DEFAULT_PRICING["input"]
+                     + tokens.get("output", 0) * _DEFAULT_PRICING["output"]
+                     + tokens.get("cache_read", 0) * _DEFAULT_PRICING["cache_read"]
+                     + tokens.get("cache_creation", 0) * _DEFAULT_PRICING["cache_creation"]) / 1_000_000
     api_savings = max(0, market_cost - seat_cost)
 
     if leverage <= 0:
@@ -249,11 +303,11 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
                 </td>
                 <td style="width:33%;text-align:center;padding:8px 8px">
                   <div style="font-size:10px;font-weight:700;text-transform:uppercase;
-                              letter-spacing:0.8px;color:rgba(255,255,255,0.55)">API Token<br>Savings</div>
+                              letter-spacing:0.8px;color:rgba(255,255,255,0.55)">API Token<br>Cost</div>
                   <div style="font-size:18px;font-weight:700;color:#fff;margin-top:4px">
-                    ${api_savings:,.0f}</div>
+                    ${market_cost:,.0f}</div>
                   <div style="font-size:11px;color:rgba(255,255,255,0.7);margin-top:2px">
-                    vs. ${market_cost:,.0f} at market rate</div>
+                    {"included in seat — no extra charge" if market_cost <= seat_cost else f"${api_savings:,.0f} saved vs. market API pricing"}</div>
                 </td>
               </tr>
             </table>
@@ -1429,8 +1483,22 @@ def _activity_bar(analysis: dict) -> str:
     cc_tok  = tokens.get("cache_creation", 0)
     total_t = tokens.get("total", 0) or 1
 
-    # Market rate: what Anthropic would charge at published API prices
-    market_cost = (in_tok * 3.00 + out_tok * 15.00 + cr_tok * 0.30 + cc_tok * 3.75) / 1_000_000
+    # Market rate: use per-model pricing when available, fall back to aggregate
+    tokens_by_model = analysis.get("tokens_by_model", {})
+    if tokens_by_model:
+        market_cost = _cost_by_model(tokens_by_model)
+    else:
+        market_cost = (in_tok * _DEFAULT_PRICING["input"]
+                     + out_tok * _DEFAULT_PRICING["output"]
+                     + cr_tok * _DEFAULT_PRICING["cache_read"]
+                     + cc_tok * _DEFAULT_PRICING["cache_creation"]) / 1_000_000
+
+    # Models used — build display label
+    models_used = sorted(tokens_by_model.keys()) if tokens_by_model else []
+    if models_used:
+        model_label = ", ".join(models_used)
+    else:
+        model_label = analysis.get("model_used", "") or "unknown"
 
     # Fixed rate: Copilot seat cost, prorated over months in the report range
     seat_cost, n_months = _prorated_seat_cost(analysis)
@@ -1505,7 +1573,7 @@ def _activity_bar(analysis: dict) -> str:
                    letter-spacing:0.7px;color:{C['muted']};margin-right:10px">Copilot</span>
       <span style="font-size:11px;color:{C['text']}">
         <span style="color:{C['muted']}">Premium requests</span> <strong>{premium_req}</strong>
-        &nbsp;<span style="font-size:10px;color:{C['muted']}">(quota-consuming, Opus-class model)</span>
+        &nbsp;<span style="font-size:10px;color:{C['muted']}">({model_label})</span>
       </span>
       &nbsp;&nbsp;·&nbsp;&nbsp;
       <span style="font-size:11px;color:{C['text']}">
@@ -1812,7 +1880,7 @@ def _share_bar(target_date: str, goals: list, headline: str, total_human_h: floa
 
 
 def generate_html(target_date: str, analysis: dict, sessions: list,
-                  max_width: int = 960) -> str:
+                  max_width: int = 1080) -> str:
     goals      = analysis.get("goals", [])
     # Sort goals once by hours descending so all sections are consistent
     goals      = sorted(goals, key=lambda g: g.get("human_hours", 0), reverse=True)
@@ -1994,6 +2062,22 @@ window.onload = function() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>What I Did (Copilot) — {target_date}</title>
+<style>
+  /* Browser-friendly responsive overrides */
+  body {{ -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }}
+  .report-wrap {{ max-width: {max_width}px; width: 100%; margin: 0 auto; }}
+  @media screen and (max-width: 640px) {{
+    .report-wrap {{ max-width: 100% !important; }}
+  }}
+  /* Smooth collapsible toggles */
+  details summary {{ cursor: pointer; user-select: none; }}
+  details summary::-webkit-details-marker {{ display: none; }}
+  /* Scrollbar styling for browser */
+  ::-webkit-scrollbar {{ width: 8px; }}
+  ::-webkit-scrollbar-track {{ background: {C['bg']}; }}
+  ::-webkit-scrollbar-thumb {{ background: {C['border']}; border-radius: 4px; }}
+  ::-webkit-scrollbar-thumb:hover {{ background: {C['muted']}; }}
+</style>
 {js}
 </head>
 <body style="margin:0;padding:0;background:{C['bg']};
@@ -2001,7 +2085,7 @@ window.onload = function() {
 
 <table width="100%" cellpadding="0" cellspacing="0" style="background:{C['bg']};padding:24px 16px">
 <tr><td align="center">
-<table width="{max_width}" cellpadding="0" cellspacing="0" style="max-width:{max_width}px;width:100%">
+<table class="report-wrap" width="{max_width}" cellpadding="0" cellspacing="0" style="max-width:{max_width}px;width:100%">
 
   <!-- HEADER -->
   <tr>

@@ -59,16 +59,24 @@ The `summary` field is a Copilot-generated session title (e.g. "Create Exec Deck
 ## Token cost model
 
 Token data is in `session.shutdown.modelMetrics.<model>.usage`.
-Uses Anthropic's published per-token rates (sessions use Claude models via Copilot):
+The `modelMetrics` dict is keyed by model name (e.g. `claude-opus-4.6`, `gpt-4o`, `gemini-2.5-pro`),
+so per-model pricing is applied automatically.
 
-| Token type | Field | Rate |
-|---|---|---|
-| Input | `inputTokens` | $3.00 / 1M |
-| Output | `outputTokens` | $15.00 / 1M |
-| Cache read | `cacheReadTokens` | $0.30 / 1M |
-| Cache creation | `cacheWriteTokens` | $3.75 / 1M |
+Pricing is defined in `report.py → _MODEL_PRICING` with prefix-matched model names:
 
-Update these in `report.py → _cost()` if rates change.
+| Provider | Models | Input $/1M | Output $/1M |
+|---|---|---|---|
+| Anthropic | claude-opus-4 | $15.00 | $75.00 |
+| Anthropic | claude-sonnet-4 | $3.00 | $15.00 |
+| Anthropic | claude-haiku | $0.80 | $4.00 |
+| OpenAI | gpt-5, gpt-4o | $2.50 | $10.00 |
+| OpenAI | gpt-4.1 | $2.00 | $8.00 |
+| OpenAI | o3 | $10.00 | $40.00 |
+| Google | gemini-2.5-pro | $1.25 | $10.00 |
+| Google | gemini-2.5-flash | $0.15 | $0.60 |
+
+Cache read/write rates also vary per model. If a model name doesn't match any prefix, mid-range
+fallback pricing ($3.00/$15.00) is used. Update `_MODEL_PRICING` in `report.py` when rates change.
 
 ## Leverage metric
 
