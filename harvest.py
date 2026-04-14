@@ -1,13 +1,16 @@
 """
 harvest.py — Read GitHub Copilot session event files and extract structured activity data.
 
-Sessions are stored at ~/.copilot/session-state/<uuid>/events.jsonl
-Each session directory also contains workspace.yaml with a pre-written summary.
+CLI sessions are stored at ~/.copilot/session-state/<uuid>/events.jsonl
+VS Code sessions are stored at <appdata>/Code/User/globalStorage/emptyWindowChatSessions/<uuid>.jsonl
 """
 import json
+import os as _os
 import re as _re
+import sys as _sys
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote as _url_unquote
 
 SESSION_DIR = Path.home() / ".copilot" / "session-state"
 
@@ -273,6 +276,249 @@ def get_sessions_for_date(target_date: str) -> list:
             "git_repos":         git_repos,
             "git_ops":           git_ops_list,
             "workspace_summary": workspace.get("summary", ""),
+            "tool_invocations":  sum(len(m.get("tools_after", [])) for m in messages if m["role"] == "user"),
+            "files_touched":     sorted(all_modified),
+            "lines_logic":       lines_logic,
+            "lines_boilerplate": lines_boilerplate,
+        })
+
+    # Also harvest VS Code Copilot Chat sessions
+    sessions.extend(get_vscode_sessions_for_date(target_date))
+
+    return sessions
+
+
+# ── VS Code Session Harvesting ───────────────────────────────────────────────
+
+def _get_vscode_chat_dir() -> Path | None:
+    """Cross-platform path to VS Code emptyWindowChatSessions directory."""
+    if _sys.platform == "win32":
+        appdata = _os.environ.get("APPDATA", "")
+        if appdata:
+            p = Path(appdata) / "Code" / "User" / "globalStorage" / "emptyWindowChatSessions"
+            if p.is_dir():
+                return p
+    elif _sys.platform == "darwin":
+        p = Path.home() / "Library" / "Application Support" / "Code" / "User" / "globalStorage" / "emptyWindowChatSessions"
+        if p.is_dir():
+            return p
+    else:  # Linux
+        p = Path.home() / ".config" / "Code" / "User" / "globalStorage" / "emptyWindowChatSessions"
+        if p.is_dir():
+            return p
+    return None
+
+
+def _vscode_epoch_to_iso(epoch_ms: int | float) -> str:
+    """Convert JS epoch-millisecond timestamp to ISO 8601 string."""
+    try:
+        return datetime.fromtimestamp(epoch_ms / 1000).strftime("%Y-%m-%dT%H:%M:%S")
+    except Exception:
+        return ""
+
+
+def _extract_file_path_from_markdown(text: str) -> str:
+    """Extract a local file path from VS Code markdown-link tool messages."""
+    m = _re.search(r'file:///([^\s\)\]]+)', text)
+    if m:
+        return _url_unquote(m.group(1)).replace("/", _os.sep)
+    return ""
+
+
+def get_vscode_sessions_for_date(target_date: str) -> list:
+    """Parse VS Code Copilot Chat sessions for a given date.
+
+    VS Code sessions use a different schema than CLI sessions:
+      kind=0 → session header (creationDate, sessionId)
+      kind=1 → metadata updates (workspace context, timings, model info)
+      kind=2 → chat turns (requests with messages, tool invocations, etc.)
+
+    Uses a fast first-line date pre-filter to avoid loading multi-hundred-MB
+    files that can't possibly match the target date.
+    """
+    chat_dir = _get_vscode_chat_dir()
+    if not chat_dir:
+        return []
+
+    sessions = []
+
+    for jsonl_file in chat_dir.glob("*.jsonl"):
+        # ── Fast date pre-filter: read only first line (kind=0 header) ────
+        try:
+            with open(jsonl_file, encoding="utf-8") as f:
+                first_line = f.readline().strip()
+            if not first_line:
+                continue
+            header = json.loads(first_line)
+            if header.get("kind") != 0:
+                continue
+            hv = header.get("v", {})
+            creation_ms = hv.get("creationDate", 0)
+            if not creation_ms:
+                continue
+            creation_date = datetime.fromtimestamp(creation_ms / 1000).strftime("%Y-%m-%d")
+        except Exception:
+            continue
+
+        # A session created on a different date could still have activity
+        # on target_date, but skip files created >7 days before/after as a
+        # heuristic (covers multi-day sessions without loading huge files).
+        try:
+            td = datetime.strptime(target_date, "%Y-%m-%d")
+            cd = datetime.strptime(creation_date, "%Y-%m-%d")
+            if abs((td - cd).days) > 7:
+                continue
+        except Exception:
+            pass
+
+        # ── Full parse ────────────────────────────────────────────────────
+        session_id = hv.get("sessionId", jsonl_file.stem)
+        model_used = ""
+        input_state = hv.get("inputState", {})
+        if isinstance(input_state, dict):
+            sel_model = input_state.get("selectedModel", {})
+            if isinstance(sel_model, dict):
+                model_used = sel_model.get("identifier", "")
+
+        messages = []
+        tool_summaries = []  # tools pending attachment to previous request
+        files_touched = set()
+        cwd = ""
+        session_start = None
+        session_end = None
+
+        try:
+            with open(jsonl_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+
+                    kind = obj.get("kind")
+                    v = obj.get("v")
+
+                    # kind=1: extract workspace context from metadata
+                    if kind == 1 and isinstance(v, dict):
+                        meta = v.get("metadata", {})
+                        if isinstance(meta, dict) and not cwd:
+                            for rendered in meta.get("renderedUserMessage", []):
+                                if isinstance(rendered, dict):
+                                    txt = rendered.get("text", "")
+                                    m = _re.search(r'current file is ([^\n]+)', txt)
+                                    if m:
+                                        fp = m.group(1).strip()
+                                        cwd = str(Path(fp).parent)
+                                        break
+
+                    # kind=2: chat turns
+                    if kind != 2 or not isinstance(v, list):
+                        continue
+
+                    for item in v:
+                        if not isinstance(item, dict):
+                            continue
+
+                        # ── Request (user turn with AI response) ──────────
+                        if "requestId" in item and "message" in item:
+                            ts_ms = item.get("timestamp", 0)
+                            ts_iso = _vscode_epoch_to_iso(ts_ms) if ts_ms else ""
+                            if not ts_iso or ts_iso[:10] != target_date:
+                                continue
+
+                            if not session_start:
+                                session_start = ts_iso
+                            session_end = ts_iso
+
+                            msg = item.get("message", {})
+                            text = msg.get("text", "") if isinstance(msg, dict) else str(msg)
+                            text = _strip_injected_context(text).strip()
+
+                            if not text or _is_approval(text):
+                                continue
+
+                            # Attach any pending tool summaries to the previous message
+                            if tool_summaries and messages and messages[-1]["role"] == "user":
+                                messages[-1]["tools_after"].extend(tool_summaries)
+                                tool_summaries = []
+
+                            if not model_used:
+                                model_used = item.get("modelId", "")
+
+                            messages.append({
+                                "role":        "user",
+                                "text":        text,
+                                "timestamp":   ts_iso,
+                                "tools_after": [],
+                            })
+
+                        # ── Tool invocation ───────────────────────────────
+                        elif item.get("kind") == "toolInvocationSerialized":
+                            tool_id = item.get("toolId", "")
+                            ptm = item.get("pastTenseMessage", "")
+                            if isinstance(ptm, dict):
+                                ptm = ptm.get("value", "")
+                            summary = ptm or tool_id
+                            tool_summaries.append(summary)
+
+                            # Track files from edit/create tools
+                            tool_lower = tool_id.lower()
+                            if any(kw in tool_lower for kw in ("edit", "create", "write", "replace")):
+                                fp = _extract_file_path_from_markdown(
+                                    ptm if isinstance(ptm, str) else str(ptm)
+                                )
+                                if fp:
+                                    files_touched.add(fp.replace("\\", "/"))
+
+        except Exception:
+            continue
+
+        # Attach any remaining tool summaries
+        if tool_summaries and messages and messages[-1]["role"] == "user":
+            messages[-1]["tools_after"].extend(tool_summaries)
+
+        user_messages = [m for m in messages if m["role"] == "user"]
+        if not user_messages:
+            continue
+
+        project_name = Path(cwd).name if cwd else session_id[:12]
+        all_modified = files_touched
+
+        # Line counts not available from VS Code sessions
+        total_lines = 0
+        if all_modified:
+            logic_files = sum(1 for f in all_modified
+                              if _os.path.splitext(f)[1].lower() in _LOGIC_EXTS)
+            logic_frac = logic_files / len(all_modified) if all_modified else 1.0
+        else:
+            logic_frac = 1.0
+        lines_logic = round(total_lines * logic_frac)
+        lines_boilerplate = total_lines - lines_logic
+
+        sessions.append({
+            "session_id":        session_id,
+            "project":           project_name,
+            "project_path":      cwd or str(jsonl_file),
+            "repository":        "",
+            "branch":            "",
+            "entrypoint":        "vscode",
+            "date":              target_date,
+            "messages":          messages,
+            "tokens":            {"input": 0, "output": 0, "cache_read": 0,
+                                  "cache_creation": 0, "total": 0},
+            "tokens_by_model":   {},
+            "premium_requests":  0,
+            "total_api_ms":      0,
+            "code_changes":      {"filesModified": sorted(all_modified)} if all_modified else {},
+            "model_used":        model_used,
+            "session_start":     session_start,
+            "session_end":       session_end,
+            "git_repos":         [],
+            "git_ops":           [],
+            "workspace_summary": "",
             "tool_invocations":  sum(len(m.get("tools_after", [])) for m in messages if m["role"] == "user"),
             "files_touched":     sorted(all_modified),
             "lines_logic":       lines_logic,
