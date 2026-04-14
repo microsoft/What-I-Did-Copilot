@@ -72,8 +72,8 @@ _MODEL_PRICING = {
     # OpenAI — via GitHub Copilot
     "gpt-5":            {"input":  2.50, "output": 10.00, "cache_read": 1.25,  "cache_creation":  2.50},
     "gpt-4.1":          {"input":  2.00, "output":  8.00, "cache_read": 0.50,  "cache_creation":  2.00},
-    "gpt-4o":           {"input":  2.50, "output": 10.00, "cache_read": 1.25,  "cache_creation":  2.50},
     "gpt-4o-mini":      {"input":  0.15, "output":  0.60, "cache_read": 0.075, "cache_creation":  0.15},
+    "gpt-4o":           {"input":  2.50, "output": 10.00, "cache_read": 1.25,  "cache_creation":  2.50},
     "o3":               {"input": 10.00, "output": 40.00, "cache_read": 2.50,  "cache_creation": 10.00},
     "o4-mini":          {"input":  1.10, "output":  4.40, "cache_read": 0.275, "cache_creation":  1.10},
     # Google (Gemini) — via GitHub Copilot
@@ -88,10 +88,13 @@ _DEFAULT_PRICING = {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_c
 def _get_model_pricing(model_name: str) -> dict:
     """Return pricing dict for a model name, matching by longest prefix."""
     name = model_name.lower()
+    best_prefix = ""
+    best_rates = _DEFAULT_PRICING
     for prefix, rates in _MODEL_PRICING.items():
-        if name.startswith(prefix):
-            return rates
-    return _DEFAULT_PRICING
+        if name.startswith(prefix) and len(prefix) > len(best_prefix):
+            best_prefix = prefix
+            best_rates = rates
+    return best_rates
 
 
 def _cost(tokens: dict) -> str:
@@ -302,7 +305,7 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
                   <div style="font-size:18px;font-weight:700;color:#fff;margin-top:4px">
                     ${market_cost:,.0f}</div>
                   <div style="font-size:11px;color:rgba(255,255,255,0.7);margin-top:2px">
-                    {"included in seat — no extra charge" if market_cost <= seat_cost else f"${api_savings:,.0f} saved vs. seat cost"}</div>
+                    {"included in seat — no extra charge" if market_cost <= seat_cost else f"${api_savings:,.0f} saved vs. market API pricing"}</div>
                 </td>
               </tr>
             </table>
@@ -2050,9 +2053,6 @@ window.onload = function() {
   /* Browser-friendly responsive overrides */
   body {{ -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }}
   .report-wrap {{ max-width: {max_width}px; width: 100%; margin: 0 auto; }}
-  @media screen and (min-width: 1200px) {{
-    .report-wrap {{ max-width: 1200px; }}
-  }}
   @media screen and (max-width: 640px) {{
     .report-wrap {{ max-width: 100% !important; }}
   }}

@@ -295,7 +295,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
             for k in ("input", "output", "cache_read", "cache_creation"):
                 total_tokens_by_model[model][k] += toks.get(k, 0)
 
-    total_premium= sum(s.get("premium_requests", 0)           for s in sessions)
+    total_premium     = sum(s.get("premium_requests", 0)           for s in sessions)
     total_api_ms      = sum(s.get("total_api_ms", 0)               for s in sessions)
     total_lines_added = sum(s.get("code_changes", {}).get("linesAdded", 0)   for s in sessions)
     total_lines_removed = sum(s.get("code_changes", {}).get("linesRemoved", 0) for s in sessions)
