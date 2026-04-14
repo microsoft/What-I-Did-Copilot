@@ -319,9 +319,13 @@ def _vscode_epoch_to_iso(epoch_ms: int | float) -> str:
 
 def _extract_file_path_from_markdown(text: str) -> str:
     """Extract a local file path from VS Code markdown-link tool messages."""
-    m = _re.search(r'file:///([^\s\)\]]+)', text)
+    m = _re.search(r'file://(/[^\s\)\]]+)', text)
     if m:
-        return _url_unquote(m.group(1)).replace("/", _os.sep)
+        path = _url_unquote(m.group(1))
+        # Strip leading slash for Windows drive paths (e.g. /C:/Users/...)
+        if _re.match(r'^/[A-Za-z]:/', path):
+            path = path[1:]
+        return path.replace("/", _os.sep)
     return ""
 
 
@@ -333,8 +337,10 @@ def get_vscode_sessions_for_date(target_date: str) -> list:
       kind=1 → metadata updates (workspace context, timings, model info)
       kind=2 → chat turns (requests with messages, tool invocations, etc.)
 
-    Uses a fast first-line date pre-filter to avoid loading multi-hundred-MB
-    files that can't possibly match the target date.
+    Uses a fast first-line pre-filter: skips files created after the target
+    date (they can't have earlier activity). Files created before are always
+    parsed; the inner loop filters events by date so non-matching turns are
+    skipped cheaply even in large files.
     """
     chat_dir = _get_vscode_chat_dir()
     if not chat_dir:
@@ -360,13 +366,15 @@ def get_vscode_sessions_for_date(target_date: str) -> list:
         except Exception:
             continue
 
-        # A session created on a different date could still have activity
-        # on target_date, but skip files created >7 days before/after as a
-        # heuristic (covers multi-day sessions without loading huge files).
+        # Skip files created after the target date — they can't have activity
+        # on a date before they existed.  Files created *before* target_date
+        # are always parsed because long-lived sessions can span weeks.
+        # The inner loop filters individual events by date, so large files
+        # that don't match still exit quickly.
         try:
             td = datetime.strptime(target_date, "%Y-%m-%d")
             cd = datetime.strptime(creation_date, "%Y-%m-%d")
-            if abs((td - cd).days) > 7:
+            if cd > td:
                 continue
         except Exception:
             pass
