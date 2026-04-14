@@ -51,6 +51,17 @@ def _fmt_h(h: float) -> str:
     return f"{h:.1f}h"
 
 
+def _fmt_tokens(t: int) -> str:
+    """Format token count with K/M suffix."""
+    if not t or t <= 0:
+        return ""
+    if t >= 1_000_000:
+        return f"{t / 1_000_000:.1f}M"
+    if t >= 1_000:
+        return f"{t / 1_000:.0f}K"
+    return str(t)
+
+
 def _fmt_ms(ms: int) -> str:
     """Format milliseconds as Xm Ys."""
     if not ms:
@@ -1639,12 +1650,26 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
         n            = len(g.get("tasks", []))
         h            = _fmt_h(g.get("human_hours", 0))
         bg           = C["subtle"] if i % 2 == 0 else C["card"]
-        top_d, top_t = _top_skills_for_goal(g)
-        skill_pills  = _pills(top_d, top_t)
+        top_d, _     = _top_skills_for_goal(g)
+        skill_pills  = _pills(top_d, [])
         task_sub     = f'{n} task{"s" if n != 1 else ""}'
         doc_html     = _doc_refs_html(g.get("docs_referenced", []))
         date_badge   = _date_badge(g.get("date", ""))
         tasks        = g.get("tasks", [])
+        # Resolve tokens for this goal from session metrics
+        project      = g.get("project", "")
+        goal_date    = g.get("date", "")
+        metrics      = _resolve_metrics(project, session_metrics, goal_date)
+        goal_tokens  = metrics.get("tokens", 0)
+        tokens_html  = _fmt_tokens(goal_tokens)
+        tokens_cell  = f"""
+          <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
+                     vertical-align:middle;text-align:right;width:10%">
+            <div style="font-size:14px;font-weight:700;color:{C['green']}">{tokens_html}</div>
+            <div style="font-size:10px;color:{C['muted']};margin-top:1px">tokens</div>
+          </td>""" if tokens_html else f"""
+          <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
+                     vertical-align:middle;text-align:right;width:10%"></td>"""
         return f"""
         <tr id="{gid}-hdr" style="background:{bg};cursor:pointer"
             onclick="toggleDetail('{gid}')">
@@ -1655,7 +1680,7 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
                         line-height:22px">{i+1}</div>
           </td>
           <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
-                     vertical-align:top;width:42%">
+                     vertical-align:top;width:40%">
             <div style="font-size:12px;font-weight:600;color:{C['text']};line-height:1.35">
               <span id="{gid}-arrow" style="font-size:10px;color:{C['accent']};
                                             margin-right:5px">&#9654;</span>
@@ -1664,18 +1689,19 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
             {f'<div style="margin-top:5px">{doc_html}</div>' if doc_html else ''}
           </td>
           <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
-                     vertical-align:middle;width:40%">
+                     vertical-align:middle;width:34%">
             <div>{skill_pills}</div>
             <div style="font-size:10px;color:{C['muted']};margin-top:5px">{task_sub}</div>
           </td>
+          {tokens_cell}
           <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
-                     vertical-align:middle;text-align:right;width:14%">
+                     vertical-align:middle;text-align:right;width:12%">
             <div style="font-size:16px;font-weight:700;color:{C['accent']}">{h}</div>
             <div style="font-size:10px;color:{C['muted']};margin-top:1px">human est.</div>
           </td>
         </tr>
         <tr id="{gid}-tasks" style="display:none">
-          <td colspan="4" style="padding:0 8px 12px;background:{C['bg']}">
+          <td colspan="5" style="padding:0 8px 12px;background:{C['bg']}">
             {_goal_context_bar(g, session_lookup)}
             <table width="100%" cellpadding="0" cellspacing="0"
                    style="border:1px solid {C['border']};border-radius:6px;overflow:hidden">
@@ -1705,7 +1731,7 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
         label = f"Show {n_extra} more project{'s' if n_extra != 1 else ''}"
         rows += f"""
         <tr>
-          <td colspan="4" style="padding:0;border-bottom:1px solid {C['border']}">
+          <td colspan="5" style="padding:0;border-bottom:1px solid {C['border']}">">
             <button id="goals-show-more" onclick="toggleExtraGoals({n_extra})"
                     style="width:100%;background:{C['subtle']};border:none;border-top:1px solid {C['border']};
                            padding:8px 16px;font-size:11px;font-weight:600;color:{C['accent']};
@@ -1881,6 +1907,8 @@ def generate_html(target_date: str, analysis: dict, sessions: list,
 
     total_human_h = sum(g.get("human_hours", 0) for g in goals)
     total_tasks   = sum(len(g.get("tasks", [])) for g in goals)
+    total_tokens  = analysis.get("tokens", {}).get("total", 0)
+    total_tok_fmt = _fmt_tokens(total_tokens)
 
     totals_row= f"""
         <tr style="background:{C['accent_lt']}">
@@ -1890,6 +1918,10 @@ def generate_html(target_date: str, analysis: dict, sessions: list,
             {len(goals)} project{'s' if len(goals) != 1 else ''} &nbsp;·&nbsp; {total_tasks} tasks total
           </td>
           <td style="padding:10px 16px;border-top:2px solid {C['border']}"></td>
+          <td style="padding:10px 16px;border-top:2px solid {C['border']};
+                     text-align:right;font-size:14px;font-weight:700;color:{C['green']}">
+            {total_tok_fmt}
+          </td>
           <td style="padding:10px 16px;border-top:2px solid {C['border']};
                      text-align:right;font-size:18px;font-weight:700;color:{C['accent']}">
             {_fmt_h(total_human_h)}
