@@ -62,8 +62,10 @@ def _fmt_ms(ms: int) -> str:
 
 
 # Per-model token pricing ($ per 1M tokens).
-# Keys are matched by prefix against model names from session data.
-# Order: most specific first; first match wins.
+# Keys are matched by longest-prefix against model names from session data.
+# Keep more-specific prefixes before less-specific ones for readability
+# (e.g. "gpt-4o-mini" before "gpt-4o"); the algorithm always picks the
+# longest matching prefix regardless of insertion order.
 _MODEL_PRICING = {
     # Anthropic (Claude) — via GitHub Copilot
     "claude-opus-4":    {"input": 15.00, "output": 75.00, "cache_read": 1.50,  "cache_creation": 18.75},
