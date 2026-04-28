@@ -16,6 +16,9 @@ from harvest import compute_active_minutes, compute_elapsed_minutes
 API_URL = "https://models.github.ai/inference/chat/completions"
 MODEL   = "openai/gpt-4o-mini"
 
+# ~3000 tokens, leaving ~5000 for prompt + response
+MAX_TRANSCRIPT_CHARS = 12000
+
 def _load_taxonomy() -> tuple:
     """Load domain and tech skill lists from prompts/skills_taxonomy.txt."""
     path = Path(__file__).parent / "prompts" / "skills_taxonomy.txt"
@@ -281,6 +284,20 @@ def _build_analysis_prompt(transcript: str, domain_list: str, tech_list: str) ->
     )
 
 
+def _prepare_prompt(sessions: list) -> str:
+    """Build the analysis prompt for a list of sessions.
+
+    Centralises transcript construction, truncation, and domain/tech list
+    formatting so every fallback branch uses identical inputs.
+    """
+    transcript = _build_transcript(sessions)
+    if len(transcript) > MAX_TRANSCRIPT_CHARS:
+        transcript = transcript[:MAX_TRANSCRIPT_CHARS] + "\n\n[... transcript truncated for length ...]"
+    domain_list = ", ".join(DOMAIN_SKILLS[:6]) + ", ..."
+    tech_list   = ", ".join(TECH_SKILLS[:6])   + ", ..."
+    return _build_analysis_prompt(transcript, domain_list, tech_list)
+
+
 def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api: bool = True) -> dict:
     # Aggregate metrics across all sessions
     total_tokens = {
@@ -463,13 +480,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
 
     if not use_api:
         # Even when the GitHub Models API is unavailable, try Copilot CLI first
-        transcript = _build_transcript(sessions)
-        MAX_TRANSCRIPT_CHARS = 12000
-        if len(transcript) > MAX_TRANSCRIPT_CHARS:
-            transcript = transcript[:MAX_TRANSCRIPT_CHARS] + "\n\n[... transcript truncated for length ...]"
-        domain_list = ", ".join(DOMAIN_SKILLS[:6]) + ", ..."
-        tech_list   = ", ".join(TECH_SKILLS[:6])   + ", ..."
-        prompt = _build_analysis_prompt(transcript, domain_list, tech_list)
+        prompt = _prepare_prompt(sessions)
 
         cli_result = _analyze_via_copilot_cli(prompt)
         if cli_result:
@@ -490,19 +501,11 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
     if not token:
         # Try copilot CLI fallback (uses Copilot subscription, no API key needed)
         print("  (No GitHub token — trying Copilot CLI for analysis...)")
-        transcript = _build_transcript(sessions)
-        MAX_TRANSCRIPT_CHARS = 12000
-        if len(transcript) > MAX_TRANSCRIPT_CHARS:
-            transcript = transcript[:MAX_TRANSCRIPT_CHARS] + "\n\n[... transcript truncated for length ...]"
-
-        domain_list = ", ".join(DOMAIN_SKILLS[:6]) + ", ..."
-        tech_list   = ", ".join(TECH_SKILLS[:6])   + ", ..."
-
-        prompt = _build_analysis_prompt(transcript, domain_list, tech_list)
+        prompt = _prepare_prompt(sessions)
         cli_result = _analyze_via_copilot_cli(prompt)
         if cli_result:
             cli_result["sessions_count"]  = len(sessions)
-            cli_result["projects"]        = list({s["project"] for s in sessions})
+            cli_result["projects"]        = list(dict.fromkeys(s["project"] for s in sessions))
             cli_result["analysis_method"] = "ai-copilot-cli"
             _attach_metrics(cli_result)
             try:
@@ -515,17 +518,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
         print("  (Copilot CLI unavailable — using heuristic analysis. Run `gh auth login` to enable semantic analysis.)")
         return _attach_metrics(_fallback_analysis(target_date, sessions))
 
-    transcript  = _build_transcript(sessions)
-
-    # Truncate transcript to stay within token limit (~4 chars per token, leave room for prompt)
-    MAX_TRANSCRIPT_CHARS = 12000  # ~3000 tokens, leaving ~5000 for prompt + response
-    if len(transcript) > MAX_TRANSCRIPT_CHARS:
-        transcript = transcript[:MAX_TRANSCRIPT_CHARS] + "\n\n[... transcript truncated for length ...]"
-
-    domain_list = ", ".join(DOMAIN_SKILLS[:6]) + ", ..."
-    tech_list   = ", ".join(TECH_SKILLS[:6])   + ", ..."
-
-    prompt = _build_analysis_prompt(transcript, domain_list, tech_list)
+    prompt = _prepare_prompt(sessions)
 
     payload = json.dumps({
         "model":       MODEL,
@@ -550,7 +543,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
         raw = _extract_json(raw)
         analysis = json.loads(raw)
         analysis["sessions_count"] = len(sessions)
-        analysis["projects"]       = list({s["project"] for s in sessions})
+        analysis["projects"]       = list(dict.fromkeys(s["project"] for s in sessions))
         analysis["analysis_method"] = "ai"
         _attach_metrics(analysis)
         # Cache
@@ -572,7 +565,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
     cli_result = _analyze_via_copilot_cli(prompt)
     if cli_result:
         cli_result["sessions_count"]  = len(sessions)
-        cli_result["projects"]        = list({s["project"] for s in sessions})
+        cli_result["projects"]        = list(dict.fromkeys(s["project"] for s in sessions))
         cli_result["analysis_method"] = "ai-copilot-cli"
         _attach_metrics(cli_result)
         try:
