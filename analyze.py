@@ -478,6 +478,19 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
         except Exception:
             pass
 
+    def _finalize_and_cache(result: dict, method: str) -> dict:
+        """Stamp common metadata, attach aggregated metrics, and persist to cache."""
+        result["sessions_count"]  = len(sessions)
+        result["projects"]        = list(dict.fromkeys(s["project"] for s in sessions))
+        result["analysis_method"] = method
+        _attach_metrics(result)
+        try:
+            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return result
+
     if not use_api:
         # Respect strict non-AI / non-network mode and use heuristics only.
         return _attach_metrics(_fallback_analysis(target_date, sessions))
@@ -489,16 +502,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
         prompt = _prepare_prompt(sessions)
         cli_result = _analyze_via_copilot_cli(prompt)
         if cli_result:
-            cli_result["sessions_count"]  = len(sessions)
-            cli_result["projects"]        = list(dict.fromkeys(s["project"] for s in sessions))
-            cli_result["analysis_method"] = "ai-copilot-cli"
-            _attach_metrics(cli_result)
-            try:
-                _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                cache_file.write_text(json.dumps(cli_result, indent=2), encoding="utf-8")
-            except Exception:
-                pass
-            return cli_result
+            return _finalize_and_cache(cli_result, "ai-copilot-cli")
 
         print("  (Copilot CLI unavailable — using heuristic analysis. Run `gh auth login` to enable semantic analysis.)")
         return _attach_metrics(_fallback_analysis(target_date, sessions))
@@ -527,17 +531,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
         raw = response["choices"][0]["message"]["content"].strip()
         raw = _extract_json(raw)
         analysis = json.loads(raw)
-        analysis["sessions_count"] = len(sessions)
-        analysis["projects"]       = list(dict.fromkeys(s["project"] for s in sessions))
-        analysis["analysis_method"] = "ai"
-        _attach_metrics(analysis)
-        # Cache
-        try:
-            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            cache_file.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
-        except Exception:
-            pass
-        return analysis
+        return _finalize_and_cache(analysis, "ai")
 
     except urllib.error.HTTPError as e:
         body = e.read().decode()[:300]
@@ -549,16 +543,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
     print("  Trying Copilot CLI as fallback...")
     cli_result = _analyze_via_copilot_cli(prompt)
     if cli_result:
-        cli_result["sessions_count"]  = len(sessions)
-        cli_result["projects"]        = list(dict.fromkeys(s["project"] for s in sessions))
-        cli_result["analysis_method"] = "ai-copilot-cli"
-        _attach_metrics(cli_result)
-        try:
-            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            cache_file.write_text(json.dumps(cli_result, indent=2), encoding="utf-8")
-        except Exception:
-            pass
-        return cli_result
+        return _finalize_and_cache(cli_result, "ai-copilot-cli")
 
     print("  Using heuristic fallback -- estimates will be approximate. Re-run with --refresh when API is available.")
     return _attach_metrics(_fallback_analysis(target_date, sessions))
