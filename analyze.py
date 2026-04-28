@@ -479,22 +479,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
             pass
 
     if not use_api:
-        # Even when the GitHub Models API is unavailable, try Copilot CLI first
-        prompt = _prepare_prompt(sessions)
-
-        cli_result = _analyze_via_copilot_cli(prompt)
-        if cli_result:
-            cli_result["sessions_count"]  = len(sessions)
-            cli_result["projects"]        = list(dict.fromkeys(s["project"] for s in sessions))
-            cli_result["analysis_method"] = "ai-copilot-cli"
-            _attach_metrics(cli_result)
-            try:
-                _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                cache_file.write_text(json.dumps(cli_result, indent=2), encoding="utf-8")
-            except Exception:
-                pass
-            return cli_result
-
+        # Respect strict non-AI / non-network mode and use heuristics only.
         return _attach_metrics(_fallback_analysis(target_date, sessions))
 
     token = _get_github_token()
