@@ -118,10 +118,10 @@ def _analyze_via_copilot_cli(prompt: str) -> dict | None:
 
     if cli == "gh-copilot":
         cmd = ["gh", "copilot", "--", "-p", prompt, "--output-format", "text",
-               "--allow-all-tools"]
+               "--available-tools="]
     else:
         cmd = [cli, "-p", prompt, "--output-format", "text",
-               "--allow-all-tools"]
+               "--available-tools="]
 
     try:
         print("  (Using Copilot CLI for analysis — no API key needed.)")
