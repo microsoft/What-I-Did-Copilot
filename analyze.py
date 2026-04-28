@@ -474,7 +474,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
         cli_result = _analyze_via_copilot_cli(prompt)
         if cli_result:
             cli_result["sessions_count"]  = len(sessions)
-            cli_result["projects"]        = list({s["project"] for s in sessions})
+            cli_result["projects"]        = list(dict.fromkeys(s["project"] for s in sessions))
             cli_result["analysis_method"] = "ai-copilot-cli"
             _attach_metrics(cli_result)
             try:
