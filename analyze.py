@@ -90,6 +90,19 @@ def _find_copilot_cli() -> str:
     return ""
 
 
+def _extract_json(raw: str) -> str:
+    """Extract a JSON object from a string that may contain markdown fences or prose."""
+    if "```json" in raw:
+        raw = raw.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in raw:
+        raw = raw.split("```", 1)[1].split("```", 1)[0].strip()
+    start = raw.find("{")
+    end = raw.rfind("}") + 1
+    if start >= 0 and end > start:
+        raw = raw[start:end]
+    return raw
+
+
 def _analyze_via_copilot_cli(prompt: str) -> dict | None:
     """Run AI analysis by piping the prompt through an authenticated copilot CLI session.
 
@@ -102,28 +115,20 @@ def _analyze_via_copilot_cli(prompt: str) -> dict | None:
 
     if cli == "gh-copilot":
         cmd = ["gh", "copilot", "--", "-p", prompt, "--output-format", "text",
-               "--no-file-access"]
+               "--allow-all-tools"]
     else:
         cmd = [cli, "-p", prompt, "--output-format", "text",
-               "--no-file-access"]
+               "--allow-all-tools"]
 
     try:
         print("  (Using Copilot CLI for analysis — no API key needed.)")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=180)
         if result.returncode != 0:
             return None
 
         raw = result.stdout.strip()
-        # Extract JSON from response — copilot may wrap it in markdown fences
-        if "```json" in raw:
-            raw = raw.split("```json", 1)[1].split("```", 1)[0].strip()
-        elif "```" in raw:
-            raw = raw.split("```", 1)[1].split("```", 1)[0].strip()
-        # Find first { to last }
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            raw = raw[start:end]
+        raw = _extract_json(raw)
 
         return json.loads(raw)
     except subprocess.TimeoutExpired:
@@ -457,6 +462,28 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
             pass
 
     if not use_api:
+        # Even when the GitHub Models API is unavailable, try Copilot CLI first
+        transcript = _build_transcript(sessions)
+        MAX_TRANSCRIPT_CHARS = 12000
+        if len(transcript) > MAX_TRANSCRIPT_CHARS:
+            transcript = transcript[:MAX_TRANSCRIPT_CHARS] + "\n\n[... transcript truncated for length ...]"
+        domain_list = ", ".join(DOMAIN_SKILLS[:6]) + ", ..."
+        tech_list   = ", ".join(TECH_SKILLS[:6])   + ", ..."
+        prompt = _build_analysis_prompt(transcript, domain_list, tech_list)
+
+        cli_result = _analyze_via_copilot_cli(prompt)
+        if cli_result:
+            cli_result["sessions_count"]  = len(sessions)
+            cli_result["projects"]        = list({s["project"] for s in sessions})
+            cli_result["analysis_method"] = "ai-copilot-cli"
+            _attach_metrics(cli_result)
+            try:
+                _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                cache_file.write_text(json.dumps(cli_result, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+            return cli_result
+
         return _attach_metrics(_fallback_analysis(target_date, sessions))
 
     token = _get_github_token()
@@ -520,8 +547,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
         with urllib.request.urlopen(req, timeout=120) as resp:
             response = json.loads(resp.read().decode("utf-8"))
         raw = response["choices"][0]["message"]["content"].strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        raw = _extract_json(raw)
         analysis = json.loads(raw)
         analysis["sessions_count"] = len(sessions)
         analysis["projects"]       = list({s["project"] for s in sessions})
@@ -538,10 +564,25 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
     except urllib.error.HTTPError as e:
         body = e.read().decode()[:300]
         print(f"  WARNING: API error {e.code}: {body}")
-        print("  Using heuristic fallback -- estimates will be approximate. Re-run with --refresh when API is available.")
     except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
-        print(f"  WARNING: API unavailable ({type(e).__name__}). Using heuristic fallback -- estimates will be approximate.")
+        print(f"  WARNING: API unavailable ({type(e).__name__}).")
 
+    # API failed — try Copilot CLI before falling back to heuristic
+    print("  Trying Copilot CLI as fallback...")
+    cli_result = _analyze_via_copilot_cli(prompt)
+    if cli_result:
+        cli_result["sessions_count"]  = len(sessions)
+        cli_result["projects"]        = list({s["project"] for s in sessions})
+        cli_result["analysis_method"] = "ai-copilot-cli"
+        _attach_metrics(cli_result)
+        try:
+            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(json.dumps(cli_result, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return cli_result
+
+    print("  Using heuristic fallback -- estimates will be approximate. Re-run with --refresh when API is available.")
     return _attach_metrics(_fallback_analysis(target_date, sessions))
 
 
