@@ -728,7 +728,9 @@ def _fallback_analysis(target_date: str, sessions: list) -> dict:
             if files_count >= 5:  cmult += 0.10
             if files_count >= 10: cmult += 0.15
             cmult = min(cmult, 1.60)
-            goal_hours *= cmult
+            for task in tasks:
+                task["human_hours"] *= cmult
+            goal_hours = sum(t["human_hours"] for t in tasks)
         goals.append({
             "title":       f"Worked on {proj}",
             "summary":     f"{len(tasks)} task{'s' if len(tasks) != 1 else ''} completed in {proj}.",
