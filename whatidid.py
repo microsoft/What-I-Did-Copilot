@@ -297,6 +297,7 @@ def _merge_analyses(day_analyses: list) -> dict:
             per_day_turns_h = 0.0
             per_day_lines_h = 0.0
             per_day_reads_h = 0.0
+            per_day_complexity_mults = []
             for d in all_dates:
                 found = False
                 for pname in equiv_names:
@@ -313,6 +314,7 @@ def _merge_analyses(day_analyses: list) -> dict:
                             per_day_turns_h += cfe["turns_h"]
                             per_day_lines_h += cfe["lines_h"]
                             per_day_reads_h += cfe["reads_h"]
+                            per_day_complexity_mults.append(cfe.get("complexity_mult", 1.0))
                             found = True
                             break
                     if found:
@@ -326,6 +328,7 @@ def _merge_analyses(day_analyses: list) -> dict:
             agg["_per_day_turns_h"] = per_day_turns_h
             agg["_per_day_lines_h"] = per_day_lines_h
             agg["_per_day_reads_h"] = per_day_reads_h
+            agg["_per_day_complexity_mult"] = max(per_day_complexity_mults) if per_day_complexity_mults else 1.0
             # Store aggregated metrics under the earliest date key
             merged_session_metrics[all_dates[0] + "|" + proj] = agg
             merged_session_metrics[all_dates[0] + "|" + norm] = agg

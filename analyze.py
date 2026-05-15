@@ -705,10 +705,34 @@ def _fallback_analysis(target_date: str, sessions: list) -> dict:
                 "professional_roles": prof_roles,
                 "human_hours":        hours,
             })
+        goal_hours = sum(t["human_hours"] for t in tasks)
+        # Apply complexity multiplier for sessions with high rework or broad scope
+        files_touched = s.get("files_touched", [])
+        files_count = len(files_touched)
+        # Compute iteration depth from tool calls
+        edit_targets = {}
+        for msg in s["messages"]:
+            for t in msg.get("tools_after", []):
+                tl = t.lower()
+                if any(w in tl for w in ("edit", "create", "write", "replace")):
+                    fname_match = re.search(r'[\\/]([^\\/]+\.\w{1,8})', t)
+                    if fname_match:
+                        fn = fname_match.group(1)
+                        edit_targets[fn] = edit_targets.get(fn, 0) + 1
+        iter_depth = round(sum(edit_targets.values()) / max(len(edit_targets), 1), 1) if edit_targets else 0.0
+        if goal_hours >= 0.50:
+            cmult = 1.0
+            if iter_depth >= 2.5: cmult += 0.10
+            if iter_depth >= 5:   cmult += 0.15
+            if iter_depth >= 10:  cmult += 0.10
+            if files_count >= 5:  cmult += 0.10
+            if files_count >= 10: cmult += 0.15
+            cmult = min(cmult, 1.60)
+            goal_hours *= cmult
         goals.append({
             "title":       f"Worked on {proj}",
             "summary":     f"{len(tasks)} task{'s' if len(tasks) != 1 else ''} completed in {proj}.",
-            "human_hours": sum(t["human_hours"] for t in tasks),
+            "human_hours": round(goal_hours * 4) / 4,
             "tasks":       tasks,
         })
 

@@ -121,7 +121,10 @@ STEP 2 — Estimate from multiple signals; use the HIGHEST as your base:
     active_minutes × 2 = conservative (routine/mechanical work, 1.4× lower bound)
     active_minutes × 3 = standard (implementation, feature building)
     active_minutes × 4 = generous (design, debugging, research, decision-making)
+    active_minutes × 5–6 = complex (high iteration depth + broad file scope,
+      e.g. debugging across 10+ files with repeated rework, architectural refactors)
     Example: 90 min active on feature design → 3–4h human equivalent.
+    Example: 60 min active on multi-file debugging with 5+ rework cycles → 5–6h.
 
   CONVERSATION TURNS (substantive only — exclude 'yes'/'commit'/'ok'/confirmations):
     1–3 = 0.25h  |  4–8 = 0.75h  |  9–15 = 1.5h  |  16–30 = 2.5–3h
@@ -144,14 +147,30 @@ STEP 2 — Estimate from multiple signals; use the HIGHEST as your base:
     High tool counts with low lines → the work was non-coding but still substantial.
     50 tools ≈ +0.4h  |  100 tools ≈ +0.5h  |  200+ tools ≈ +0.5–0.6h
 
-STEP 3 — Apply upward semantic adjustments based on transcript content:
-  Significant rework or debugging cycles:                    +25–50% on base
-  Broad scope (10+ files, multiple systems touched):         +20–30%
+STEP 3 — Apply COMPLEXITY MULTIPLIER based on iteration depth and file scope:
+  The deterministic formula applies a bounded complexity multiplier (1.0–1.60×)
+  when base effort ≥ 0.50h. Your AI estimate should reflect the same logic:
+
+  ITERATION DEPTH (avg edits per file — measures rework/debugging intensity):
+    ≥ 2.5 edits/file → +10%    (moderate rework)
+    ≥ 5.0 edits/file → +25%    (heavy debugging/iteration cycles)
+    ≥ 10  edits/file → +35%    (extreme rework — multiple failed approaches)
+
+  FILE SCOPE (unique files touched — measures breadth and context-switching):
+    ≥ 5 files  → +10%     (multi-file change)
+    ≥ 10 files → +25%     (broad architectural change)
+
+  These stack: a session with iteration_depth=8 and 12 files touched gets up to
+  +50% (capped at 1.60×). This reflects Tregubov et al. (2017) finding that 17%
+  of developer time is spent recovering from context switches.
+
+STEP 4 — Apply additional upward semantic adjustments based on transcript content:
+  Significant rework or debugging cycles beyond what iteration_depth captures: +10–20% on base
   Architecturally significant decisions (APIs, schemas):     scale to upper anchors
   Novel problem-solving (creative synthesis, not routine):   scale to upper anchors
   Pure mechanical execution only:                            cap at 0.25–0.5h
 
-STEP 4 — Reality-check against outcome anchors:
+STEP 5 — Reality-check against outcome anchors:
   0.25h    — Trivial: install package, run CLI command, toggle config, push to git
   0.5h     — Simple: minor code edit, rename, format tweak, answer a question
   1.0–1.5h — Moderate: implement small feature, debug known issue, draft short doc

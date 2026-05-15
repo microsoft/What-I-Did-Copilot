@@ -106,7 +106,7 @@ requests as the primary interaction signal. Premium requests are excluded from t
 `max()` base calculation. Effective reqs are capped at 10× conversation turns.
 
 
-### 2.5 "Iteration count and prompt efficiency predict true complexity" → Iteration via log curves and AI judgment
+### 2.5 "Iteration count and prompt efficiency predict true complexity" → Iteration depth as complexity multiplier
 
 - **Chen et al. (2023)** introduced "prompt efficiency" — measuring how many
   interactions were needed before the AI produced a correct solution — as an
@@ -116,16 +116,26 @@ requests as the primary interaction signal. Premium requests are excluded from t
 - **Alaswad et al. (2026)** identified **iterative reasoning cycles** as one of
   five key dimensions driving effort in LLM-assisted work.
 
-**Our response:** The deterministic formula handles iteration implicitly via
-`turns_h` — the logarithmic curve has diminishing returns for high turn counts,
-naturally capturing the fact that each additional iteration adds less marginal
-effort than the first. The AI estimator applies qualitative +25–50% adjustments
-for genuinely iterative sessions based on transcript evidence (e.g., repeated
-rework of the same code, back-and-forth debugging cycles, multiple failed
-approaches before a solution).
+**Our response:** The deterministic formula now includes a bounded **complexity
+multiplier** (1.0–1.60×) that activates when the base estimate ≥ 0.50h.
+`iteration_depth` (average edits per unique file) directly measures rework
+intensity — the "iterative reasoning cycles" that Alaswad et al. identify as a
+key effort driver. The multiplier applies tiered boosts:
+
+| Iteration depth | Multiplier contribution | Interpretation |
+|-----------------|------------------------|----------------|
+| < 2.5 | +0% | Normal editing — no rework signal |
+| ≥ 2.5 | +10% | Moderate rework or refinement |
+| ≥ 5.0 | +25% (cumulative) | Heavy debugging / iteration cycles |
+| ≥ 10.0 | +35% (cumulative) | Extreme rework — multiple failed approaches |
+
+The logarithmic `turns_h` curve still handles basic iteration implicitly (each
+additional turn adds diminishing effort), but the complexity multiplier captures
+the *qualitative* difference: a session with 10 edits per file is fundamentally
+harder than one with 1 edit per file, even at the same turn count.
 
 
-### 2.6 "Broader scope projects have significantly larger effort overruns" → Files touched as AI input, not formula input
+### 2.6 "Broader scope projects have significantly larger effort overruns" → Files touched as bounded complexity modifier
 
 - **Morcov et al. (2020)** reviewed 125 IT projects and found that projects with
   more stakeholders, requirements, and moving parts had significantly larger
@@ -135,12 +145,23 @@ approaches before a solution).
   multiple contexts spent **17% of their time** simply recovering from context
   switches.
 
-**Our response:** `files_touched_count` is tracked for display and informs the AI
-estimator's qualitative judgment (+20–30% for broad-scope sessions touching 10+
-files), but it is excluded from the deterministic formula. In calibration testing,
-adding files-touched as a formula term yielded marginal R² of +0.00–0.03 — not
-statistically significant. The signal is real but too noisy to improve a
-deterministic calculation; it works better as qualitative context for the AI.
+**Our response:** `files_touched_count` now contributes to the deterministic
+formula as a **bounded multiplicative modifier** — not as an independent additive
+term. In earlier calibration testing, adding files-touched as an additive formula
+term yielded marginal R² of +0.00–0.03 — not statistically significant as a
+standalone effort predictor. However, as a *multiplier* applied to an
+already-meaningful base (≥ 0.50h), it amplifies the estimate for genuinely
+broad-scope sessions without inflating trivial ones:
+
+| Files touched | Multiplier contribution | Interpretation |
+|---------------|------------------------|----------------|
+| < 5 | +0% | Focused single-module change |
+| ≥ 5 | +10% | Multi-file change with context switching |
+| ≥ 10 | +25% (cumulative) | Broad architectural change |
+
+The complexity multiplier (combining iteration depth and file scope) is capped at
+1.60× to keep the formula as a conservative floor. The AI semantic estimator
+applies the same logic and may go higher when transcript evidence supports it.
 
 
 ### 2.7 "Code volume is decoupled from effort in AI-assisted work" → Lines as additive, not primary
