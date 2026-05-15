@@ -1036,7 +1036,7 @@ def compute_formula_estimate(metrics: dict) -> dict:
     tasks) gets meaningful credit even when lines_h ≈ 0.
     reqs_h is a fallback for older sessions without conversation turn data.
     complexity_mult amplifies the base for sessions with high rework depth or
-    broad file scope, only when base ≥ 0.75h.
+    broad file scope, only when base ≥ 0.50h.
     """
     turns = metrics.get("substantive_turns")
     if turns is None:
