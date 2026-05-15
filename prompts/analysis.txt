@@ -102,8 +102,8 @@ RESEARCH FOUNDATION:
   (r=−0.14); logic lines r=+0.41
 
 THE FORMULA IS A FLOOR, NOT A CEILING.
-The deterministic formula (interaction_h + lines_h + reads_h + tools_h) gives the minimum
-plausible estimate based on mechanical counts. Your semantic judgment about
+The deterministic formula (base × complexity_mult, where base = interaction_h + lines_h + reads_h + tools_h)
+gives the minimum plausible estimate based on mechanical counts. Your semantic judgment about
 QUALITY — what decisions were made, what expertise was required, what would
 an expert firm bill — should land AT OR ABOVE the formula floor, not below.
 The formula cannot see business value; you can.
