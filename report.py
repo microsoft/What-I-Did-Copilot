@@ -1067,7 +1067,7 @@ def compute_formula_estimate(metrics: dict) -> dict:
             "reqs_h":          rqh,
             "lines_h":         metrics.get("_per_day_lines_h", lh),
             "reads_h":         metrics.get("_per_day_reads_h", rh),
-            "tools_h":         tlh,
+            "tools_h":         metrics.get("_per_day_tools_h", tlh),
             "interaction_h":   interaction_h,
             "complexity_mult": metrics.get("_per_day_complexity_mult", 1.0),
             "total":           per_day_total,

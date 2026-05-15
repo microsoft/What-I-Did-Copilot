@@ -297,7 +297,7 @@ def _merge_analyses(day_analyses: list) -> dict:
             per_day_turns_h = 0.0
             per_day_lines_h = 0.0
             per_day_reads_h = 0.0
-            per_day_complexity_mults = []
+            per_day_tools_h = 0.0
             for d in all_dates:
                 found = False
                 for pname in equiv_names:
@@ -314,7 +314,7 @@ def _merge_analyses(day_analyses: list) -> dict:
                             per_day_turns_h += cfe["turns_h"]
                             per_day_lines_h += cfe["lines_h"]
                             per_day_reads_h += cfe["reads_h"]
-                            per_day_complexity_mults.append(cfe.get("complexity_mult", 1.0))
+                            per_day_tools_h += cfe["tools_h"]
                             found = True
                             break
                     if found:
@@ -324,11 +324,15 @@ def _merge_analyses(day_analyses: list) -> dict:
             total_f = agg.pop("_total_files_edited", 0)
             agg["iteration_depth"] = round(total_e / max(total_f, 1), 1)
             # Store per-day formula sums so the evidence table components add up correctly
-            agg["_per_day_formula_total"] = round(per_day_formula_total * 4) / 4
+            per_day_formula_total = round(per_day_formula_total * 4) / 4
+            per_day_base = per_day_turns_h + per_day_lines_h + per_day_reads_h + per_day_tools_h
+            per_day_effective_mult = (per_day_formula_total / per_day_base) if per_day_base > 0 else 1.0
+            agg["_per_day_formula_total"] = per_day_formula_total
             agg["_per_day_turns_h"] = per_day_turns_h
             agg["_per_day_lines_h"] = per_day_lines_h
             agg["_per_day_reads_h"] = per_day_reads_h
-            agg["_per_day_complexity_mult"] = max(per_day_complexity_mults) if per_day_complexity_mults else 1.0
+            agg["_per_day_tools_h"] = per_day_tools_h
+            agg["_per_day_complexity_mult"] = per_day_effective_mult
             # Store aggregated metrics under the earliest date key
             merged_session_metrics[all_dates[0] + "|" + proj] = agg
             merged_session_metrics[all_dates[0] + "|" + norm] = agg
