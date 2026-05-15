@@ -44,8 +44,8 @@ code (LOC) and function points (FP). However:
 
 | System | Approach | Strength | Limitation |
 |--------|----------|----------|------------|
-| Deterministic formula | `interaction_h + lines_h + reads_h + tools_h` (additive log curves) | Transparent, reproducible, auditable floor | Cannot see context, business value, or qualitative complexity |
-| AI semantic estimate | Reads full transcript, applies judgment using active time × 2–4 as anchor | Understands what was done, distinguishes boilerplate from architecture | Depends on prompt quality, may vary across model versions |
+| Deterministic formula | `base × complexity_mult` where `base = interaction_h + lines_h + reads_h + tools_h` (log curves with bounded multiplier) | Transparent, reproducible, auditable floor | Cannot see context, business value, or qualitative complexity |
+| AI semantic estimate | Reads full transcript, applies judgment using active time × 2–6 as anchor | Understands what was done, distinguishes boilerplate from architecture | Depends on prompt quality, may vary across model versions |
 
 **Our response:** We use two complementary systems — a deterministic formula as
 the transparency floor, and an AI semantic estimate as the primary output. Each
@@ -64,15 +64,17 @@ drives the estimate alone.
   GitHub Copilot completed a programming task **55.8% faster** on average.
 
 **Our response:** Active time is the AI estimator's primary anchor — it reflects
-actual human engagement and is multiplied by 2–4× depending on work type. This is
-*not* part of the deterministic formula (which uses only turns, lines, and reads).
-The AI applies the speedup contextually:
+actual human engagement and is multiplied by 2–6× depending on work type and
+complexity. This is *not* part of the deterministic formula (which uses turns,
+lines, reads, tools, and a complexity multiplier). The AI applies the speedup
+contextually:
 
 | Work type | Speedup applied | Rationale |
 |-----------|-----------------|-----------|
 | Mechanical/routine | ×2 | 1.4× lower bound — AI handles most of the work |
 | Implementation/feature | ×3 | Midpoint of the 1.4–4× research range |
 | Design/debugging/research | ×4 | Upper bound (Cambon et al.) — human thinking dominates |
+| Complex iterative work | ×5–6 | High iteration depth or broad scope (complexity multiplier) |
 
 
 ### 2.3 "78% of 'complex' tasks done in <25% effort; 22% of 'simple' tasks took >180%" → Task-type classification with caps
@@ -106,7 +108,7 @@ requests as the primary interaction signal. Premium requests are excluded from t
 `max()` base calculation. Effective reqs are capped at 10× conversation turns.
 
 
-### 2.5 "Iteration count and prompt efficiency predict true complexity" → Iteration via log curves and AI judgment
+### 2.5 "Iteration count and prompt efficiency predict true complexity" → Iteration depth as complexity multiplier
 
 - **Chen et al. (2023)** introduced "prompt efficiency" — measuring how many
   interactions were needed before the AI produced a correct solution — as an
@@ -116,16 +118,26 @@ requests as the primary interaction signal. Premium requests are excluded from t
 - **Alaswad et al. (2026)** identified **iterative reasoning cycles** as one of
   five key dimensions driving effort in LLM-assisted work.
 
-**Our response:** The deterministic formula handles iteration implicitly via
-`turns_h` — the logarithmic curve has diminishing returns for high turn counts,
-naturally capturing the fact that each additional iteration adds less marginal
-effort than the first. The AI estimator applies qualitative +25–50% adjustments
-for genuinely iterative sessions based on transcript evidence (e.g., repeated
-rework of the same code, back-and-forth debugging cycles, multiple failed
-approaches before a solution).
+**Our response:** The deterministic formula now includes a bounded **complexity
+multiplier** (1.0–1.60×) that activates when the base estimate ≥ 0.50h.
+`iteration_depth` (average edits per unique file) directly measures rework
+intensity — the "iterative reasoning cycles" that Alaswad et al. identify as a
+key effort driver. The multiplier applies tiered boosts:
+
+| Iteration depth | Multiplier contribution | Interpretation |
+|-----------------|------------------------|----------------|
+| < 2.5 | +0% | Normal editing — no rework signal |
+| ≥ 2.5 | +10% | Moderate rework or refinement |
+| ≥ 5.0 | +25% (cumulative) | Heavy debugging / iteration cycles |
+| ≥ 10.0 | +35% (cumulative) | Extreme rework — multiple failed approaches |
+
+The logarithmic `turns_h` curve still handles basic iteration implicitly (each
+additional turn adds diminishing effort), but the complexity multiplier captures
+the *qualitative* difference: a session with 10 edits per file is fundamentally
+harder than one with 1 edit per file, even at the same turn count.
 
 
-### 2.6 "Broader scope projects have significantly larger effort overruns" → Files touched as AI input, not formula input
+### 2.6 "Broader scope projects have significantly larger effort overruns" → Files touched as bounded complexity modifier
 
 - **Morcov et al. (2020)** reviewed 125 IT projects and found that projects with
   more stakeholders, requirements, and moving parts had significantly larger
@@ -135,12 +147,23 @@ approaches before a solution).
   multiple contexts spent **17% of their time** simply recovering from context
   switches.
 
-**Our response:** `files_touched_count` is tracked for display and informs the AI
-estimator's qualitative judgment (+20–30% for broad-scope sessions touching 10+
-files), but it is excluded from the deterministic formula. In calibration testing,
-adding files-touched as a formula term yielded marginal R² of +0.00–0.03 — not
-statistically significant. The signal is real but too noisy to improve a
-deterministic calculation; it works better as qualitative context for the AI.
+**Our response:** `files_touched_count` now contributes to the deterministic
+formula as a **bounded multiplicative modifier** — not as an independent additive
+term. In earlier calibration testing, adding files-touched as an additive formula
+term yielded marginal R² of +0.00–0.03 — not statistically significant as a
+standalone effort predictor. However, as a *multiplier* applied to an
+already-meaningful base (≥ 0.50h), it amplifies the estimate for genuinely
+broad-scope sessions without inflating trivial ones:
+
+| Files touched | Multiplier contribution | Interpretation |
+|---------------|------------------------|----------------|
+| < 5 | +0% | Focused single-module change |
+| ≥ 5 | +10% | Multi-file change with context switching |
+| ≥ 10 | +25% (cumulative) | Broad architectural change |
+
+The complexity multiplier (combining iteration depth and file scope) is capped at
+1.60× to keep the formula as a conservative floor. The AI semantic estimator
+applies the same logic and may go higher when transcript evidence supports it.
 
 
 ### 2.7 "Code volume is decoupled from effort in AI-assisted work" → Lines as additive, not primary
@@ -149,10 +172,10 @@ deterministic calculation; it works better as qualitative context for the AI.
   boilerplate in seconds. But an expert human writing 500 lines of production
   code needs 4+ hours.
 
-**Our response:** Lines are additive on top of the base estimate (not part of the
-`max()`). They use an effective rate of ~200 LoC/hr in the formula (higher than the
-raw 100–150 LoC/hr expert rate because some writing effort is already captured in
-tool invocations).
+**Our response:** Lines are additive on top of the base estimate (before applying
+the complexity multiplier). They use an effective rate of ~200 LoC/hr in the formula
+(higher than the raw 100–150 LoC/hr expert rate because some writing effort is
+already captured in tool invocations).
 
 | Lines added | Formula hours | Rationale |
 |-------------|---------------|-----------|
@@ -202,9 +225,9 @@ effort in LLM-assisted work:
 | 1 | **LLM reasoning complexity** | How hard was it for the AI to solve | `conversation_turns` (via `turns_h` log curve) | Transcript analysis — assesses problem difficulty |
 | 2 | **Context completeness** | Did the task need external lookups/clarification | `read_calls` (via `reads_h` log curve) | Reads tool distribution and investigation patterns |
 | 3 | **Transformation scope** | Breadth and impact of changes | `lines_logic` (via `lines_h` log curve) | Distinguishes logic from boilerplate, assesses architectural impact |
-| 4 | **Iterative reasoning cycles** | Back-and-forth to reach a solution | Embedded in `turns_h` (diminishing returns) | +25–50% qualitative adjustment for heavy iteration |
+| 4 | **Iterative reasoning cycles** | Back-and-forth to reach a solution | `iteration_depth` and `files_touched_count` (via `complexity_mult`) | +25–50% qualitative adjustment for heavy iteration |
 | 5 | **Tool execution breadth** | Total tool calls including non-coding work | `tool_invocations` (via `tools_h` log curve) | Recognises image analysis, synthesis, browser tasks |
-| 6 | **Human oversight effort** | Review, testing, correction by the human | Not in formula | `active_minutes` × 2–4 as primary anchor |
+| 6 | **Human oversight effort** | Review, testing, correction by the human | Not in formula | `active_minutes` × 2–6 as primary anchor |
 
 ---
 

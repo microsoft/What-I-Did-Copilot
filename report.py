@@ -991,20 +991,52 @@ def _reqs_h(n: int) -> float:
     return max(0.0, -0.10 + 0.45 * _math.log(n + 1))
 
 
-def compute_formula_estimate(metrics: dict) -> dict:
-    """Deterministic effort estimate — additive log formula.
+def _complexity_multiplier(metrics: dict, base_total: float) -> float:
+    """Bounded complexity multiplier based on iteration depth and file scope.
 
-    Formula: total = interaction_h + lines_h + reads_h + tools_h
+    Only activates when base_total ≥ 0.50h (non-trivial sessions).
+    Research basis: Alaswad et al. (2026) iterative reasoning cycles;
+    Morcov et al. (2020) / Tregubov et al. (2017) scope breadth → effort overruns.
+    Capped at 1.60× to keep the formula as a conservative floor.
+    """
+    if base_total < 0.50:
+        return 1.0
+    mult = 1.0
+    iter_depth = metrics.get("iteration_depth", 0)
+    files_count = metrics.get("files_touched_count", 0)
+    # Iteration depth: high rework/debugging cycles indicate harder problems
+    if iter_depth >= 2.5:
+        mult += 0.10
+    if iter_depth >= 5:
+        mult += 0.15
+    if iter_depth >= 10:
+        mult += 0.10
+    # File scope: broad changes require more human context-switching
+    if files_count >= 5:
+        mult += 0.10
+    if files_count >= 10:
+        mult += 0.15
+    return min(mult, 1.60)
+
+
+def compute_formula_estimate(metrics: dict) -> dict:
+    """Deterministic effort estimate — additive log formula with complexity multiplier.
+
+    Formula: base = interaction_h + lines_h + reads_h + tools_h
+             total = base × complexity_mult
       interaction_h = turns_h when turns > 0, else reqs_h (fallback)
       turns_h = max(0, −0.15 + 0.67 × ln(turns + 1))
       reqs_h  = max(0, −0.10 + 0.45 × ln(reqs + 1))     [fallback]
       lines_h = 0.40 × log₂(lines_logic ÷ 100 + 1)
       reads_h = 0.10 × log₂(read_calls + 1)
       tools_h = 0.07 × log₂(tool_invocations + 1)
+      complexity_mult = 1.0–1.60× based on iteration_depth and files_touched_count
 
     tools_h ensures non-coding work (image analysis, doc synthesis, browser
     tasks) gets meaningful credit even when lines_h ≈ 0.
     reqs_h is a fallback for older sessions without conversation turn data.
+    complexity_mult amplifies the base for sessions with high rework depth or
+    broad file scope, only when base ≥ 0.50h.
     """
     turns = metrics.get("substantive_turns")
     if turns is None:
@@ -1031,26 +1063,30 @@ def compute_formula_estimate(metrics: dict) -> dict:
     per_day_total = metrics.get("_per_day_formula_total")
     if per_day_total is not None:
         return {
-            "turns_h":       metrics.get("_per_day_turns_h", th),
-            "reqs_h":        rqh,
-            "lines_h":       metrics.get("_per_day_lines_h", lh),
-            "reads_h":       metrics.get("_per_day_reads_h", rh),
-            "tools_h":       tlh,
-            "interaction_h": interaction_h,
-            "total":         per_day_total,
+            "turns_h":         metrics.get("_per_day_turns_h", th),
+            "reqs_h":          rqh,
+            "lines_h":         metrics.get("_per_day_lines_h", lh),
+            "reads_h":         metrics.get("_per_day_reads_h", rh),
+            "tools_h":         metrics.get("_per_day_tools_h", tlh),
+            "interaction_h":   interaction_h,
+            "complexity_mult": metrics.get("_per_day_complexity_mult", 1.0),
+            "total":           per_day_total,
         }
 
-    total = interaction_h + lh + rh + tlh
-    total = max(total, 0.25)  # floor at 15 min
+    base = interaction_h + lh + rh + tlh
+    base = max(base, 0.25)  # floor at 15 min
+    cmult = _complexity_multiplier(metrics, base)
+    total = base * cmult
 
     return {
-        "turns_h":       th,
-        "reqs_h":        rqh,
-        "lines_h":       lh,
-        "reads_h":       rh,
-        "tools_h":       tlh,
-        "interaction_h": interaction_h,
-        "total":         round(total * 4) / 4,  # nearest 0.25h
+        "turns_h":         th,
+        "reqs_h":          rqh,
+        "lines_h":         lh,
+        "reads_h":         rh,
+        "tools_h":         tlh,
+        "interaction_h":   interaction_h,
+        "complexity_mult": cmult,
+        "total":           round(total * 4) / 4,  # nearest 0.25h
     }
 
 
@@ -1088,7 +1124,9 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
 
         # Formula sub-row: show which interaction signal was used
         int_label = f"turns {_fmt_h(fe['turns_h'])}" if turns > 0 else f"reqs {_fmt_h(fe['reqs_h'])}"
-        formula_parts = f"{int_label} + lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])} + tools {_fmt_h(fe['tools_h'])}"
+        cmult = fe.get("complexity_mult", 1.0)
+        cmult_label = f" &times; {cmult:.2f}" if cmult > 1.0 else ""
+        formula_parts = f"({int_label} + lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])} + tools {_fmt_h(fe['tools_h'])}){cmult_label}"
 
         # Lines display: logic lines prominent, boilerplate in grey
         if logic_lines or bp_lines:
@@ -1271,6 +1309,8 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
     fid  = "fs-" + _hl.sha1(_key).hexdigest()[:12]
 
     int_label = f"turns {_fmt_h(fe['turns_h'])}" if turns > 0 else f"reqs {_fmt_h(fe['reqs_h'])}"
+    cmult = fe.get("complexity_mult", 1.0)
+    cmult_label = f" &times; {cmult:.2f}" if cmult > 1.0 else ""
 
     return f"""
             <div style="padding:8px 24px;background:{C['subtle']};border-bottom:1px solid {C['border']}">
@@ -1286,7 +1326,7 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
               </div>
               <div id="{fid}" style="display:none;margin-top:4px;font-size:10px;color:{C['muted']}">
                 <code style="font-size:9px;background:{C['bg']};padding:1px 5px;border-radius:3px;
-                             color:{C['text']}">{int_label} + lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])} + tools {_fmt_h(fe['tools_h'])}</code>
+                             color:{C['text']}">({int_label} + lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])} + tools {_fmt_h(fe['tools_h'])}){cmult_label}</code>
                 = <strong style="color:{C['accent']}">{formula_h}</strong> deterministic
               </div>
             </div>"""
@@ -1368,16 +1408,41 @@ def _signal_guide() -> str:
                     border:1px solid {C['border']};border-radius:6px">
           <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
                       color:{C['accent']};margin-bottom:6px">&#128270; Example: 22 substantive turns,
-            +400 logic lines (+800 boilerplate), 35 reads + 15 searches, 120 tool invocations</div>
+            +400 logic lines (+800 boilerplate), 35 reads + 15 searches, 120 tool invocations,
+            iteration depth 6.2, 12 files touched</div>
           <div style="font-family:monospace;font-size:10px;line-height:1.7;color:{C['text']}">
             turns_h = max(0, &minus;0.15 + 0.67 &times; ln(23)) = <strong>1.95h</strong><br>
             lines_h = 0.40 &times; log&#8322;(400 &divide; 100 + 1) = 0.40 &times; 2.32 = <strong>0.93h</strong><br>
             reads_h = 0.10 &times; log&#8322;(50 + 1) = 0.10 &times; 5.67 = <strong>0.57h</strong><br>
             tools_h = 0.07 &times; log&#8322;(120 + 1) = 0.07 &times; 6.93 = <strong>0.49h</strong><br>
-            <strong style="color:{C['accent']}">Total = 1.95 + 0.93 + 0.57 + 0.49 = 3.94h &rarr; 4.00h</strong>
+            base = 1.95 + 0.93 + 0.57 + 0.49 = <strong>3.94h</strong><br>
+            complexity = 1.0 + 0.10 (ItD&ge;2.5) + 0.15 (ItD&ge;5) + 0.10 (files&ge;5) + 0.15 (files&ge;10) = <strong>1.50&times;</strong><br>
+            <strong style="color:{C['accent']}">Total = 3.94 &times; 1.50 = 5.91h &rarr; 6.00h</strong>
             &nbsp;&nbsp;<span style="color:{C['muted']}">(nearest 0.25h)</span>
           </div>
         </div>"""
+
+    # Complexity multiplier table
+    cmult_table = ""
+    for signal, tiers in [
+        ("Iteration depth<br><span style='font-size:8px;color:{0}'>(avg edits/file)</span>".format(C['muted']),
+         [("&ge; 2.5", "+10%", "Moderate rework"),
+          ("&ge; 5.0", "+25%", "Heavy debugging / iteration"),
+          ("&ge; 10.0", "+35%", "Extreme rework")]),
+        ("Files touched<br><span style='font-size:8px;color:{0}'>(unique files)</span>".format(C['muted']),
+         [("&ge; 5", "+10%", "Multi-file change"),
+          ("&ge; 10", "+25%", "Broad architectural change")]),
+    ]:
+        for j, (threshold, boost, desc) in enumerate(tiers):
+            bg = C["subtle"] if j % 2 == 0 else C["card"]
+            cmult_table += (
+                f'<tr style="background:{bg}">'
+                f'<td style="{td}">{signal if j == 0 else ""}</td>'
+                f'<td style="{td};font-weight:600">{threshold}</td>'
+                f'<td style="{td};color:{C["green"]};font-weight:700">{boost}</td>'
+                f'<td style="{tdm}">{desc}</td>'
+                f'</tr>'
+            )
 
     return f"""
         <div style="margin-top:16px;padding-top:12px;border-top:1px solid {C['border']}">
@@ -1386,11 +1451,14 @@ def _signal_guide() -> str:
           <div style="font-size:10px;color:{C['muted']};line-height:1.5;margin-bottom:8px">
             <code style="font-size:10px;background:{C['subtle']};padding:2px 6px;border-radius:3px;
                          color:{C['accent']}">
-              total = interaction_h + lines_h + reads_h + tools_h
+              total = (interaction_h + lines_h + reads_h + tools_h) &times; complexity_mult
             </code>
-            &nbsp;&mdash;&nbsp; four questions added together: How deep was the collaboration?
+            &nbsp;&mdash;&nbsp; four questions added together then multiplied by a complexity factor:
+            How deep was the collaboration?
             How much logic code was written (not HTML/CSS/JSON/MD)?
             How much investigation happened? How much tool execution occurred?
+            The complexity multiplier (1.0&ndash;1.60&times;) amplifies the base for sessions
+            with high iteration depth or broad file scope.
             Tool invocations capture non-coding work (image analysis, synthesis, browser tasks).
             Premium requests serve as a fallback interaction signal when turn data is unavailable.
             <a href="https://github.com/microsoft/What-I-Did-Copilot/blob/main/docs/effort-estimation-methodology.md"
@@ -1408,6 +1476,20 @@ def _signal_guide() -> str:
               <th style="{th}">Sample scale values</th>
             </tr>
             {term_rows}
+          </table>
+
+          <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;
+                      color:{C['muted']};margin-bottom:4px;margin-top:12px">Complexity multiplier
+            <span style="font-weight:400;text-transform:none">(applied when base &ge; 0.50h, capped at 1.60&times;)</span></div>
+          <table width="100%" cellpadding="0" cellspacing="0"
+                 style="border:1px solid {C['border']};border-radius:5px;overflow:hidden;margin-bottom:12px">
+            <tr style="background:{C['accent_lt']}">
+              <th style="{th};width:22%">Signal</th>
+              <th style="{th};width:14%">Threshold</th>
+              <th style="{th};width:12%">Boost</th>
+              <th style="{th}">Interpretation</th>
+            </tr>
+            {cmult_table}
           </table>
           {example}
         </div>"""
@@ -1909,6 +1991,11 @@ def _share_bar(target_date: str, goals: list, headline: str, total_human_h: floa
 def generate_html(target_date: str, analysis: dict, sessions: list,
                   max_width: int = 1080) -> str:
     goals      = analysis.get("goals", [])
+
+    # Render the goals exactly as provided in the analyzed data so the saved
+    # report stays consistent with any CLI summary already produced for this run.
+    # Any formula-floor normalization must happen before rendering, not here.
+
     # Sort goals once by hours descending so all sections are consistent
     goals      = sorted(goals, key=lambda g: g.get("human_hours", 0), reverse=True)
     narrative  = analysis.get("day_narrative", "")
