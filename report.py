@@ -1992,17 +1992,9 @@ def generate_html(target_date: str, analysis: dict, sessions: list,
                   max_width: int = 1080) -> str:
     goals      = analysis.get("goals", [])
 
-    # Enforce formula floor: clamp each goal's human_hours to at least the
-    # deterministic formula estimate. The AI prompt says the formula is a floor,
-    # but the AI sometimes underestimates — this makes it programmatic.
-    session_metrics = analysis.get("session_metrics", {})
-    for g in goals:
-        project = g.get("project", "")
-        metrics = _resolve_metrics(project, session_metrics, g.get("date", ""))
-        if metrics:
-            fe = compute_formula_estimate(metrics)
-            if g.get("human_hours", 0) < fe["total"]:
-                g["human_hours"] = fe["total"]
+    # Render the goals exactly as provided in the analyzed data so the saved
+    # report stays consistent with any CLI summary already produced for this run.
+    # Any formula-floor normalization must happen before rendering, not here.
 
     # Sort goals once by hours descending so all sections are consistent
     goals      = sorted(goals, key=lambda g: g.get("human_hours", 0), reverse=True)
