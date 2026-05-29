@@ -1,15 +1,40 @@
 <div align="center">
 
-# What I Did — GitHub Copilot Impact Report
+<br>
 
-**One command. See everything you built with Copilot — and the leverage you're getting from your seat.**
+# 📝 What I Did — GitHub Copilot Impact Report
 
-<img src="docs/images/sample-report.gif" alt="Sample Impact Report" width="680">
+### One command. See everything you built with Copilot — and the leverage you're getting from your seat.
+
+<br>
+
+<img src="https://raw.githubusercontent.com/microsoft/What-I-Did-Copilot/main/docs/images/sample-report.gif" alt="What I Did — GitHub Copilot Impact Report sample" width="680">
+
+<br>
+
+[![Built by Microsoft](https://img.shields.io/badge/Built%20by-Microsoft-0078d4?style=for-the-badge&logo=microsoft&logoColor=white)](https://microsoft.github.io/Analytics-Hub/team/)
+[![Analytics Hub](https://img.shields.io/badge/Analytics%20Hub-11%20Repositories-8661c5?style=for-the-badge&logo=github&logoColor=white)](https://microsoft.github.io/Analytics-Hub/)
+
+<br>
+
+**🚀 [All Analytics Hub Reports](https://microsoft.github.io/Analytics-Hub/)**
+
+<br>
+
+**Found this useful? ⭐ Star this repo to help others discover it!**
+
+<br>
+
+**[Get Started ↓](#get-started)** &nbsp;·&nbsp; **[What You'll See ↓](#what-youll-see)** &nbsp;·&nbsp; **[How It Works ↓](#how-it-works)** &nbsp;·&nbsp; **[Requirements ↓](#requirements)** &nbsp;·&nbsp; **[Privacy ↓](#privacy)**
+
+<br>
 
 </div>
 
 ---
 
+
+<a id="get-started"></a>
 ## Try it now
 
 **Option A — Install as a Copilot CLI plugin** *(on GitHub CLI only)*
@@ -40,6 +65,7 @@ That's it. A report opens in your browser showing your last 7 days with Copilot.
 
 ---
 
+<a id="what-youll-see"></a>
 ## What you'll see
 
 | | |
@@ -65,6 +91,7 @@ whatidid --7D --email you@company.com # send to a specific address
 whatidid --refresh                    # force re-analysis
 ```
 
+<a id="how-it-works"></a>
 ## 🏗️ How It Works
 
 ```
@@ -87,6 +114,7 @@ See [docs/architecture.md](docs/architecture.md) for session file formats, token
 
 See [docs/effort-estimation-methodology.md](docs/effort-estimation-methodology.md) for the research basis, signal definitions, and calibration logic behind effort estimates — grounded in 13 peer-reviewed sources including Alaswad et al. 2026, Cambon et al. 2023 (Microsoft Research), Ziegler et al. 2024 (CACM), and the SPACE framework (Forsgren et al. 2021).
 
+<a id="privacy"></a>
 ## 🔒 Privacy
 
 **Your data stays on your machine.** This tool is completely local-first:
@@ -99,6 +127,7 @@ See [docs/effort-estimation-methodology.md](docs/effort-estimation-methodology.m
 
 The tool processes the same session data that GitHub Copilot already stores locally. It adds nothing new to disk beyond the HTML report and a small analysis cache in `cache/`.
 
+<a id="requirements"></a>
 ## 📋 Requirements
 
 | Requirement | Why |
@@ -124,6 +153,12 @@ MIT
 
 ---
 
-> ⭐ **If you find this useful, consider [starring the repo](https://github.com/microsoft/What-I-Did-Copilot)** — it helps others discover it and signals to the community that research-grounded AI productivity tools matter.
+<div align="center">
+
+**Found this useful? ⭐ Star this repo to help others discover it!**
+
+That's it! 🚀
+
+</div>
 
 <sub>**Keywords:** GitHub Copilot ROI, Copilot usage report, Copilot activity tracker, AI productivity metrics, token usage analysis, Copilot impact measurement, developer productivity, AI-assisted development analytics</sub>
