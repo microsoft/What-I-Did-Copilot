@@ -1224,7 +1224,7 @@ def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -
     # for any whose project segment matches (either full path or last segment).
     last_seg = project.replace("\\", "/").split("/")[-1].lower()
     proj_lc = project.lower()
-    agg_credits = 0
+    agg_credits = None  # keep None unless at least one entry has server-emitted credits
     agg_tokens_by_model: dict = {}
     agg_tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "total": 0}
     auto_flag = False
@@ -1240,7 +1240,8 @@ def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -
             continue
         seen_ids.add(id(m))
         matched_any = True
-        agg_credits += m.get("ai_credits") or 0
+        if m.get("ai_credits") is not None:
+            agg_credits = (agg_credits or 0) + m["ai_credits"]
         if isinstance(m.get("tokens"), dict):
             for k in agg_tokens:
                 agg_tokens[k] += m["tokens"].get(k, 0)
