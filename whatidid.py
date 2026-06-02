@@ -200,6 +200,7 @@ def _merge_analyses(day_analyses: list) -> dict:
     all_sessions = []
     total_tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "total": 0}
     total_tokens_by_model = {}  # {model_name: {input, output, cache_read, cache_creation}}
+    total_inline_model_pricing: dict = {}
     total_requests_by_model: dict = {}  # {model_name: count}
     total_premium     = 0
     total_ai_credits  = None  # stays None unless at least one day has server credits
@@ -229,6 +230,7 @@ def _merge_analyses(day_analyses: list) -> dict:
                 total_tokens_by_model[model] = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
             for k in ("input", "output", "cache_read", "cache_creation"):
                 total_tokens_by_model[model][k] += toks.get(k, 0)
+        total_inline_model_pricing.update(analysis.get("inline_model_pricing") or {})
         # Per-model request counts. Tolerate {model: int} and {model: {count: int}}.
         for model, v in (analysis.get("requests_by_model") or {}).items():
             if isinstance(v, dict):
@@ -426,6 +428,7 @@ def _merge_analyses(day_analyses: list) -> dict:
         "goals":            all_goals,
         "tokens":           total_tokens,
         "tokens_by_model":  total_tokens_by_model,
+        "inline_model_pricing": total_inline_model_pricing,
         "requests_by_model": total_requests_by_model,
         "premium_requests": total_premium,
         "ai_credits":       total_ai_credits,

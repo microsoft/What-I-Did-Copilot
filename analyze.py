@@ -452,6 +452,9 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False,
                 total_tokens_by_model[model] = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
             for k in ("input", "output", "cache_read", "cache_creation"):
                 total_tokens_by_model[model][k] += toks.get(k, 0)
+    total_inline_model_pricing: dict = {}
+    for s in sessions:
+        total_inline_model_pricing.update(s.get("inline_model_pricing") or {})
 
     # Aggregate per-model request count across sessions. The per-session
     # field is canonical as ``{model: int}`` but an earlier draft of the
@@ -647,6 +650,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False,
     def _attach_metrics(result: dict) -> dict:
         result["tokens"]           = total_tokens
         result["tokens_by_model"]  = total_tokens_by_model
+        result["inline_model_pricing"] = total_inline_model_pricing
         result["premium_requests"] = total_premium
         result["requests_by_model"] = total_requests_by_model
         result["ai_credits"]       = total_ai_credits
