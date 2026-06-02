@@ -82,11 +82,9 @@ That's it. A report opens in your browser showing your last 7 days with Copilot.
 
 ## 🆕 What's new in this release
 
-- **Donut chart with adjacent labels** for the "How I Collaborated" section &mdash; 9 work modes (Designing, Analyzing, Reviewing, Researching, Learning, Building, Refining, Course-correcting, Delegating) with name + share + minutes attached to each slice via leader lines. No more bouncing between chart and legend.
 - **Learning intent expansion** &mdash; the classifier now catches genuine learning queries: *"how do I X"*, *"help me understand"*, *"what's the best way to..."*, *"tell me about"*, *"pros and cons of..."*, *"primer on..."*, plus dozens more phrasings. A hand-holding bypass routes *"I don't understand how X works"* to Learning instead of Course-correcting.
-- **Authoritative inline pricing** &mdash; VS Code Copilot Chat sessions now use the per-model rates Copilot itself embeds in its JSONL (`inputCost`/`outputCost`/`cacheCost` in AI Credits per 1M tokens) when present, with the hardcoded `_MODEL_PRICING` table as fallback. This auto-handles new models and rate changes without code updates.
-- **New methodology doc** &mdash; [`docs/credit-optimization.md`](docs/credit-optimization.md) synthesizes every credit-burn pattern the tool detects with the exact Anthropic / OpenAI / GitHub source it implements, including short excerpts.
-- **AI Investment Breakdown visual cleanup** &mdash; the section now uses one consistent dark-banner pattern for every sub-segment (Model Mix, Top Sessions, Patterns) and drops the low-signal cost-per-outcome KPI cards.
+- **New methodology doc** &mdash; [`docs/credit-optimization.md`](docs/credit-optimization.md) synthesizes credit-burn pattern the tool detects with the exact Anthropic / OpenAI / GitHub source it implements, including short excerpts.
+- **AI Investment and Consumption Patterns** &mdash; new sub-segments for Model Mix, Top Sessions and behavior pattern analysis that drive up consumption, based on guidance from OpenAI, Anthropic, and GitHub.
 
 ---
 
