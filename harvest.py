@@ -1019,6 +1019,60 @@ def _vscode_walk_token_fields(node) -> "tuple[int, int]":
     return prompt, output
 
 
+def _vscode_collect_inline_pricing(node, out: dict) -> None:
+    """Walk a JSON tree and collect any inline per-model pricing metadata.
+
+    VS Code Copilot Chat session JSONL embeds authoritative per-model rates
+    inside ``inputState.selectedModel.metadata`` blocks. Each such block
+    carries:
+
+      * ``id``             model identifier (e.g. ``claude-opus-4.6``)
+      * ``inputCost``      AI Credits per 1M input tokens
+      * ``outputCost``     AI Credits per 1M output tokens
+      * ``cacheCost``      AI Credits per 1M cached tokens
+      * ``multiplier``     premium-request multiplier string (e.g. ``"3x"``)
+      * ``multiplierNumeric`` premium-request multiplier number (e.g. ``3``)
+
+    The ``pricing`` field's literal string is ``"In: 500 \u00b7 Out: 2500 AICs/1M tokens"``
+    confirming the unit. Since 1 AIC = $0.01 USD, we convert AICs/M to USD/M
+    by dividing by 100 so the result is directly comparable to entries in
+    ``report._MODEL_PRICING``.
+
+    Multiple blocks can appear in one session (e.g. mid-session model
+    switch). We keep the most recent rates for each ``id`` we see.
+
+    Mutates ``out`` in place: ``{model_id: {input, output, cache_read,
+    cache_creation, multiplier, _source}}``.
+    """
+    if isinstance(node, dict):
+        # Detect a pricing block. ``id`` is required for keying; rates are
+        # required to be useful. Multiplier-only blocks (e.g. GPT-5.2-Codex
+        # carries ``multiplier`` without per-token costs) are recorded so
+        # downstream consumers can still see the premium-request rate.
+        mid = node.get("id", "")
+        has_rates = isinstance(node.get("inputCost"), (int, float)) and \
+                    isinstance(node.get("outputCost"), (int, float))
+        has_multiplier = isinstance(node.get("multiplierNumeric"), (int, float))
+        if mid and (has_rates or has_multiplier):
+            entry = out.setdefault(mid, {})
+            if has_rates:
+                cache_aic = node.get("cacheCost", 0) or 0
+                entry.update({
+                    "input":  node["inputCost"]  / 100.0,
+                    "output": node["outputCost"] / 100.0,
+                    "cache_read":     cache_aic / 100.0,
+                    "cache_creation": cache_aic / 100.0,
+                })
+            if has_multiplier:
+                entry["multiplier"] = node["multiplierNumeric"]
+            entry["_source"] = "vscode_inline"
+        for v in node.values():
+            _vscode_collect_inline_pricing(v, out)
+    elif isinstance(node, list):
+        for item in node:
+            _vscode_collect_inline_pricing(item, out)
+
+
 def _normalize_vscode_model(model_id: str) -> str:
     """Strip the ``copilot/`` prefix VS Code adds so model names match
     the CLI naming convention used by ``report._MODEL_PRICING``."""
@@ -1094,6 +1148,12 @@ def get_vscode_sessions_for_date(target_date: str) -> list:
         cwd = ""
         session_start = None
         session_end = None
+        inline_model_pricing: dict = {}
+
+        # Bootstrap inline pricing from the session header itself — the
+        # header carries ``selectedModel.metadata`` which is the most
+        # reliable signal even when no requests have run yet.
+        _vscode_collect_inline_pricing(hv, inline_model_pricing)
 
         # ── Token & timing accumulators (sparse VS Code JSONL schema) ─────
         # Output tokens: kind=1 patch with key path ["requests", N,
@@ -1130,6 +1190,12 @@ def get_vscode_sessions_for_date(target_date: str) -> list:
                     pp, oo = _vscode_walk_token_fields(obj)
                     prompt_tokens_total += pp
                     output_tokens_inline += oo
+
+                    # Capture any inline pricing metadata that appears
+                    # (e.g. ``inputState`` patches carrying a fresh
+                    # ``selectedModel.metadata`` block after a mid-session
+                    # model switch).
+                    _vscode_collect_inline_pricing(obj, inline_model_pricing)
 
                     # kind=1 sparse patches: workspace context + per-request
                     # token/timing updates.
@@ -1287,6 +1353,7 @@ def get_vscode_sessions_for_date(target_date: str) -> list:
             "requests_by_model": requests_by_model,
             "ai_credits":        None,
             "ai_credits_by_model": {},
+            "inline_model_pricing": inline_model_pricing,
             "plan":              _os.environ.get("COPILOT_PLAN", "").strip(),
             "auto_model_selection": False,
             "session_state":     "complete",  # VS Code JSONL is read end-to-end so always complete

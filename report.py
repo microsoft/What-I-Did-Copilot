@@ -135,8 +135,20 @@ USD_PER_CREDIT = 0.01
 AUTO_MODEL_DISCOUNT = 0.10
 
 
-def _get_model_pricing(model_name: str) -> dict:
-    """Return pricing dict for a model name, matching by longest prefix."""
+def _get_model_pricing(model_name: str, inline: dict | None = None) -> dict:
+    """Return pricing dict for a model name, matching by longest prefix.
+
+    When ``inline`` is provided (e.g. authoritative rate metadata harvested
+    from a VS Code Copilot Chat session JSONL), an exact-id match takes
+    precedence over the hardcoded ``_MODEL_PRICING`` table. Inline rates
+    come straight from Copilot's own ``selectedModel.metadata`` block, so
+    they self-update when GitHub revises rates and handle unknown models
+    that aren't yet in the table.
+    """
+    if inline:
+        hit = inline.get(model_name) or inline.get(model_name.lower())
+        if isinstance(hit, dict) and "input" in hit and "output" in hit:
+            return hit
     name = model_name.lower()
     best_prefix = ""
     best_rates = _DEFAULT_PRICING
@@ -156,15 +168,20 @@ def _cost(tokens: dict) -> str:
     return f"~${c:.2f}"
 
 
-def _cost_by_model(tokens_by_model: dict, auto_model: bool = False) -> float:
+def _cost_by_model(tokens_by_model: dict, auto_model: bool = False,
+                   inline_pricing: dict | None = None) -> float:
     """Calculate total API cost using per-model pricing. Returns dollar amount.
 
     When ``auto_model`` is True, applies the 10% auto-model-selection discount
     that paid Copilot plans receive in Chat / CLI / cloud agent.
+
+    When ``inline_pricing`` is provided (per-session authoritative rates
+    harvested from a VS Code Copilot Chat JSONL), it takes precedence over
+    the hardcoded ``_MODEL_PRICING`` table for any matching model id.
     """
     total = 0.0
     for model_name, toks in tokens_by_model.items():
-        rates = _get_model_pricing(model_name)
+        rates = _get_model_pricing(model_name, inline=inline_pricing)
         total += (toks.get("input", 0)          * rates["input"]
                 + toks.get("output", 0)         * rates["output"]
                 + toks.get("cache_read", 0)     * rates["cache_read"]
@@ -196,12 +213,15 @@ def _resolve_market_cost(analysis: dict) -> float:
     """Compute the market-rate API cost from per-model or aggregate tokens.
 
     Honours the optional ``auto_model_selection`` flag carried through from
-    the session log (10% discount on paid plans).
+    the session log (10% discount on paid plans). Also honours the optional
+    ``inline_model_pricing`` map (authoritative per-session rates harvested
+    from VS Code Copilot Chat JSONL) when present.
     """
     auto = bool(analysis.get("auto_model_selection") or analysis.get("auto_model"))
+    inline = analysis.get("inline_model_pricing") or None
     tokens_by_model = analysis.get("tokens_by_model", {})
     if tokens_by_model:
-        return _cost_by_model(tokens_by_model, auto_model=auto)
+        return _cost_by_model(tokens_by_model, auto_model=auto, inline_pricing=inline)
     tokens = analysis.get("tokens", {})
     if not isinstance(tokens, dict):
         # Per-project session_metrics stores ``tokens`` as a scalar total. We
