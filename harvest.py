@@ -66,6 +66,528 @@ def _read_workspace(path: Path) -> dict:
     return result
 
 
+_READ_ONLY_TOOLS = {"view", "grep", "glob", "report_intent",
+                    "list_powershell", "list_agents"}
+
+_BURN_PREMIUM_MODELS = {
+    "claude-opus-4.5", "claude-opus-4.6", "claude-opus-4.7",
+    "claude-opus-4.7-1m-internal", "claude-opus-4.7-high",
+    "claude-opus-4.7-xhigh", "claude-opus-4.8",
+}
+
+
+def _burn_extract_path(args) -> str:
+    """Return the first concrete file path referenced in a tool's arguments."""
+    if not isinstance(args, dict):
+        return ""
+    p = args.get("path") or args.get("paths") or ""
+    if isinstance(p, list):
+        p = p[0] if p else ""
+    if not isinstance(p, str):
+        return ""
+    if not p or "Temp" in p or "AppData\\Local\\Temp" in p:
+        return ""
+    return p
+
+
+def _analyze_burn_patterns(events: list, target_date: str) -> list:
+    """Mine session events for observable cost-saving opportunities.
+
+    Returns a list of "burn findings". Each finding describes a behavioural
+    pattern that coincided with credit spend, with the raw output-token
+    count attributed via direct observation (never extrapolation):
+
+    - hot_file: file touched 10+ times; observed tokens come from
+      assistant.messages immediately adjacent to a tool call referencing
+      that file (event-adjacent attribution, not a wide time-window slice).
+    - fail_loop: same tool failing 3+ times within 10 minutes; observed
+      tokens are asst.messages inside the retry window.
+    - compaction_storm: 3+ compactions in the session; no token attribution
+      (the overhead is contextual — every subsequent turn pays for the
+      summary).
+    - output_spike: a single assistant.message above 8K outputTokens on a
+      premium model.
+    - exploration_premium: 5+ consecutive read-only tool calls on a premium
+      model; observed tokens are asst.messages inside the run.
+    - broad_search_repeat: 5+ grep/glob calls in the session over the same
+      broad root path; flag only, no token attribution.
+
+    All findings are scoped to events whose timestamp falls on target_date
+    (mirrors the date-filter pattern used elsewhere in this file).
+    Returns raw observations — credit conversion happens in the renderer.
+    """
+    # Collect date-scoped, ordered tool starts/completes and assistant messages
+    tool_starts: dict[str, dict] = {}      # toolCallId -> {name, args, ts, idx}
+    tool_complete: dict[str, dict] = {}    # toolCallId -> {success}
+    asst_msgs: list[dict] = []             # in chronological order
+    compactions: list[dict] = []
+    user_msgs: list[dict] = []             # post-context-strip user prompts
+
+    for idx, e in enumerate(events):
+        ts = e.get("timestamp", "") or ""
+        if not ts or ts[:10] != target_date:
+            continue
+        t = e.get("type", "")
+        d = e.get("data", {}) or {}
+        if t == "tool.execution_start":
+            tid = d.get("toolCallId")
+            if tid:
+                tool_starts[tid] = {
+                    "name": d.get("toolName") or d.get("mcpToolName") or "",
+                    "args": d.get("arguments") or {},
+                    "ts": ts,
+                    "idx": idx,
+                }
+        elif t == "tool.execution_complete":
+            tid = d.get("toolCallId")
+            if tid:
+                tool_complete[tid] = {"success": d.get("success")}
+        elif t == "assistant.message":
+            out = d.get("outputTokens") or 0
+            if isinstance(out, (int, float)) and out > 0:
+                asst_msgs.append({
+                    "tokens": int(out),
+                    "model": d.get("model") or "",
+                    "ts": ts,
+                    "idx": idx,
+                })
+        elif t == "user.message":
+            content = d.get("content") or ""
+            if isinstance(content, str) and content.strip():
+                cleaned = _strip_injected_context(content)
+                if cleaned and not _is_approval(cleaned):
+                    user_msgs.append({
+                        "content": cleaned,
+                        "ts": ts,
+                        "idx": idx,
+                    })
+        elif t == "session.compaction_complete":
+            # `compactionTokensUsed` carries the directly-observed token bill
+            # for the compaction itself (input/output/cache); attribute the
+            # finding to that model so credit conversion is grounded.
+            ctu = d.get("compactionTokensUsed") or {}
+            compactions.append({
+                "pre_tokens":     int(d.get("preCompactionTokens", 0) or 0),
+                "output_tokens":  int(ctu.get("outputTokens", 0) or 0),
+                "model":          ctu.get("model") or "",
+                "ts":             ts,
+            })
+
+    findings: list[dict] = []
+
+    # Build an idx-ordered ordered list of all events for adjacency lookup
+    asst_by_idx = {m["idx"]: m for m in asst_msgs}
+
+    # ── Pattern 1: hot files (event-adjacent token attribution) ────────────
+    from collections import Counter, defaultdict
+    file_ops = defaultdict(lambda: Counter())  # path -> Counter({tool_name: n})
+    file_tool_idxs = defaultdict(list)         # path -> [idx, ...]
+    for tid, ts_rec in tool_starts.items():
+        name = ts_rec["name"]
+        if name not in ("view", "edit", "create", "grep"):
+            continue
+        path = _burn_extract_path(ts_rec["args"])
+        if not path:
+            continue
+        file_ops[path][name] += 1
+        file_tool_idxs[path].append(ts_rec["idx"])
+
+    asst_idxs_sorted = sorted(asst_by_idx.keys())
+    for path, ops in file_ops.items():
+        total = sum(ops.values())
+        if total < 10:
+            continue
+        # Attribute: sum outputTokens of asst.messages whose idx is the
+        # closest assistant message AFTER each tool call on this file.
+        # (No double-counting: dedup by message idx.)
+        attributed_msg_idxs = set()
+        for tool_idx in file_tool_idxs[path]:
+            for ai in asst_idxs_sorted:
+                if ai > tool_idx:
+                    attributed_msg_idxs.add(ai)
+                    break
+        observed_tokens = sum(asst_by_idx[ai]["tokens"] for ai in attributed_msg_idxs)
+        # Primary model = the model that ran most of those attributed messages
+        model_votes = Counter(asst_by_idx[ai]["model"] for ai in attributed_msg_idxs)
+        model = model_votes.most_common(1)[0][0] if model_votes else ""
+        # Representative timestamp = first tool access
+        first_idx = min(file_tool_idxs[path])
+        first_ts = next((tr["ts"] for tr in tool_starts.values() if tr["idx"] == first_idx), "")
+        # Build evidence string from the op counts
+        parts = []
+        for nm in ("edit", "view", "grep", "create"):
+            if ops.get(nm):
+                parts.append(f"{ops[nm]} {nm}s" if ops[nm] > 1 else f"1 {nm}")
+        short_path = path.replace("\\", "/").rsplit("/", 1)[-1] or path
+        findings.append({
+            "kind": "hot_file",
+            "evidence": f"{short_path} — {', '.join(parts)}",
+            "detail": f"During its active turns the session produced {observed_tokens:,} observed output tokens.",
+            "model": model,
+            "output_tokens": observed_tokens,
+            "ts": first_ts,
+            "advice": ("Repeated touches on one file often indicate iterative refinement. "
+                       "Try sketching the change as a short plan before editing, or batching "
+                       "related changes into fewer, larger edits."),
+        })
+
+    # ── Pattern 2: failed retry loops ──────────────────────────────────────
+    fail_runs: dict[str, list] = defaultdict(list)  # tool_name -> [(ts, idx), ...]
+    for tid, comp in tool_complete.items():
+        if comp.get("success") is False and tid in tool_starts:
+            ts_rec = tool_starts[tid]
+            fail_runs[ts_rec["name"]].append((ts_rec["ts"], ts_rec["idx"]))
+    for name, run in fail_runs.items():
+        if len(run) < 3:
+            continue
+        run.sort()
+        first_ts, first_idx = run[0]
+        last_ts, last_idx = run[-1]
+        # Attribute observed tokens to asst.messages within idx window
+        window_msgs = [m for m in asst_msgs if first_idx <= m["idx"] <= last_idx]
+        observed_tokens = sum(m["tokens"] for m in window_msgs)
+        model_votes = Counter(m["model"] for m in window_msgs)
+        model = model_votes.most_common(1)[0][0] if model_votes else ""
+        findings.append({
+            "kind": "fail_loop",
+            "evidence": f"{name} failed {len(run)} times in this session",
+            "detail": (f"Observed {observed_tokens:,} output tokens across the retry window "
+                       f"({first_ts[11:16]}–{last_ts[11:16]})."),
+            "model": model,
+            "output_tokens": observed_tokens,
+            "ts": first_ts,
+            "advice": ("Each retry re-prompts the full context. Sanity-check inputs "
+                       "(URL, path, schema) once before the first call, or paste the "
+                       "needed excerpt directly when a fetch is the problem."),
+        })
+
+    # ── Pattern 3: compaction storms ───────────────────────────────────────
+    if len(compactions) >= 3:
+        total_pre = sum(c["pre_tokens"] for c in compactions)
+        # Direct measurement: sum the output tokens the compaction events
+        # themselves emitted (their own self-summary cost). Attribute to
+        # the model that ran the most compactions in this session.
+        direct_output = sum(c["output_tokens"] for c in compactions)
+        from collections import Counter as _Counter
+        model_votes = _Counter(c["model"] for c in compactions if c["model"])
+        primary_model = model_votes.most_common(1)[0][0] if model_votes else ""
+        findings.append({
+            "kind": "compaction_storm",
+            "evidence": f"{len(compactions)} compactions in this session",
+            "detail": (f"Cumulative {total_pre:,} pre-compaction tokens summarised. "
+                       f"Each summary is carried forward, so every subsequent turn "
+                       f"pays for it on input."),
+            "model": primary_model,
+            "output_tokens": direct_output,
+            "ts": compactions[0]["ts"],
+            "advice": ("Long sessions overflow context. When a topic changes or work "
+                       "feels stuck, start a fresh session rather than continuing — "
+                       "this stops unrelated context from being summarised and re-paid."),
+        })
+
+    # ── Pattern 4: large output spikes on premium models ───────────────────
+    for m in asst_msgs:
+        if m["tokens"] >= 8000 and m["model"] in _BURN_PREMIUM_MODELS:
+            findings.append({
+                "kind": "output_spike",
+                "evidence": f"{m['tokens']:,}-token assistant response on {m['model']}",
+                "detail": f"Single message at {m['ts'][11:16]} on {m['ts'][:10]}.",
+                "model": m["model"],
+                "output_tokens": m["tokens"],
+                "ts": m["ts"],
+                "advice": ("Large code generation scales linearly with model price. "
+                           "For scaffolding-heavy turns, ask for the change in smaller "
+                           "patches, or start the session on a lighter model and "
+                           "reserve premium models for reasoning."),
+            })
+
+    # ── Pattern 5: exploration runs on premium models ──────────────────────
+    # Walk tool starts in chronological order; track runs of read-only tools.
+    sorted_tools = sorted(tool_starts.values(), key=lambda x: x["idx"])
+    run: list = []
+    runs_emitted = 0
+    for tr in sorted_tools + [None]:
+        if tr is not None and tr["name"] in _READ_ONLY_TOOLS:
+            run.append(tr)
+        else:
+            if len(run) >= 5:
+                first_idx, last_idx = run[0]["idx"], run[-1]["idx"]
+                window_msgs = [m for m in asst_msgs if first_idx <= m["idx"] <= last_idx]
+                model_votes = Counter(m["model"] for m in window_msgs)
+                primary_model = model_votes.most_common(1)[0][0] if model_votes else ""
+                if primary_model in _BURN_PREMIUM_MODELS and runs_emitted < 3:
+                    observed_tokens = sum(m["tokens"] for m in window_msgs)
+                    findings.append({
+                        "kind": "exploration_premium",
+                        "evidence": (f"{len(run)} consecutive read-only tool calls "
+                                     f"({_summarise_tools(run)}) on {primary_model}"),
+                        "detail": (f"Observed {observed_tokens:,} output tokens during "
+                                   f"this investigation window ({run[0]['ts'][11:16]}–"
+                                   f"{run[-1]['ts'][11:16]})."),
+                        "model": primary_model,
+                        "output_tokens": observed_tokens,
+                        "ts": run[0]["ts"],
+                        "advice": ("Investigation-only phases benefit less from advanced "
+                                   "reasoning. Next time, start the read-heavy discovery "
+                                   "phase on a lighter model, then open a focused session "
+                                   "on a stronger model when you're ready to implement."),
+                    })
+                    runs_emitted += 1
+            run = []
+
+    # ── Pattern 6: broad search repetition ─────────────────────────────────
+    broad_searches: list[tuple[str, dict]] = []
+    for tr in sorted_tools:
+        if tr["name"] not in ("grep", "glob"):
+            continue
+        args = tr.get("args") or {}
+        if not isinstance(args, dict):
+            continue
+        paths = args.get("paths")
+        if isinstance(paths, list):
+            paths = paths[0] if paths else None
+        # Broad = no path narrowing OR path is the repo/cwd-level root
+        if paths is None or (isinstance(paths, str) and paths.count("/") + paths.count("\\") <= 4):
+            broad_searches.append((tr["ts"], tr))
+    if len(broad_searches) >= 5:
+        first_ts = broad_searches[0][0]
+        sample_patterns = [
+            (b[1].get("args") or {}).get("pattern", "")[:30]
+            for b in broad_searches[:4]
+        ]
+        findings.append({
+            "kind": "broad_search_repeat",
+            "evidence": f"{len(broad_searches)} broad grep/glob calls across the session",
+            "detail": ("Sample patterns: " + ", ".join(f'"{p}"' for p in sample_patterns if p)
+                       + ". Each broad scan re-loads many candidate files into context."),
+            "model": "",
+            "output_tokens": 0,  # flag-only finding, no token attribution
+            "ts": first_ts,
+            "advice": ("Narrow searches to a known sub-directory or use the first hit "
+                       "to navigate to a more specific location. Repeated broad scans "
+                       "tend to rediscover the same files."),
+        })
+
+    # ── Pattern 7: parallel-missed (Anthropic multi-agent / OpenAI BP-05) ──
+    # Group tool calls by the asst.message turn they belong to: a turn = the
+    # tool calls whose idx falls between this asst.message and the next.
+    # Sequential single-tool turns on different read-only paths could have
+    # been batched into a parallel tool call.
+    if len(asst_msgs) >= 6:
+        asst_idxs = sorted(m["idx"] for m in asst_msgs) + [10**12]
+        tools_by_turn: list[list] = []
+        sorted_tool_list = sorted(tool_starts.values(), key=lambda x: x["idx"])
+        ti = 0
+        for k in range(len(asst_idxs) - 1):
+            lo, hi = asst_idxs[k], asst_idxs[k + 1]
+            turn_tools = []
+            while ti < len(sorted_tool_list) and sorted_tool_list[ti]["idx"] < hi:
+                if sorted_tool_list[ti]["idx"] >= lo:
+                    turn_tools.append(sorted_tool_list[ti])
+                ti += 1
+            tools_by_turn.append(turn_tools)
+
+        # Find runs of consecutive single-read-only-tool turns on distinct paths.
+        run_lengths: list[tuple[int, int, int]] = []  # (start_idx, end_idx, length)
+        cur_start = None
+        cur_paths: set = set()
+        cur_len = 0
+        for k, turn in enumerate(tools_by_turn):
+            single_read = (
+                len(turn) == 1
+                and turn[0]["name"] in _READ_ONLY_TOOLS
+                and turn[0]["name"] not in ("report_intent", "list_powershell", "list_agents")
+            )
+            if single_read:
+                path = _burn_extract_path(turn[0]["args"]) or turn[0]["name"]
+                if cur_start is None:
+                    cur_start = turn[0]["idx"]
+                    cur_paths = {path}
+                    cur_len = 1
+                else:
+                    cur_paths.add(path)
+                    cur_len += 1
+            else:
+                if cur_len >= 4 and len(cur_paths) >= 3:
+                    end_idx = tools_by_turn[k - 1][0]["idx"]
+                    run_lengths.append((cur_start, end_idx, cur_len))
+                cur_start, cur_paths, cur_len = None, set(), 0
+        if cur_len >= 4 and len(cur_paths) >= 3:
+            end_idx = sorted_tool_list[-1]["idx"] if sorted_tool_list else cur_start
+            run_lengths.append((cur_start, end_idx, cur_len))
+
+        # Emit at most one parallel_missed finding (the longest run).
+        if run_lengths:
+            start_idx, end_idx, run_len = max(run_lengths, key=lambda x: x[2])
+            window_msgs = [m for m in asst_msgs if start_idx <= m["idx"] <= end_idx]
+            observed_tokens = sum(m["tokens"] for m in window_msgs)
+            model_votes = Counter(m["model"] for m in window_msgs)
+            primary_model = model_votes.most_common(1)[0][0] if model_votes else ""
+            first_ts = next((m["ts"] for m in asst_msgs if m["idx"] == start_idx), "")
+            findings.append({
+                "kind": "parallel_missed",
+                "evidence": (f"{run_len} consecutive single-tool turns reading different "
+                             f"locations — each was its own round-trip"),
+                "detail": (f"Observed {observed_tokens:,} output tokens across these "
+                           f"turns. Read-only tools without data dependencies between "
+                           f"them can be issued in a single response."),
+                "model": primary_model,
+                "output_tokens": observed_tokens,
+                "ts": first_ts,
+                "advice": ("When several files or queries are independent, request all "
+                           "the reads at once. Anthropic reports up to 90% latency "
+                           "reduction from parallel tool calls; each extra round-trip "
+                           "also re-pays the system prompt."),
+            })
+
+    # ── Pattern 8: no-verification at session end (Anthropic harnesses) ────
+    # Long edit sessions that never run a test/build/lint command leave
+    # "looks done" as the only stopping signal.
+    edit_count = sum(1 for tr in tool_starts.values()
+                     if tr["name"] in ("edit", "create"))
+    if edit_count >= 10:
+        sorted_tools = sorted(tool_starts.values(), key=lambda x: x["idx"])
+        tail = sorted_tools[-15:]
+        verification_markers = (
+            "test", "pytest", "jest", "mocha", "npm test", "go test", "cargo test",
+            "lint", "ruff", "flake8", "eslint", "mypy", "tsc",
+            "build", "compile", "make ", "npm run build", "cargo build",
+        )
+
+        def _looks_like_verify(tr) -> bool:
+            n = tr["name"].lower()
+            if n in ("task",):  # task tool may launch a verify subagent
+                return True
+            args = tr.get("args") or {}
+            if not isinstance(args, dict):
+                return False
+            blob = " ".join(str(v) for v in args.values()).lower()
+            return any(m in blob for m in verification_markers)
+
+        if not any(_looks_like_verify(tr) for tr in tail):
+            findings.append({
+                "kind": "no_verification",
+                "evidence": f"{edit_count} edits but no test/build/lint near session end",
+                "detail": ("The session finished without running a check that could "
+                           "produce a pass/fail signal — verification falls back to "
+                           "the human eye."),
+                "model": "",
+                "output_tokens": 0,  # flag-only — the cost is downstream rework
+                "ts": tail[-1]["ts"] if tail else "",
+                "advice": ("Close the loop on every coding session with a runnable "
+                           "check — tests, lint, or a build. The agent will catch "
+                           "its own mistakes before you do, and false 'task complete' "
+                           "claims become measurable."),
+            })
+
+    # ── Pattern 9: subagent delegation missed (Anthropic costs guide) ──────
+    # Long sessions doing lots of investigation in the main context pay
+    # for that exploration on every subsequent turn (compaction summarises
+    # it, but the summary keeps being re-paid).  Flag-only — the absence
+    # of delegation is the signal; token cost is opaque (it's the marginal
+    # context re-pay, not a measurable line item).
+    total_tool_calls = len(tool_starts)
+    read_only_calls = sum(1 for tr in tool_starts.values()
+                          if tr["name"] in _READ_ONLY_TOOLS)
+    task_calls = sum(1 for tr in tool_starts.values() if tr["name"] == "task")
+    if total_tool_calls >= 60 and read_only_calls >= 30 and task_calls == 0:
+        first_ro_ts = next((tr["ts"] for tr in sorted(tool_starts.values(),
+                                                      key=lambda x: x["idx"])
+                            if tr["name"] in _READ_ONLY_TOOLS), "")
+        findings.append({
+            "kind": "subagent_missed",
+            "evidence": (f"{total_tool_calls} tool calls ({read_only_calls} read-only) "
+                         f"in one session with zero delegation"),
+            "detail": ("Verbose exploration stayed in the main context and re-loaded "
+                       "on every subsequent turn — the marginal cost shows up indirectly "
+                       "as compaction overhead and longer input bills."),
+            "model": "",
+            "output_tokens": 0,  # flag-only — cost is contextual, not measurable
+            "ts": first_ro_ts,
+            "advice": ("For broad investigation, run a `task` sub-agent: it explores "
+                       "in its own context window and returns only a summary. Anthropic "
+                       "reports 90.2% quality improvement on complex breadth-first tasks "
+                       "with this pattern."),
+        })
+
+    # ── Pattern 10: bundled multi-goal user prompt (OpenAI BP-18) ──────────
+    # Distinct, separable tasks bundled into one prompt force the model to
+    # juggle objectives; peak quality and cost come from one goal per turn.
+    bundled_candidates = []
+    for um in user_msgs:
+        c = um["content"]
+        if len(c) < 600:
+            continue
+        # Count numbered list markers and ordered conjunctions
+        numbered = len(_re.findall(r'(?m)^\s*(?:\d+[\.\)]|[-*])\s+\S', c))
+        conjunctions = len(_re.findall(
+            r'\band (?:then|also|finally|next|after that)\b', c, _re.IGNORECASE))
+        question_marks = c.count("?")
+        score = numbered + conjunctions + max(0, question_marks - 1)
+        if numbered >= 3 or score >= 4:
+            bundled_candidates.append((um, numbered, score))
+    if bundled_candidates:
+        um, numbered, score = max(bundled_candidates, key=lambda x: x[2])
+        # Attribute the next 3 asst.messages after this user.message
+        following = [m for m in asst_msgs if m["idx"] > um["idx"]][:3]
+        observed_tokens = sum(m["tokens"] for m in following)
+        model_votes = Counter(m["model"] for m in following)
+        primary_model = model_votes.most_common(1)[0][0] if model_votes else ""
+        if numbered >= 3:
+            sig = f"contained {numbered} numbered items"
+        else:
+            sig = f"bundled {score} distinct goals"
+        findings.append({
+            "kind": "bundled_prompt",
+            "evidence": f"A user message {sig} in one turn",
+            "detail": (f"Observed {observed_tokens:,} output tokens responding to the "
+                       f"bundled prompt. Multi-goal turns force the model to interleave "
+                       f"plans rather than focus on one."),
+            "model": primary_model,
+            "output_tokens": observed_tokens,
+            "ts": um["ts"],
+            "advice": ("Split distinct sub-tasks across separate turns — peak quality "
+                       "comes from one focused goal per turn (OpenAI GPT-5 guide). "
+                       "Each turn also starts from a stable cached prefix."),
+        })
+
+    # ── Pattern 11: model thrashing within a session (GitHub auto-model) ───
+    # Switching models mid-session crosses cache boundaries; GitHub's auto
+    # selector routes along natural cache boundaries for this reason.
+    if len(asst_msgs) >= 8:
+        models_in_order = [m["model"] for m in sorted(asst_msgs, key=lambda x: x["idx"])
+                           if m["model"]]
+        transitions = sum(1 for a, b in zip(models_in_order, models_in_order[1:])
+                          if a != b)
+        distinct_models = len(set(models_in_order))
+        if transitions >= 4 and distinct_models >= 3:
+            model_counts = Counter(models_in_order)
+            top_three = ", ".join(f"{n}×{c}" for n, c in model_counts.most_common(3))
+            findings.append({
+                "kind": "model_thrash",
+                "evidence": (f"{transitions} model switches across {len(models_in_order)} "
+                             f"assistant turns ({top_three})"),
+                "detail": ("Every model switch crosses a cache boundary, so the system "
+                           "prompt and prior context are re-billed on the next turn."),
+                "model": "",
+                "output_tokens": 0,  # flag only — cache miss cost is opaque
+                "ts": asst_msgs[0]["ts"],
+                "advice": ("Pick a model at session start and stay on it; let GitHub's "
+                           "auto-selector route across natural cache boundaries instead "
+                           "of toggling manually. Manual switches cost more without "
+                           "measurable quality gains."),
+            })
+
+    return findings
+
+
+def _summarise_tools(run: list) -> str:
+    """Format a Counter-style summary of tool names in a run."""
+    from collections import Counter
+    c = Counter(t["name"] for t in run)
+    return ", ".join(f"{n} ×{c[n]}" if c[n] > 1 else n for n in c)
+
+
 def get_sessions_for_date(target_date: str) -> list:
     """
     Find all Copilot sessions with activity on target_date (YYYY-MM-DD).
@@ -200,35 +722,166 @@ def get_sessions_for_date(target_date: str) -> list:
                 if "commit" not in git_ops_list[-1:]:
                     git_ops_list.append("commit")
 
-        # Pull shutdown metrics (tokens, code changes, premium requests)
-        tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+        # Two-phase token/credit extraction.
+        #
+        # Phase 1 always walks every event and accumulates the per-event signals
+        # the agent emits directly. Phase 2 reconciles: when `session.shutdown`
+        # is present we use its server-rolled-up `modelMetrics` as canonical;
+        # otherwise we reconstruct from per-event data (the only way to attribute
+        # cost to sessions that crashed, were killed, are still active, or were
+        # suspended — i.e. sessions which never write a clean shutdown record).
+        #
+        # No modeling or estimation: only token counts that the CLI emits in
+        # the event stream are used. Anything we don't have direct data for
+        # (e.g. per-turn input tokens for non-compaction calls) stays 0 and the
+        # session is flagged `session_state="open"` so the report can disclose
+        # that costs are a lower bound.
         tokens_by_model = {}  # {model_name: {input, output, cache_read, cache_creation}}
+        requests_by_model = {}  # {model_name: api_call_count}
+        ai_credits = None  # server-emitted credit total if available
+        ai_credits_by_model = {}  # {model_name: credits_used} if present
         premium_requests = 0
         total_api_ms     = 0
         code_changes     = {}
         model_used       = ""
+        plan_tier        = ""
+        auto_model       = False
+
+        # ── Phase 1: per-event accumulation (always runs) ────────────────────
+        #
+        # IMPORTANT: every per-event signal is date-filtered to `target_date`.
+        # Without this, a single multi-day open session would inflate totals
+        # by N× when the report aggregates across the dates it touches (the
+        # same session.tokens would be returned N times by N harvest calls).
+        per_msg_output_by_model: dict[str, int] = {}
+        per_msg_count_by_model:  dict[str, int] = {}
+        compaction_blocks:       list[dict]     = []
+        last_assistant_model = ""
+        shutdown_data: dict | None = None
+        shutdown_ts:   str         = ""
 
         for e in events:
-            if e.get("type") == "session.shutdown":
-                d = e.get("data", {})
-                premium_requests = d.get("totalPremiumRequests", 0)
-                total_api_ms     = d.get("totalApiDurationMs", 0)
-                code_changes     = d.get("codeChanges", {})
-                model_used       = d.get("currentModel", "")
-                for model_name, model_data in d.get("modelMetrics", {}).items():
-                    usage = model_data.get("usage", {})
-                    mt = {
-                        "input":          usage.get("inputTokens", 0),
-                        "output":         usage.get("outputTokens", 0),
-                        "cache_read":     usage.get("cacheReadTokens", 0),
-                        "cache_creation": usage.get("cacheWriteTokens", 0),
-                    }
-                    tokens_by_model[model_name] = mt
-                    for k in tokens:
-                        tokens[k] += mt[k]
-                break
+            t = e.get("type")
+            d = e.get("data") or {}
+            ts = e.get("timestamp", "") or ""
+            on_target_day = ts[:10] == target_date
 
+            if t == "assistant.message":
+                if not on_target_day:
+                    continue
+                m = d.get("model") or "unknown"
+                out = d.get("outputTokens") or 0
+                per_msg_count_by_model[m] = per_msg_count_by_model.get(m, 0) + 1
+                if isinstance(out, (int, float)) and out > 0:
+                    per_msg_output_by_model[m] = per_msg_output_by_model.get(m, 0) + int(out)
+                if m and m != "unknown":
+                    last_assistant_model = m
+            elif t == "session.compaction_complete":
+                if not on_target_day:
+                    continue
+                ctu = d.get("compactionTokensUsed") or {}
+                if ctu:
+                    compaction_blocks.append(ctu)
+            elif t == "session.shutdown":
+                # Capture every shutdown (use the last one if multiple exist).
+                # Whether we attribute its rollup to *this* date is decided in
+                # Phase 2 based on the shutdown timestamp.
+                shutdown_data = d
+                shutdown_ts   = ts
+
+        # ── Phase 2: reconcile ───────────────────────────────────────────────
+        session_state = "unknown"
+
+        # The shutdown rollup is the *entire* session bill. Only credit it to
+        # the date the shutdown actually fired on, otherwise a multi-day
+        # session would over-count its tokens on every date it touches.
+        shutdown_on_target = (shutdown_data is not None
+                              and shutdown_ts[:10] == target_date)
+
+        if shutdown_on_target:
+            # Clean shutdown present today — trust the server-rolled-up totals.
+            session_state    = "complete"
+            premium_requests = shutdown_data.get("totalPremiumRequests", 0)
+            total_api_ms     = shutdown_data.get("totalApiDurationMs", 0)
+            code_changes     = shutdown_data.get("codeChanges", {})
+            model_used       = shutdown_data.get("currentModel", "") or last_assistant_model
+            # AI Credits billing fields (June 2026+) — read if present.
+            if "totalAiCredits" in shutdown_data:
+                ai_credits = shutdown_data.get("totalAiCredits")
+            elif "totalAICredits" in shutdown_data:
+                ai_credits = shutdown_data.get("totalAICredits")
+            elif "totalCredits" in shutdown_data:
+                ai_credits = shutdown_data.get("totalCredits")
+            plan_tier  = shutdown_data.get("planTier") or shutdown_data.get("plan") or ""
+            auto_model = bool(shutdown_data.get("autoModelSelection")
+                              or shutdown_data.get("autoModel")
+                              or shutdown_data.get("modelSelectionMode") == "auto")
+            for model_name, model_data in shutdown_data.get("modelMetrics", {}).items():
+                usage = model_data.get("usage", {}) or {}
+                tokens_by_model[model_name] = {
+                    "input":          usage.get("inputTokens", 0)      or 0,
+                    "output":         usage.get("outputTokens", 0)     or 0,
+                    "cache_read":     usage.get("cacheReadTokens", 0)  or 0,
+                    "cache_creation": usage.get("cacheWriteTokens", 0) or 0,
+                }
+                requests_meta = model_data.get("requests", {}) or {}
+                if requests_meta.get("count"):
+                    requests_by_model[model_name] = requests_meta["count"]
+                credits_meta = (model_data.get("creditsUsed")
+                                or model_data.get("credits"))
+                if credits_meta is not None:
+                    ai_credits_by_model[model_name] = credits_meta
+        else:
+            # No shutdown on this date — use the date-filtered per-event totals.
+            # This covers: still-open sessions, crashed/killed sessions, and
+            # multi-day sessions whose shutdown fired on a different date.
+            has_per_event = bool(per_msg_count_by_model or compaction_blocks)
+            session_state = "open" if has_per_event else "unknown"
+            model_used    = last_assistant_model
+
+            def _bucket(m: str) -> dict:
+                if m not in tokens_by_model:
+                    tokens_by_model[m] = {"input": 0, "output": 0,
+                                          "cache_read": 0, "cache_creation": 0}
+                return tokens_by_model[m]
+
+            # Direct fact: per-message output tokens summed by model
+            # (already restricted to events on target_date in Phase 1).
+            for m, out in per_msg_output_by_model.items():
+                _bucket(m)["output"] += out
+
+            # Direct fact: each compaction on target_date emits exact
+            # tokenDetails (the same data GitHub uses to bill nano-AIU).
+            # Attribute to the model that ran the compaction call.
+            for ctu in compaction_blocks:
+                m = ctu.get("model") or "unknown"
+                b = _bucket(m)
+                b["input"]          += int(ctu.get("inputTokens", 0)      or 0)
+                b["output"]         += int(ctu.get("outputTokens", 0)     or 0)
+                b["cache_read"]     += int(ctu.get("cacheReadTokens", 0)  or 0)
+                b["cache_creation"] += int(ctu.get("cacheWriteTokens", 0) or 0)
+
+            # Request count per model — proxy from assistant.message count.
+            # We don't claim these are "premium requests" (that distinction is
+            # server-side); leave the top-level premium_requests at 0 so
+            # downstream effort estimation falls back to other signals.
+            for m, c in per_msg_count_by_model.items():
+                requests_by_model[m] = c
+
+            # Plan tier may still be supplied via env var below.
+
+        # Derive scalar `tokens` totals from the per-model breakdown so both
+        # code paths produce the same canonical shape.
+        tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+        for mt in tokens_by_model.values():
+            for k in tokens:
+                tokens[k] += mt.get(k, 0) or 0
         tokens["total"] = sum(tokens.values())
+
+        # Plan can also be supplied via env var (COPILOT_PLAN=pro|pro+|max|business|enterprise)
+        # when the session log doesn't carry it. Useful for individuals on monthly plans.
+        if not plan_tier:
+            plan_tier = _os.environ.get("COPILOT_PLAN", "").strip()
 
         # Merge files: shutdown data + tool event extraction
         shutdown_files = set(code_changes.get("filesModified", []))
@@ -268,6 +921,12 @@ def get_sessions_for_date(target_date: str) -> list:
             "tokens":            tokens,
             "tokens_by_model":   tokens_by_model,
             "premium_requests":  premium_requests,
+            "requests_by_model": requests_by_model,
+            "ai_credits":        ai_credits,           # None when server didn't emit
+            "ai_credits_by_model": ai_credits_by_model,
+            "plan":              plan_tier,
+            "auto_model_selection": auto_model,
+            "session_state":     session_state,        # complete | open | unknown
             "total_api_ms":      total_api_ms,
             "code_changes":      code_changes,
             "model_used":        model_used,
@@ -280,6 +939,9 @@ def get_sessions_for_date(target_date: str) -> list:
             "files_touched":     sorted(all_modified),
             "lines_logic":       lines_logic,
             "lines_boilerplate": lines_boilerplate,
+            # Per-session burn findings (cost-saving opportunities). Token counts
+            # are observational only; credit conversion happens in the renderer.
+            "burn_findings":     _analyze_burn_patterns(events, target_date),
         })
 
     # Also harvest VS Code Copilot Chat sessions
@@ -327,6 +989,96 @@ def _extract_file_path_from_markdown(text: str) -> str:
             path = path[1:]
         return path.replace("/", _os.sep)
     return ""
+
+
+def _vscode_walk_token_fields(node) -> "tuple[int, int]":
+    """Recursively sum inline ``promptTokens`` and ``outputTokens`` in a JSON tree.
+
+    VS Code records per-tool-call token usage inline inside response payloads.
+    Each round of a multi-turn chat re-sends the full conversation context,
+    so summing every ``promptTokens`` value across all rounds matches what
+    the underlying API actually bills.
+
+    Returns ``(prompt_total, output_total)``.
+    """
+    prompt = output = 0
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if isinstance(v, int):
+                if k == "promptTokens":
+                    prompt += v
+                elif k == "outputTokens":
+                    output += v
+            else:
+                pp, oo = _vscode_walk_token_fields(v)
+                prompt += pp; output += oo
+    elif isinstance(node, list):
+        for x in node:
+            pp, oo = _vscode_walk_token_fields(x)
+            prompt += pp; output += oo
+    return prompt, output
+
+
+def _vscode_collect_inline_pricing(node, out: dict) -> None:
+    """Walk a JSON tree and collect any inline per-model pricing metadata.
+
+    VS Code Copilot Chat session JSONL embeds authoritative per-model rates
+    inside ``inputState.selectedModel.metadata`` blocks. Each such block
+    carries:
+
+      * ``id``             model identifier (e.g. ``claude-opus-4.6``)
+      * ``inputCost``      AI Credits per 1M input tokens
+      * ``outputCost``     AI Credits per 1M output tokens
+      * ``cacheCost``      AI Credits per 1M cached tokens
+      * ``multiplier``     premium-request multiplier string (e.g. ``"3x"``)
+      * ``multiplierNumeric`` premium-request multiplier number (e.g. ``3``)
+
+    The ``pricing`` field's literal string is ``"In: 500 \u00b7 Out: 2500 AICs/1M tokens"``
+    confirming the unit. Since 1 AIC = $0.01 USD, we convert AICs/M to USD/M
+    by dividing by 100 so the result is directly comparable to entries in
+    ``report._MODEL_PRICING``.
+
+    Multiple blocks can appear in one session (e.g. mid-session model
+    switch). We keep the most recent rates for each ``id`` we see.
+
+    Mutates ``out`` in place: ``{model_id: {input, output, cache_read,
+    cache_creation, multiplier, _source}}``.
+    """
+    if isinstance(node, dict):
+        # Detect a pricing block. ``id`` is required for keying; rates are
+        # required to be useful. Multiplier-only blocks (e.g. GPT-5.2-Codex
+        # carries ``multiplier`` without per-token costs) are recorded so
+        # downstream consumers can still see the premium-request rate.
+        mid = _normalize_vscode_model(node.get("id", ""))
+        has_rates = isinstance(node.get("inputCost"), (int, float)) and \
+                    isinstance(node.get("outputCost"), (int, float))
+        has_multiplier = isinstance(node.get("multiplierNumeric"), (int, float))
+        if mid and (has_rates or has_multiplier):
+                cache_aic = node.get("cacheCost", 0) or 0
+                entry.update({
+                    "input":  node["inputCost"]  / 100.0,
+                    "output": node["outputCost"] / 100.0,
+                    "cache_read":     cache_aic / 100.0,
+                    "cache_creation": cache_aic / 100.0,
+                })
+            if has_multiplier:
+                entry["multiplier"] = node["multiplierNumeric"]
+            entry["_source"] = "vscode_inline"
+        for v in node.values():
+            _vscode_collect_inline_pricing(v, out)
+    elif isinstance(node, list):
+        for item in node:
+            _vscode_collect_inline_pricing(item, out)
+
+
+def _normalize_vscode_model(model_id: str) -> str:
+    """Strip the ``copilot/`` prefix VS Code adds so model names match
+    the CLI naming convention used by ``report._MODEL_PRICING``."""
+    if not model_id:
+        return ""
+    if model_id.startswith("copilot/"):
+        return model_id[len("copilot/"):]
+    return model_id
 
 
 def get_vscode_sessions_for_date(target_date: str) -> list:
@@ -394,6 +1146,29 @@ def get_vscode_sessions_for_date(target_date: str) -> list:
         cwd = ""
         session_start = None
         session_end = None
+        inline_model_pricing: dict = {}
+
+        # Bootstrap inline pricing from the session header itself — the
+        # header carries ``selectedModel.metadata`` which is the most
+        # reliable signal even when no requests have run yet.
+        _vscode_collect_inline_pricing(hv, inline_model_pricing)
+
+        # ── Token & timing accumulators (sparse VS Code JSONL schema) ─────
+        # Output tokens: kind=1 patch with key path ["requests", N,
+        #   "completionTokens"] — cumulative for the whole turn; latest
+        #   value wins per request index.
+        # Input tokens : sum of every inline ``promptTokens`` field across
+        #   all events (each tool-call round resends the full context, and
+        #   the API bills each round, so summing matches actual billing).
+        # API time    : kind=1 patch with key ["requests", N, "elapsedMs"]
+        #   OR ["requests", N, "result"].timings.totalElapsed.
+        # TTFT (bonus): ["requests", N, "result"].timings.firstProgress.
+        # Per-request model id : recorded on the kind=2 chat turn event.
+        completion_by_req: dict = {}
+        elapsed_by_req: dict    = {}
+        ttft_by_req: dict       = {}
+        prompt_tokens_total     = 0
+        output_tokens_inline    = 0  # not used for billing, kept for parity
 
         try:
             with open(jsonl_file, encoding="utf-8") as f:
@@ -409,18 +1184,50 @@ def get_vscode_sessions_for_date(target_date: str) -> list:
                     kind = obj.get("kind")
                     v = obj.get("v")
 
-                    # kind=1: extract workspace context from metadata
-                    if kind == 1 and isinstance(v, dict):
-                        meta = v.get("metadata", {})
-                        if isinstance(meta, dict) and not cwd:
-                            for rendered in meta.get("renderedUserMessage", []):
-                                if isinstance(rendered, dict):
-                                    txt = rendered.get("text", "")
-                                    m = _re.search(r'current file is ([^\n]+)', txt)
-                                    if m:
-                                        fp = m.group(1).strip()
-                                        cwd = str(Path(fp).parent)
-                                        break
+                    # Sum inline token fields across the whole event tree.
+                    pp, oo = _vscode_walk_token_fields(obj)
+                    prompt_tokens_total += pp
+                    output_tokens_inline += oo
+
+                    # Capture any inline pricing metadata that appears
+                    # (e.g. ``inputState`` patches carrying a fresh
+                    # ``selectedModel.metadata`` block after a mid-session
+                    # model switch).
+                    _vscode_collect_inline_pricing(obj, inline_model_pricing)
+
+                    # kind=1 sparse patches: workspace context + per-request
+                    # token/timing updates.
+                    if kind == 1:
+                        # Workspace context (existing behaviour)
+                        if isinstance(v, dict):
+                            meta = v.get("metadata", {})
+                            if isinstance(meta, dict) and not cwd:
+                                for rendered in meta.get("renderedUserMessage", []):
+                                    if isinstance(rendered, dict):
+                                        txt = rendered.get("text", "")
+                                        m = _re.search(r'current file is ([^\n]+)', txt)
+                                        if m:
+                                            fp = m.group(1).strip()
+                                            cwd = str(Path(fp).parent)
+                                            break
+
+                        # Per-request token/timing patches
+                        k = obj.get("k")
+                        if (isinstance(k, list) and len(k) >= 3
+                                and k[0] == "requests" and isinstance(k[1], int)):
+                            req_idx = k[1]
+                            field = k[2]
+                            if field == "completionTokens" and isinstance(v, int):
+                                completion_by_req[req_idx] = v  # latest wins
+                            elif field == "elapsedMs" and isinstance(v, (int, float)):
+                                elapsed_by_req[req_idx] = int(v)
+                            elif field == "result" and isinstance(v, dict):
+                                tim = v.get("timings", {})
+                                if isinstance(tim, dict):
+                                    if "totalElapsed" in tim and req_idx not in elapsed_by_req:
+                                        elapsed_by_req[req_idx] = int(tim["totalElapsed"])
+                                    if "firstProgress" in tim:
+                                        ttft_by_req[req_idx] = int(tim["firstProgress"])
 
                     # kind=2: chat turns
                     if kind != 2 or not isinstance(v, list):
@@ -506,6 +1313,25 @@ def get_vscode_sessions_for_date(target_date: str) -> list:
         lines_logic = round(total_lines * logic_frac)
         lines_boilerplate = total_lines - lines_logic
 
+        # Aggregate token + timing extraction from the JSONL.
+        out_tokens_total = sum(completion_by_req.values())
+        in_tokens_total  = prompt_tokens_total
+        total_api_ms     = sum(elapsed_by_req.values())
+        request_count    = len(completion_by_req) or len(elapsed_by_req)
+
+        norm_model = _normalize_vscode_model(model_used)
+        tokens_by_model: dict = {}
+        requests_by_model: dict = {}
+        if norm_model and (in_tokens_total or out_tokens_total):
+            tokens_by_model[norm_model] = {
+                "input":          in_tokens_total,
+                "output":         out_tokens_total,
+                "cache_read":     0,   # VS Code JSONL does not expose cache breakdown
+                "cache_creation": 0,
+            }
+        if norm_model and request_count:
+            requests_by_model[norm_model] = request_count
+
         sessions.append({
             "session_id":        session_id,
             "project":           project_name,
@@ -515,13 +1341,23 @@ def get_vscode_sessions_for_date(target_date: str) -> list:
             "entrypoint":        "vscode",
             "date":              target_date,
             "messages":          messages,
-            "tokens":            {"input": 0, "output": 0, "cache_read": 0,
-                                  "cache_creation": 0, "total": 0},
-            "tokens_by_model":   {},
-            "premium_requests":  0,
-            "total_api_ms":      0,
+            "tokens":            {"input":          in_tokens_total,
+                                  "output":         out_tokens_total,
+                                  "cache_read":     0,
+                                  "cache_creation": 0,
+                                  "total":          in_tokens_total + out_tokens_total},
+            "tokens_by_model":   tokens_by_model,
+            "premium_requests":  request_count,
+            "requests_by_model": requests_by_model,
+            "ai_credits":        None,
+            "ai_credits_by_model": {},
+            "inline_model_pricing": inline_model_pricing,
+            "plan":              _os.environ.get("COPILOT_PLAN", "").strip(),
+            "auto_model_selection": False,
+            "session_state":     "complete",  # VS Code JSONL is read end-to-end so always complete
+            "total_api_ms":      total_api_ms,
             "code_changes":      {"filesModified": sorted(all_modified)} if all_modified else {},
-            "model_used":        model_used,
+            "model_used":        norm_model or model_used,
             "session_start":     session_start,
             "session_end":       session_end,
             "git_repos":         [],
@@ -826,7 +1662,21 @@ def compute_active_time_quality(sessions: list) -> dict:
         for t in user_turns:
             mins = t["minutes"]
             if t["needs_handholding"]:
-                modes["Course-correcting"] += mins
+                # Learning queries can superficially trip the hand-holding
+                # patterns — e.g. "I don't understand how X works" matches
+                # the broad "don.t" rule, and "what's wrong with my mental
+                # model" matches the error vocabulary. When the message
+                # *also* carries a Learning intent, the primary goal is
+                # knowledge transfer and routing it to Course-correcting
+                # would understate genuine learning time. Same logic for
+                # Designing — "I don't like this layout, help me redesign"
+                # is a design question, not an AI correction.
+                if "Learning" in t["intents"]:
+                    modes["Learning"] += mins
+                elif "Designing" in t["intents"]:
+                    modes["Designing"] += mins
+                else:
+                    modes["Course-correcting"] += mins
                 continue
             # Trivial turns → grunt work
             if t["is_trivial"]:

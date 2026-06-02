@@ -73,9 +73,20 @@ That's it. A report opens in your browser showing your last 7 days with Copilot.
 | ✅ **Goals & leverage** | Every project with human effort equivalents — see that a 10-min session replaced 3 hours of work. *What did Copilot actually deliver?* |
 | 📦 **Artifacts produced** | Scripts, reports, docs, configs — counted and categorized. *What tangible output came out of your AI sessions?* |
 | 🧠 **Skills augmented** | Hours mapped across 20+ roles — engineer, analyst, designer, architect. *What skills did Copilot make accessible to you?* |
-| 🎯 **Collaboration style** | Building, researching, designing, iterating — your AI signature. *How are you directing AI across your work?* |
+| 🎯 **Collaboration style** | A donut chart breaks active time across 9 work modes &mdash; Designing, Analyzing, Reviewing, Researching, Learning, Building, Refining, Course-correcting, Delegating &mdash; with labels next to each slice. *How are you directing AI, and where are the skills you need to grow as a manager of AI?* |
 | ⏰ **Activity heatmap** | When you collaborate and how your day breaks down. *When is AI most useful in your workflow?* |
 | 📐 **Estimation evidence** | Transparent methodology grounded in [13 peer-reviewed sources](docs/effort-estimation-methodology.md). *Why should anyone trust these numbers?* |
+| 💸 **Credit-burn patterns** | Every flagged pattern cites the Anthropic / OpenAI / GitHub guidance it implements &mdash; with clickable sources. *Where am I burning credits, and what does the published guidance say?* See the [credit-optimization methodology](docs/credit-optimization.md). |
+
+---
+
+## 🆕 What's new in this release
+
+- **Donut chart with adjacent labels** for the "How I Collaborated" section &mdash; 9 work modes (Designing, Analyzing, Reviewing, Researching, Learning, Building, Refining, Course-correcting, Delegating) with name + share + minutes attached to each slice via leader lines. No more bouncing between chart and legend.
+- **Learning intent expansion** &mdash; the classifier now catches genuine learning queries: *"how do I X"*, *"help me understand"*, *"what's the best way to..."*, *"tell me about"*, *"pros and cons of..."*, *"primer on..."*, plus dozens more phrasings. A hand-holding bypass routes *"I don't understand how X works"* to Learning instead of Course-correcting.
+- **Authoritative inline pricing** &mdash; VS Code Copilot Chat sessions now use the per-model rates Copilot itself embeds in its JSONL (`inputCost`/`outputCost`/`cacheCost` in AI Credits per 1M tokens) when present, with the hardcoded `_MODEL_PRICING` table as fallback. This auto-handles new models and rate changes without code updates.
+- **New methodology doc** &mdash; [`docs/credit-optimization.md`](docs/credit-optimization.md) synthesizes every credit-burn pattern the tool detects with the exact Anthropic / OpenAI / GitHub source it implements, including short excerpts.
+- **AI Investment Breakdown visual cleanup** &mdash; the section now uses one consistent dark-banner pattern for every sub-segment (Model Mix, Top Sessions, Patterns) and drops the low-signal cost-per-outcome KPI cards.
 
 ---
 
@@ -95,7 +106,9 @@ whatidid --refresh                    # force re-analysis
 ## 🏗️ How It Works
 
 ```
-~/.copilot/session-state/<uuid>/events.jsonl
+~/.copilot/session-state/<uuid>/events.jsonl          (Copilot CLI sessions)
+<AppData>/Code/User/globalStorage/                    (VS Code Copilot Chat
+   emptyWindowChatSessions/<uuid>.jsonl                sessions — same pipeline)
                 │
                 ▼
            harvest.py    → scan sessions, extract messages, tools, files, intents
@@ -114,12 +127,14 @@ See [docs/architecture.md](docs/architecture.md) for session file formats, token
 
 See [docs/effort-estimation-methodology.md](docs/effort-estimation-methodology.md) for the research basis, signal definitions, and calibration logic behind effort estimates — grounded in 13 peer-reviewed sources including Alaswad et al. 2026, Cambon et al. 2023 (Microsoft Research), Ziegler et al. 2024 (CACM), and the SPACE framework (Forsgren et al. 2021).
 
+See [docs/credit-optimization.md](docs/credit-optimization.md) for the credit-burn pattern catalogue &mdash; every detector is tied to published guidance from Anthropic, OpenAI, or GitHub, with the per-model rates sourced from Copilot's own session metadata when available.
+
 <a id="privacy"></a>
 ## 🔒 Privacy
 
 **Your data stays on your machine.** This tool is completely local-first:
 
-- **Reads only local files** — session logs from `~/.copilot/session-state/` that already exist on your machine
+- **Reads only local files** &mdash; session logs from `~/.copilot/session-state/` (Copilot CLI) and `<AppData>/Code/User/globalStorage/emptyWindowChatSessions/` (VS Code Copilot Chat) that already exist on your machine
 - **No telemetry, no tracking, no cloud uploads** — the tool never phones home
 - **AI analysis is optional** — uses GitHub Models API (authenticated via your own `gh` CLI token) to semantically interpret sessions. Without API access, a local heuristic fallback produces estimates with zero external calls
 - **Email is optional** — the `--email` flag sends the report via your own Outlook client. If you don't use it, the HTML file stays on disk

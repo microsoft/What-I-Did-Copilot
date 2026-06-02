@@ -1,6 +1,6 @@
 ---
 name: whatidid
-description: "Generate a daily analytics report of what GitHub Copilot helped accomplish. Shows tasks completed, human effort equivalent, code impact, premium requests used, and a narrative story. Use when the user asks about their daily Copilot activity, what Copilot helped with today, or wants a digest of the day's work."
+description: "Generate a daily analytics report of what GitHub Copilot helped accomplish. Shows tasks completed, human effort equivalent, code impact, AI credits used, and a narrative story. Use when the user asks about their daily Copilot activity, what Copilot helped with today, or wants a digest of the day's work."
 ---
 
 # whatidid — Copilot Impact Report

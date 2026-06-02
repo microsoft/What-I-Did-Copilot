@@ -98,6 +98,17 @@ get the full formula treatment.
   human effort. Raw suggestion counts are misleading — high counts with low
   acceptance mean wasted overhead, not productive work.
 
+> **Billing-model note (2026-06-01):** GitHub Copilot's "premium requests"
+> (PRUs) were superseded by **GitHub AI Credits** — a token-priced billing
+> model where 1 credit = $0.01 USD. Sessions logged after the migration
+> emit `totalAiCredits` (or, if not yet emitted, this repo computes credits
+> locally from `tokens × per-model rate`). For effort estimation the
+> *request counter* is still useful as a fallback interaction signal when
+> conversation-turn data is unavailable, regardless of whether it's
+> labelled as PRUs (legacy) or derived from `modelMetrics.requests.count`
+> (new). The wording below refers to "premium requests" for historical
+> accuracy; substitute "request counter" mentally.
+
 Premium requests include both user-initiated conversations AND automated inline
 code completions. A session with 276 premium requests but only 8 conversation
 turns is mostly automated completions — valuing each at "8–12 min of thinking"
