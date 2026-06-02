@@ -1,6 +1,6 @@
 # Credit-Optimization Methodology
 
-> How `whatididghcp` finds where your AI credits are being burned, and what
+> How `what-i-did-copilot` finds where your AI credits are being burned, and what
 > evidence it shows you so you can make the call yourself. Every detector
 > below cites the published guidance it implements &mdash; either from
 > Anthropic, OpenAI, GitHub, or Copilot's own session metadata.
@@ -9,11 +9,11 @@
 
 ## 1. The principle
 
-`whatididghcp` is not a heuristic-only "tip generator". Every pattern it
+`what-i-did-copilot` is not a heuristic-only "tip generator". Every pattern it
 flags ties back to a public source you can read for yourself. The report
 shows:
 
-- **What was charged** &mdash; computed from measured tokens at authoritative
+- **What was charged** &mdash; estimated from measured tokens at 
   per-model rates.
 - **Where it was charged** &mdash; the session, the goal, the model, and the
   turn that produced the spike.
@@ -22,7 +22,7 @@ shows:
 
 The goal is to give you enough context to decide whether the cost was
 necessary &mdash; not to tell you the AI used "too many credits". You're the
-one with judgment about the work.
+best judge of your work.
 
 ---
 
@@ -32,7 +32,7 @@ Two layers, in this order of precedence:
 
 ### 2.1 Inline rates from Copilot itself (authoritative)
 
-VS Code Copilot Chat embeds per-model rates directly in its session
+VS Code Copilot Chat embeds rates directly in its session
 JSONL files at
 `<AppData>/Code/User/globalStorage/emptyWindowChatSessions/<uuid>.jsonl`.
 Each `inputState.selectedModel.metadata` block carries:
@@ -49,18 +49,15 @@ Each `inputState.selectedModel.metadata` block carries:
 }
 ```
 
-Units are **AI Credits per 1M tokens** (with 1 AIC = $0.01 USD). When
-these are present, `whatididghcp` uses them verbatim &mdash; the rates come
-from Copilot itself, so they're always current and they automatically
-handle new models that haven't been added to any external table yet.
+Units come from Copilot itself and should handle new models that haven't been added to any external table yet.
 See `harvest._vscode_collect_inline_pricing` and
 `report._get_model_pricing(inline=...)` for the implementation.
 
 ### 2.2 Published rate table (fallback)
 
 For Copilot CLI sessions &mdash; which don't embed inline rates &mdash; and for
-unknown models, `whatididghcp` falls back to a curated table in
-`report._MODEL_PRICING` keyed by model prefix. Source of truth:
+unknown models, it falls back to a curated table in
+`report._MODEL_PRICING` keyed by model prefix (as of Jun 1, 2026). Source of truth:
 
 - **GitHub Copilot &mdash; Models and pricing** &mdash;
   [docs.github.com/copilot/reference/copilot-billing/models-and-pricing](https://docs.github.com/copilot/reference/copilot-billing/models-and-pricing)
