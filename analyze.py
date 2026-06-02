@@ -192,8 +192,6 @@ def check_copilot_cli_health() -> tuple:
     if _CLI_HEALTH_CHECKED:
         return ("ok" if _CLI_HEALTH_OK else "broken"), "cached"
 
-    _CLI_HEALTH_CHECKED = True
-
     if os.environ.get(_DISABLE_CLI_VAR):
         return "missing", f"Disabled via {_DISABLE_CLI_VAR}."
     if os.environ.get(_CHILD_MARKER):
@@ -203,6 +201,7 @@ def check_copilot_cli_health() -> tuple:
     if not cli:
         return "missing", "Copilot CLI not found in PATH, gh extension, or VS Code bundle."
 
+    _CLI_HEALTH_CHECKED = True
     # Canary: a minimal prompt that should produce a one-key JSON object.
     canary_prompt = (
         'Reply with ONLY this exact JSON object, no markdown fences, no prose: '
