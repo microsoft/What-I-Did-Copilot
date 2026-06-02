@@ -33,8 +33,9 @@ Two layers, in this order of precedence:
 ### 2.1 Inline rates from Copilot itself (authoritative)
 
 VS Code Copilot Chat embeds rates directly in its session
-JSONL files at
-`<AppData>/Code/User/globalStorage/emptyWindowChatSessions/<uuid>.jsonl`.
+JSONL files at:
+- `<AppData>/Code/User/globalStorage/emptyWindowChatSessions/<uuid>.jsonl`
+- `<AppData>/Code/User/workspaceStorage/<hash>/chatSessions/<uuid>.jsonl`
 Each `inputState.selectedModel.metadata` block carries:
 
 ```json
