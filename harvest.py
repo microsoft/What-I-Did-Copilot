@@ -1054,8 +1054,6 @@ def _vscode_collect_inline_pricing(node, out: dict) -> None:
                     isinstance(node.get("outputCost"), (int, float))
         has_multiplier = isinstance(node.get("multiplierNumeric"), (int, float))
         if mid and (has_rates or has_multiplier):
-            entry = out.setdefault(mid, {})
-            if has_rates:
                 cache_aic = node.get("cacheCost", 0) or 0
                 entry.update({
                     "input":  node["inputCost"]  / 100.0,
