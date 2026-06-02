@@ -1049,7 +1049,7 @@ def _vscode_collect_inline_pricing(node, out: dict) -> None:
         # required to be useful. Multiplier-only blocks (e.g. GPT-5.2-Codex
         # carries ``multiplier`` without per-token costs) are recorded so
         # downstream consumers can still see the premium-request rate.
-        mid = node.get("id", "")
+        mid = _normalize_vscode_model(node.get("id", ""))
         has_rates = isinstance(node.get("inputCost"), (int, float)) and \
                     isinstance(node.get("outputCost"), (int, float))
         has_multiplier = isinstance(node.get("multiplierNumeric"), (int, float))

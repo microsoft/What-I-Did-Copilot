@@ -174,7 +174,7 @@ def _analyze_via_copilot_cli(prompt: str) -> dict | None:
 # during pre-flight (or via the first failed canary), don't pay the
 # subprocess + timeout cost on every subsequent day.
 _CLI_HEALTH_CHECKED = False
-_CLI_HEALTH_OK = False
+_CLI_HEALTH_STATUS = "broken"
 
 
 def check_copilot_cli_health() -> tuple:
@@ -188,17 +188,23 @@ def check_copilot_cli_health() -> tuple:
     Result is cached for the lifetime of the process; subsequent calls
     return the cached verdict.
     """
-    global _CLI_HEALTH_CHECKED, _CLI_HEALTH_OK
+    global _CLI_HEALTH_CHECKED, _CLI_HEALTH_STATUS
     if _CLI_HEALTH_CHECKED:
-        return ("ok" if _CLI_HEALTH_OK else "broken"), "cached"
+        return _CLI_HEALTH_STATUS, "cached"
 
     if os.environ.get(_DISABLE_CLI_VAR):
+        _CLI_HEALTH_CHECKED = True
+        _CLI_HEALTH_STATUS = "missing"
         return "missing", f"Disabled via {_DISABLE_CLI_VAR}."
     if os.environ.get(_CHILD_MARKER):
+        _CLI_HEALTH_CHECKED = True
+        _CLI_HEALTH_STATUS = "missing"
         return "missing", "Already running inside a Copilot CLI child."
 
     cli = _find_copilot_cli()
     if not cli:
+        _CLI_HEALTH_CHECKED = True
+        _CLI_HEALTH_STATUS = "missing"
         return "missing", "Copilot CLI not found in PATH, gh extension, or VS Code bundle."
 
     _CLI_HEALTH_CHECKED = True
@@ -222,18 +228,29 @@ def check_copilot_cli_health() -> tuple:
             errors="replace", timeout=45, env=env,
         )
         if r.returncode != 0:
+            _CLI_HEALTH_CHECKED = True
+            _CLI_HEALTH_STATUS = "broken"
             return "broken", f"Canary exit {r.returncode}: {r.stderr.strip()[:160]}"
         out = _extract_json(r.stdout.strip())
         parsed = json.loads(out)
         if parsed.get("ok") is True:
-            _CLI_HEALTH_OK = True
+            _CLI_HEALTH_CHECKED = True
+            _CLI_HEALTH_STATUS = "ok"
             return "ok", "Canary succeeded."
+        _CLI_HEALTH_CHECKED = True
+        _CLI_HEALTH_STATUS = "broken"
         return "broken", "Canary returned unexpected JSON."
     except subprocess.TimeoutExpired:
+        _CLI_HEALTH_CHECKED = True
+        _CLI_HEALTH_STATUS = "broken"
         return "broken", "Canary timed out after 45s."
     except json.JSONDecodeError:
+        _CLI_HEALTH_CHECKED = True
+        _CLI_HEALTH_STATUS = "broken"
         return "broken", "Canary output was not valid JSON."
     except Exception as e:
+        _CLI_HEALTH_CHECKED = True
+        _CLI_HEALTH_STATUS = "broken"
         return "broken", f"Canary failed ({type(e).__name__})."
 
 

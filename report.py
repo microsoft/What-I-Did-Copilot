@@ -1224,7 +1224,7 @@ def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -
     # for any whose project segment matches (either full path or last segment).
     last_seg = project.replace("\\", "/").split("/")[-1].lower()
     proj_lc = project.lower()
-    agg_credits = None  # keep None unless at least one entry has server-emitted credits
+    agg_credits = None
     agg_tokens_by_model: dict = {}
     agg_tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "total": 0}
     auto_flag = False
@@ -1240,8 +1240,8 @@ def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -
             continue
         seen_ids.add(id(m))
         matched_any = True
-        if m.get("ai_credits") is not None:
-            agg_credits = (agg_credits or 0) + m["ai_credits"]
+        if (credits := m.get("ai_credits")) is not None:
+            agg_credits = (agg_credits or 0) + credits
         if isinstance(m.get("tokens"), dict):
             for k in agg_tokens:
                 agg_tokens[k] += m["tokens"].get(k, 0)
@@ -2278,14 +2278,14 @@ def _ai_investment_breakdown(goals: list, sessions: list, analysis: dict,
           </td>
         </tr>"""
 
-        # ── Cross-session rollup: counts by kind across ALL sessions ────
-        # Quick "patterns I see across the whole period" line so readers
-        # don't lose the bird's-eye view when findings live inside session
-        # rows. We count every kind across every session, not just the
-        # top-5, so the rollup is informative even when most spend lives
-        # outside the top expensive sessions. Rendered as its own segment
-        # (with the standard dark banner) so it reads as a distinct
-        # cross-cutting view rather than a footer to the sessions table.
+        # ── Cross-session rollup: counts by kind across ALL sessions ──────────
+        # Quick "patterns I see across the whole period" line so readers don't
+        # lose the bird's-eye view when findings live inside session rows. We
+        # count every kind across every session, not just the top-5, so the
+        # rollup is informative even when most spend lives outside the top
+        # expensive sessions. Rendered as its own segment (with the standard dark
+        # banner) so it reads as a distinct cross-cutting view rather than a
+        # footer to the sessions table.
         from collections import Counter as _C
         kind_counts = _C(f.get("kind", "") for f in findings_all)
         n_total_sessions = max(1, len(sessions))

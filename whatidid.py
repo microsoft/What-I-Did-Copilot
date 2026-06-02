@@ -812,7 +812,7 @@ def main():
     open_cnt = analysis.get("open_session_count", 0)
     total_cnt = analysis.get("total_session_count", 0)
     if open_cnt > 0:
-        plural = "s" if open_cnt != 1 else ""
+        plural = "s" if total_cnt != 1 else ""
         print(f"  Note: {open_cnt} of {total_cnt} session{plural} did not write a clean shutdown")
         print(f"    record (still active, crashed, or killed). Output tokens and compaction")
         print(f"    costs are captured directly; non-compaction input tokens are not in the")
