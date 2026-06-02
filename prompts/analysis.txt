@@ -97,7 +97,8 @@ RESEARCH FOUNDATION:
     2. Logic code lines — .py/.ts/.go/.rs/.java/.sh only; HTML/CSS/JSON/MD excluded
     3. Read/search calls — file reads + grep/glob/search; captures investigation
     4. Tool invocations — total tool calls; captures non-coding work (image analysis, synthesis, browser)
-       Request counter serves as fallback interaction signal when turn data unavailable.
+       The request counter (legacy PRU, now superseded by AI Credits) serves as
+       fallback interaction signal when conversation turn data is unavailable.
 - Boilerplate lines (HTML/CSS/JSON/MD/YAML) correlate NEGATIVELY with effort
   (r=−0.14); logic lines r=+0.41
 
