@@ -498,6 +498,13 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False,
             tagged["date"]       = date
             all_burn_findings.append(tagged)
 
+    # Aggregate inline model pricing metadata from all sessions. Each VS Code
+    # session can carry authoritative per-model rates harvested from JSONL;
+    # later entries overwrite earlier ones so the most recent rates win.
+    inline_model_pricing: dict = {}
+    for s in sessions:
+        inline_model_pricing.update(s.get("inline_model_pricing") or {})
+
     # AI Credits aggregation (server-emitted preferred; otherwise None and
     # report.py will compute from tokens × per-model rates).
     has_server_credits = any(s.get("ai_credits") is not None for s in sessions)
@@ -665,6 +672,7 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False,
         result["open_session_count"]  = open_session_count
         result["total_session_count"] = total_session_count
         result["burn_findings"]       = all_burn_findings
+        result["inline_model_pricing"] = inline_model_pricing
         return result
 
     # Return cached result if available

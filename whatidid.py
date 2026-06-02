@@ -205,6 +205,7 @@ def _merge_analyses(day_analyses: list) -> dict:
     total_premium     = 0
     total_ai_credits  = None  # stays None unless at least one day has server credits
     total_ai_credits_by_model: dict = {}
+    inline_model_pricing: dict = {}
     plan              = ""
     auto_model        = False
     total_api_ms      = 0
@@ -264,6 +265,9 @@ def _merge_analyses(day_analyses: list) -> dict:
                 all_files.append(f)
         all_sessions.extend(sessions)
         all_projects.update(analysis.get("projects", []))
+        # Merge inline pricing; later entries overwrite earlier ones so the
+        # most recent per-model rates win across days.
+        inline_model_pricing.update(analysis.get("inline_model_pricing") or {})
         if analysis.get("analysis_method") == "heuristic":
             heuristic_dates.append(target_date)
         elif analysis.get("analysis_method") == "ai-copilot-cli":
@@ -433,6 +437,7 @@ def _merge_analyses(day_analyses: list) -> dict:
         "premium_requests": total_premium,
         "ai_credits":       total_ai_credits,
         "ai_credits_by_model": total_ai_credits_by_model,
+        "inline_model_pricing": inline_model_pricing,
         "plan":             plan,
         "auto_model_selection": auto_model,
         "total_api_ms":     total_api_ms,
