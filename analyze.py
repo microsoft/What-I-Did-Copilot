@@ -5,12 +5,22 @@ Uses the GitHub Models API (gpt-4o-mini) authenticated with the same GitHub toke
 that gh CLI already has — no additional credentials needed.
 """
 import json
+import os
 import re
 import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
+from typing import Literal
 from harvest import compute_active_minutes, compute_elapsed_minutes
+
+# Recursion marker: when we shell out to `copilot` for analysis, we set this
+# env var on the child process. If the marker is already set, we refuse to
+# re-enter to avoid an infinite (or just expensive) recursion.
+_CHILD_MARKER = "WHATIDID_COPILOT_CHILD"
+_DISABLE_CLI_VAR = "WHATIDID_DISABLE_COPILOT_CLI"
+
+AnalysisSource = Literal["api", "cli", "heuristic"]
 
 # GitHub Models API — OpenAI-compatible endpoint, authenticated with GitHub token
 API_URL = "https://models.github.ai/inference/chat/completions"
@@ -111,22 +121,41 @@ def _analyze_via_copilot_cli(prompt: str) -> dict | None:
 
     This uses the user's existing Copilot subscription — no API key needed.
     Works for VS Code users who don't have gh CLI or a GitHub token.
+
+    Prompt is sent on stdin (not via `-p`) to avoid Windows command-line
+    length limits (~32K on cmd.exe, ~8K on some shells). A recursion
+    marker is set on the child so a nested `copilot whatidid` does not
+    re-enter the CLI fallback path.
     """
+    if os.environ.get(_DISABLE_CLI_VAR):
+        return None
+    if os.environ.get(_CHILD_MARKER):
+        # We are already running inside a copilot-spawned analysis child —
+        # refuse to recurse.
+        return None
+
     cli = _find_copilot_cli()
     if not cli:
         return None
 
+    # Stdin mode: copilot reads the prompt from stdin when -p is omitted
+    # and a piped input is supplied. We keep --available-tools= empty so
+    # the analyzer doesn't try to call tools (it should just emit JSON).
     if cli == "gh-copilot":
-        cmd = ["gh", "copilot", "--", "-p", prompt, "--output-format", "text",
-               "--available-tools="]
+        cmd = ["gh", "copilot", "--", "--output-format", "text", "--available-tools="]
     else:
-        cmd = [cli, "-p", prompt, "--output-format", "text",
-               "--available-tools="]
+        cmd = [cli, "--output-format", "text", "--available-tools="]
+
+    env = os.environ.copy()
+    env[_CHILD_MARKER] = "1"
 
     try:
         print("  (Using Copilot CLI for analysis — no API key needed.)")
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=180)
+        result = subprocess.run(
+            cmd, input=prompt,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=180, env=env,
+        )
         if result.returncode != 0:
             return None
 
@@ -139,6 +168,74 @@ def _analyze_via_copilot_cli(prompt: str) -> dict | None:
     except (json.JSONDecodeError, Exception) as e:
         print(f"  WARNING: Copilot CLI analysis failed ({type(e).__name__}).")
     return None
+
+
+# Run-scoped CLI health state. Once we've established the CLI is broken
+# during pre-flight (or via the first failed canary), don't pay the
+# subprocess + timeout cost on every subsequent day.
+_CLI_HEALTH_CHECKED = False
+_CLI_HEALTH_OK = False
+
+
+def check_copilot_cli_health() -> tuple:
+    """Canary test for the Copilot CLI fallback path.
+
+    Returns (status, message) where status is:
+      "ok"      — CLI is present, accepts our flags, and returns parseable JSON
+      "missing" — CLI binary not found
+      "broken"  — CLI present but the canary failed (auth, flags, JSON parse, timeout)
+
+    Result is cached for the lifetime of the process; subsequent calls
+    return the cached verdict.
+    """
+    global _CLI_HEALTH_CHECKED, _CLI_HEALTH_OK
+    if _CLI_HEALTH_CHECKED:
+        return ("ok" if _CLI_HEALTH_OK else "broken"), "cached"
+
+    _CLI_HEALTH_CHECKED = True
+
+    if os.environ.get(_DISABLE_CLI_VAR):
+        return "missing", f"Disabled via {_DISABLE_CLI_VAR}."
+    if os.environ.get(_CHILD_MARKER):
+        return "missing", "Already running inside a Copilot CLI child."
+
+    cli = _find_copilot_cli()
+    if not cli:
+        return "missing", "Copilot CLI not found in PATH, gh extension, or VS Code bundle."
+
+    # Canary: a minimal prompt that should produce a one-key JSON object.
+    canary_prompt = (
+        'Reply with ONLY this exact JSON object, no markdown fences, no prose: '
+        '{"ok": true}'
+    )
+    if cli == "gh-copilot":
+        cmd = ["gh", "copilot", "--", "--output-format", "text", "--available-tools="]
+    else:
+        cmd = [cli, "--output-format", "text", "--available-tools="]
+
+    env = os.environ.copy()
+    env[_CHILD_MARKER] = "1"
+
+    try:
+        r = subprocess.run(
+            cmd, input=canary_prompt,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=45, env=env,
+        )
+        if r.returncode != 0:
+            return "broken", f"Canary exit {r.returncode}: {r.stderr.strip()[:160]}"
+        out = _extract_json(r.stdout.strip())
+        parsed = json.loads(out)
+        if parsed.get("ok") is True:
+            _CLI_HEALTH_OK = True
+            return "ok", "Canary succeeded."
+        return "broken", "Canary returned unexpected JSON."
+    except subprocess.TimeoutExpired:
+        return "broken", "Canary timed out after 45s."
+    except json.JSONDecodeError:
+        return "broken", "Canary output was not valid JSON."
+    except Exception as e:
+        return "broken", f"Canary failed ({type(e).__name__})."
 
 
 def check_api_health() -> tuple:
@@ -203,7 +300,11 @@ def _build_transcript(sessions: list) -> str:
                 + (f", {n_files} file(s)" if n_files else "")
             )
         if s.get("premium_requests"):
-            lines.append(f"Premium requests: {s['premium_requests']}")
+            lines.append(f"Premium requests (legacy): {s['premium_requests']}")
+        if s.get("ai_credits") is not None:
+            lines.append(f"AI credits used: {s['ai_credits']} (~${(s['ai_credits'] or 0) * 0.01:.2f})")
+        if s.get("plan"):
+            lines.append(f"Copilot plan: {s['plan']}")
 
         # Enriched quantitative signals for effort calibration
         user_msgs = [m for m in s["messages"] if m["role"] == "user"]
@@ -235,7 +336,9 @@ def _build_transcript(sessions: list) -> str:
         signals = [f"SIGNALS: {n_tools} tools ({reads} reads, {searches} searches, {edits} edits, {runs} runs)"]
         signals.append(f"  Conversation turns: {len(user_msgs)}")
         if s.get("premium_requests"):
-            signals.append(f"  Premium requests: {s['premium_requests']}")
+            signals.append(f"  Premium requests (legacy): {s['premium_requests']}")
+        if s.get("ai_credits") is not None:
+            signals.append(f"  AI credits: {s['ai_credits']} (~${(s['ai_credits'] or 0) * 0.01:.2f})")
         signals.append(f"  Files touched: {len(files_touched)}")
         logic_l = s.get("lines_logic", 0)
         bp_l = s.get("lines_boilerplate", 0)
@@ -298,7 +401,24 @@ def _prepare_prompt(sessions: list) -> str:
     return _build_analysis_prompt(transcript, domain_list, tech_list)
 
 
-def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api: bool = True) -> dict:
+def analyze_day(target_date: str, sessions: list, refresh: bool = False,
+                use_api: bool = True,
+                analysis_source: AnalysisSource | None = None) -> dict:
+    """Analyse a day's worth of Copilot sessions.
+
+    `analysis_source` (preferred) controls the fallback chain:
+      "api"       — Models API → Copilot CLI → heuristic
+      "cli"       — Copilot CLI → heuristic (skip Models API)
+      "heuristic" — heuristic only (no network, no subprocess)
+
+    `use_api` is kept for backward compatibility: False maps to "heuristic",
+    True maps to "api" unless `analysis_source` is also supplied.
+    """
+    # Resolve effective source
+    if analysis_source is None:
+        analysis_source = "api" if use_api else "heuristic"
+    if analysis_source not in ("api", "cli", "heuristic"):
+        analysis_source = "api"
     # Aggregate metrics across all sessions
     total_tokens = {
         "input":          sum(s["tokens"]["input"]          for s in sessions),
@@ -317,10 +437,60 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
             for k in ("input", "output", "cache_read", "cache_creation"):
                 total_tokens_by_model[model][k] += toks.get(k, 0)
 
+    # Aggregate per-model request count across sessions. The per-session
+    # field is canonical as ``{model: int}`` but an earlier draft of the
+    # VS Code parser used ``{model: {count: int}}`` — accept both shapes.
+    total_requests_by_model: dict = {}
+    for s in sessions:
+        for model, v in (s.get("requests_by_model") or {}).items():
+            if isinstance(v, dict):
+                count = int(v.get("count", 0))
+            else:
+                try:
+                    count = int(v)
+                except (TypeError, ValueError):
+                    count = 0
+            total_requests_by_model[model] = total_requests_by_model.get(model, 0) + count
+
     total_premium     = sum(s.get("premium_requests", 0)           for s in sessions)
     total_api_ms      = sum(s.get("total_api_ms", 0)               for s in sessions)
     total_lines_added = sum(s.get("code_changes", {}).get("linesAdded", 0)   for s in sessions)
     total_lines_removed = sum(s.get("code_changes", {}).get("linesRemoved", 0) for s in sessions)
+
+    # Session-state census: how many sessions never wrote `session.shutdown`?
+    # For those, only directly-emitted per-event signals are captured (output
+    # tokens per message + compaction tokenDetails). Non-compaction input
+    # tokens are not in the event stream and thus excluded — the report uses
+    # this count to disclose that totals are a lower bound for open sessions.
+    open_session_count = sum(1 for s in sessions if s.get("session_state") == "open")
+    total_session_count = len(sessions)
+
+    # Aggregate per-session burn findings into a single flat list, tagging
+    # each finding with its source session so the report can show context.
+    all_burn_findings: list = []
+    for s in sessions:
+        sid = s.get("session_id", "")
+        proj = s.get("project", "")
+        date = s.get("date", "")
+        for f in (s.get("burn_findings") or []):
+            tagged = dict(f)
+            tagged["session_id"] = sid
+            tagged["project"]    = proj
+            tagged["date"]       = date
+            all_burn_findings.append(tagged)
+
+    # AI Credits aggregation (server-emitted preferred; otherwise None and
+    # report.py will compute from tokens × per-model rates).
+    has_server_credits = any(s.get("ai_credits") is not None for s in sessions)
+    total_ai_credits = (sum((s.get("ai_credits") or 0) for s in sessions)
+                        if has_server_credits else None)
+    total_ai_credits_by_model: dict = {}
+    for s in sessions:
+        for model, credits in (s.get("ai_credits_by_model") or {}).items():
+            total_ai_credits_by_model[model] = total_ai_credits_by_model.get(model, 0) + credits
+    # Plan + auto-model flag: take the first non-empty / any-true value.
+    plan = next((s.get("plan") for s in sessions if s.get("plan")), "")
+    auto_model = any(s.get("auto_model_selection") for s in sessions)
 
     all_files = []
     for s in sessions:
@@ -413,6 +583,17 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
             m["iteration_depth"] = round(total_e / max(total_f, 1), 1)
             m["_total_file_edits"] = total_e
             m["_total_files_edited"] = total_f
+            # Roll up token-by-model and ai_credits so downstream code can
+            # compute per-project credits via _ai_credits_for().
+            for mdl, toks in (s.get("tokens_by_model") or {}).items():
+                bucket = m["tokens_by_model"].setdefault(mdl, {
+                    "input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "total": 0,
+                })
+                for k, v in toks.items():
+                    bucket[k] = bucket.get(k, 0) + int(v or 0)
+            if (sc := s.get("ai_credits")) is not None:
+                m["ai_credits"] = (m.get("ai_credits") or 0) + int(sc)
+            m["auto_model_selection"] = m.get("auto_model_selection") or bool(s.get("auto_model_selection"))
         else:
             _session_metrics[proj] = {
                 "tokens":            s["tokens"]["total"],
@@ -435,6 +616,11 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
                 "iteration_depth":   iter_depth,
                 "_total_file_edits": sum(edit_targets.values()),
                 "_total_files_edited": len(edit_targets),
+                "tokens_by_model":   {
+                    mdl: dict(toks) for mdl, toks in (s.get("tokens_by_model") or {}).items()
+                },
+                "ai_credits":        s.get("ai_credits"),
+                "auto_model_selection": bool(s.get("auto_model_selection")),
             }
 
     # Also index by last path component for flexible goal→project matching
@@ -446,11 +632,19 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
         result["tokens"]           = total_tokens
         result["tokens_by_model"]  = total_tokens_by_model
         result["premium_requests"] = total_premium
+        result["requests_by_model"] = total_requests_by_model
+        result["ai_credits"]       = total_ai_credits
+        result["ai_credits_by_model"] = total_ai_credits_by_model
+        result["plan"]             = plan
+        result["auto_model_selection"] = auto_model
         result["total_api_ms"]     = total_api_ms
         result["lines_added"]      = total_lines_added
         result["lines_removed"]    = total_lines_removed
         result["files_modified"]   = all_files
         result["session_metrics"]  = _session_metrics
+        result["open_session_count"]  = open_session_count
+        result["total_session_count"] = total_session_count
+        result["burn_findings"]       = all_burn_findings
         return result
 
     # Return cached result if available
@@ -491,23 +685,42 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False, use_api
             pass
         return result
 
-    if not use_api:
+    if analysis_source == "heuristic":
         # Respect strict non-AI / non-network mode and use heuristics only.
-        return _attach_metrics(_fallback_analysis(target_date, sessions))
+        result = _fallback_analysis(target_date, sessions)
+        _attach_metrics(result)
+        # Persist heuristic results too so subsequent runs don't repeatedly
+        # incur the (small) cost; --refresh always re-runs.
+        try:
+            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            result["sessions_count"] = len(sessions)
+            result["projects"] = list(dict.fromkeys(s["project"] for s in sessions))
+            cache_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return result
 
-    token = _get_github_token()
-    if not token:
-        # Try copilot CLI fallback (uses Copilot subscription, no API key needed)
-        print("  (No GitHub token — trying Copilot CLI for analysis...)")
-        prompt = _prepare_prompt(sessions)
+    prompt = _prepare_prompt(sessions)
+
+    # CLI-first path: explicit caller request, OR API path with no token.
+    if analysis_source == "cli":
         cli_result = _analyze_via_copilot_cli(prompt)
         if cli_result:
             return _finalize_and_cache(cli_result, "ai-copilot-cli")
-
-        print("  (Copilot CLI unavailable — using heuristic analysis. Run `gh auth login` to enable semantic analysis.)")
+        print("  Copilot CLI fallback failed — using heuristic.")
         return _attach_metrics(_fallback_analysis(target_date, sessions))
 
-    prompt = _prepare_prompt(sessions)
+    # analysis_source == "api"
+    token = _get_github_token()
+    if not token:
+        # No token = Models API impossible. Try CLI before heuristic.
+        print("  (No GitHub token — trying Copilot CLI for analysis...)")
+        cli_result = _analyze_via_copilot_cli(prompt)
+        if cli_result:
+            return _finalize_and_cache(cli_result, "ai-copilot-cli")
+        print("  (Copilot CLI unavailable — using heuristic analysis. "
+              "Run `gh auth login` to enable semantic analysis.)")
+        return _attach_metrics(_fallback_analysis(target_date, sessions))
 
     payload = json.dumps({
         "model":       MODEL,

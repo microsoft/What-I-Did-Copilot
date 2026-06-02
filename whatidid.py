@@ -200,7 +200,12 @@ def _merge_analyses(day_analyses: list) -> dict:
     all_sessions = []
     total_tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "total": 0}
     total_tokens_by_model = {}  # {model_name: {input, output, cache_read, cache_creation}}
+    total_requests_by_model: dict = {}  # {model_name: count}
     total_premium     = 0
+    total_ai_credits  = None  # stays None unless at least one day has server credits
+    total_ai_credits_by_model: dict = {}
+    plan              = ""
+    auto_model        = False
     total_api_ms      = 0
     total_lines_added = 0
     total_lines_removed = 0
@@ -208,6 +213,10 @@ def _merge_analyses(day_analyses: list) -> dict:
     all_projects = set()
     merged_session_metrics = {}
     heuristic_dates = []
+    cli_dates = []
+    open_session_count = 0
+    total_session_count = 0
+    all_burn_findings: list = []
 
     for target_date, analysis, sessions in day_analyses:
         for g in analysis.get("goals", []):
@@ -220,10 +229,34 @@ def _merge_analyses(day_analyses: list) -> dict:
                 total_tokens_by_model[model] = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
             for k in ("input", "output", "cache_read", "cache_creation"):
                 total_tokens_by_model[model][k] += toks.get(k, 0)
+        # Per-model request counts. Tolerate {model: int} and {model: {count: int}}.
+        for model, v in (analysis.get("requests_by_model") or {}).items():
+            if isinstance(v, dict):
+                cnt = int(v.get("count", 0))
+            else:
+                try:
+                    cnt = int(v)
+                except (TypeError, ValueError):
+                    cnt = 0
+            total_requests_by_model[model] = total_requests_by_model.get(model, 0) + cnt
         total_premium       += analysis.get("premium_requests", 0)
+        if analysis.get("ai_credits") is not None:
+            total_ai_credits = (total_ai_credits or 0) + analysis["ai_credits"]
+        for model, credits in (analysis.get("ai_credits_by_model") or {}).items():
+            total_ai_credits_by_model[model] = total_ai_credits_by_model.get(model, 0) + credits
+        if analysis.get("plan") and not plan:
+            plan = analysis["plan"]
+        if analysis.get("auto_model_selection"):
+            auto_model = True
         total_api_ms        += analysis.get("total_api_ms", 0)
         total_lines_added   += analysis.get("lines_added", 0)
         total_lines_removed += analysis.get("lines_removed", 0)
+        open_session_count  += analysis.get("open_session_count", 0)
+        total_session_count += analysis.get("total_session_count", 0)
+        # Each per-day analysis carries already-tagged findings (project,
+        # session_id, date). De-dup of the same session across days is not
+        # needed at this layer because burn analysis is scoped per-date.
+        all_burn_findings.extend(analysis.get("burn_findings") or [])
         for f in analysis.get("files_modified", []):
             if f not in all_files:
                 all_files.append(f)
@@ -231,6 +264,8 @@ def _merge_analyses(day_analyses: list) -> dict:
         all_projects.update(analysis.get("projects", []))
         if analysis.get("analysis_method") == "heuristic":
             heuristic_dates.append(target_date)
+        elif analysis.get("analysis_method") == "ai-copilot-cli":
+            cli_dates.append(target_date)
         # Merge per-project session metrics across days (keyed by date|project)
         for proj, metrics in analysis.get("session_metrics", {}).items():
             dated_key = target_date + "|" + proj
@@ -292,7 +327,19 @@ def _merge_analyses(day_analyses: list) -> dict:
                    "wall_clock_minutes": 0, "sessions": 0,
                    "conversation_turns": 0, "substantive_turns": 0,
                    "reads": 0, "edits": 0, "runs": 0, "searches": 0,
-                   "files_touched_count": 0, "_total_file_edits": 0, "_total_files_edited": 0}
+                   "files_touched_count": 0, "_total_file_edits": 0, "_total_files_edited": 0,
+                   # Credit-bearing fields — must be aggregated alongside other
+                   # metrics so per-goal credit attribution works in multi-day
+                   # reports. Without these, the multi-day overwrite at the end
+                   # of this loop strips credit signal from the entry that the
+                   # report's _resolve_metrics looks up.
+                   #
+                   # ai_credits starts as None (not 0!) because
+                   # `_ai_credits_for()` returns the server value when it is
+                   # not None, bypassing the token×rate fallback. Setting an
+                   # initial 0 here would force every multi-day project to
+                   # show 0 credits when no day had a server-emitted value.
+                   "tokens_by_model": {}, "ai_credits": None, "auto_model_selection": False}
             per_day_formula_total = 0.0
             per_day_turns_h = 0.0
             per_day_lines_h = 0.0
@@ -307,6 +354,26 @@ def _merge_analyses(day_analyses: list) -> dict:
                             for k in agg:
                                 if k == "files_touched_count":
                                     agg[k] = max(agg[k], m.get(k, 0))
+                                elif k == "tokens_by_model":
+                                    for mdl, toks in (m.get("tokens_by_model") or {}).items():
+                                        if mdl not in agg["tokens_by_model"]:
+                                            agg["tokens_by_model"][mdl] = {
+                                                "input": 0, "output": 0,
+                                                "cache_read": 0, "cache_creation": 0}
+                                        for tk in ("input", "output", "cache_read", "cache_creation"):
+                                            agg["tokens_by_model"][mdl][tk] += toks.get(tk, 0)
+                                elif k == "auto_model_selection":
+                                    if m.get("auto_model_selection"):
+                                        agg["auto_model_selection"] = True
+                                elif k == "ai_credits":
+                                    # Only sum when at least one day had real
+                                    # server-emitted credits. Otherwise leave
+                                    # ai_credits as None so the token×price
+                                    # fallback in _ai_credits_for still works.
+                                    if m.get("ai_credits") is not None:
+                                        if agg["ai_credits"] is None:
+                                            agg["ai_credits"] = 0
+                                        agg["ai_credits"] += m["ai_credits"]
                                 else:
                                     agg[k] += m.get(k, 0)
                             cfe = _cfe(m)
@@ -359,16 +426,25 @@ def _merge_analyses(day_analyses: list) -> dict:
         "goals":            all_goals,
         "tokens":           total_tokens,
         "tokens_by_model":  total_tokens_by_model,
+        "requests_by_model": total_requests_by_model,
         "premium_requests": total_premium,
+        "ai_credits":       total_ai_credits,
+        "ai_credits_by_model": total_ai_credits_by_model,
+        "plan":             plan,
+        "auto_model_selection": auto_model,
         "total_api_ms":     total_api_ms,
         "lines_added":      total_lines_added,
         "lines_removed":    total_lines_removed,
         "files_modified":   all_files,
         "session_metrics":  merged_session_metrics,
         "sessions_count":   len(all_sessions),
+        "open_session_count":  open_session_count,
+        "total_session_count": total_session_count,
+        "burn_findings":    all_burn_findings,
         "projects":         list(all_projects),
         "active_dates":     active_dates,
         "heuristic_dates":  heuristic_dates,
+        "cli_dates":        cli_dates,
         "analysis_method":  "heuristic" if heuristic_dates else "ai",
     }
 
@@ -389,7 +465,14 @@ def _print_summary(analysis: dict):
             print(f"    - {t.get('title', '')[:55]}  ({t.get('human_hours', 0):.1f}h | {skills})")
 
     print(f"\n  Total human effort estimate: {total_h:.1f} hours")
-    print(f"  Premium requests:            {analysis.get('premium_requests', 0)}")
+    # AI Credits (computed from tokens × per-model rates if not server-emitted)
+    from report import _ai_credits_for, USD_PER_CREDIT
+    credits = _ai_credits_for(analysis)
+    plan_tag = f" [{analysis.get('plan')}]" if analysis.get("plan") else ""
+    auto_tag = " (auto-model −10%)" if analysis.get("auto_model_selection") else ""
+    print(f"  AI credits used:             {credits:,} (~${credits * USD_PER_CREDIT:.2f}){plan_tag}{auto_tag}")
+    if analysis.get("premium_requests"):
+        print(f"  Premium requests (legacy):   {analysis['premium_requests']}")
     lines_added   = analysis.get("lines_added", 0)
     lines_removed = analysis.get("lines_removed", 0)
     if lines_added or lines_removed:
@@ -556,11 +639,16 @@ def main():
     print(f"\nwhatididghcp -- {report_label}")
     print("-" * 40)
 
-    # Pre-flight: check if AI analysis API is reachable
+    # Pre-flight: check if AI analysis is reachable.
+    # Chain: GitHub Models API → Copilot CLI → heuristic. We only force
+    # heuristic if BOTH options are unavailable.
     import time
+    from analyze import check_copilot_cli_health
     MAX_RETRIES = 5
     RETRY_WAIT  = 60  # 1 minute
     api_ok = False
+    cli_ok = False
+    analysis_source = "api"  # default; downgraded below if api unhealthy
     print("  Checking AI analysis API... ", end="", flush=True)
     status, msg = check_api_health()
     if status == "ok":
@@ -568,45 +656,69 @@ def main():
         api_ok = True
     elif status == "auth":
         print(f"[FAIL] {msg}")
-        print(f"\n  WARNING: This is an authentication issue -- retrying won't help.")
-        print(f"  Fix: run `gh auth login` in your terminal, then re-run.\n")
-        print(f"  Proceeding with heuristic fallback.\n")
+        print(f"\n  Authentication issue with the GitHub Models API — retrying won't help.")
+        print(f"  Fix: run `gh auth login` to refresh your token.")
+        # Try CLI as silent fallback
+        print(f"  Trying Copilot CLI as a fallback... ", end="", flush=True)
+        cli_status, cli_msg = check_copilot_cli_health()
+        if cli_status == "ok":
+            print("[OK] using Copilot CLI for analysis.")
+            cli_ok = True
+            analysis_source = "cli"
+        else:
+            print(f"[FAIL] {cli_msg}")
+            print(f"  Proceeding with heuristic fallback.\n")
+            analysis_source = "heuristic"
     else:
         print(f"[FAIL] {msg}\n")
-        print(f"  The AI analysis API is currently unreachable.")
-        print(f"  Without it, estimates will use a less accurate heuristic approach.\n")
-        print(f"  Options:")
-        print(f"    1. Retry automatically (up to {MAX_RETRIES}× at 1-min intervals)")
-        print(f"    2. Continue now with heuristic fallback\n")
-        try:
-            choice = input("  Enter choice [1]: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            choice = "2"
-
-        if choice == "2":
-            print("\n  Proceeding with heuristic fallback.\n")
+        # Try CLI as silent fallback before prompting the user
+        print(f"  Trying Copilot CLI as a fallback... ", end="", flush=True)
+        cli_status, cli_msg = check_copilot_cli_health()
+        if cli_status == "ok":
+            print("[OK] using Copilot CLI for analysis.")
+            cli_ok = True
+            analysis_source = "cli"
         else:
-            for attempt in range(1, MAX_RETRIES + 1):
-                print(f"\n  Retry {attempt}/{MAX_RETRIES} — waiting {RETRY_WAIT}s... ", end="", flush=True)
-                try:
-                    time.sleep(RETRY_WAIT)
-                except KeyboardInterrupt:
-                    print("\n  Skipped. Proceeding with heuristic fallback.\n")
-                    break
-                status, msg = check_api_health()
-                if status == "ok":
-                    print("[OK] connected!")
-                    api_ok = True
-                    break
-                elif status == "auth":
-                    print(f"[FAIL] {msg}")
-                    print(f"  Authentication issue detected. Run `gh auth login` to fix.\n")
-                    break
-                else:
-                    print(f"[FAIL] {msg}")
+            print(f"[FAIL] {cli_msg}")
+            print(f"  The AI analysis API is currently unreachable and the Copilot CLI fallback is unavailable.")
+            print(f"  Without either, estimates will use a less accurate heuristic approach.\n")
+            print(f"  Options:")
+            print(f"    1. Retry the API automatically (up to {MAX_RETRIES}× at 1-min intervals)")
+            print(f"    2. Continue now with heuristic fallback\n")
+            try:
+                choice = input("  Enter choice [1]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                choice = "2"
+
+            if choice == "2":
+                print("\n  Proceeding with heuristic fallback.\n")
+                analysis_source = "heuristic"
             else:
-                print(f"\n  WARNING: API unreachable after {MAX_RETRIES} attempts.")
-                print(f"  Proceeding with heuristic fallback.\n")
+                for attempt in range(1, MAX_RETRIES + 1):
+                    print(f"\n  Retry {attempt}/{MAX_RETRIES} — waiting {RETRY_WAIT}s... ", end="", flush=True)
+                    try:
+                        time.sleep(RETRY_WAIT)
+                    except KeyboardInterrupt:
+                        print("\n  Skipped. Proceeding with heuristic fallback.\n")
+                        analysis_source = "heuristic"
+                        break
+                    status, msg = check_api_health()
+                    if status == "ok":
+                        print("[OK] connected!")
+                        api_ok = True
+                        analysis_source = "api"
+                        break
+                    elif status == "auth":
+                        print(f"[FAIL] {msg}")
+                        print(f"  Authentication issue detected. Run `gh auth login` to fix.\n")
+                        analysis_source = "heuristic"
+                        break
+                    else:
+                        print(f"[FAIL] {msg}")
+                else:
+                    print(f"\n  WARNING: API unreachable after {MAX_RETRIES} attempts.")
+                    print(f"  Proceeding with heuristic fallback.\n")
+                    analysis_source = "heuristic"
 
     day_analyses = []
     all_sessions = []
@@ -616,8 +728,14 @@ def main():
         if not sessions:
             continue
         premium = sum(s.get("premium_requests", 0) for s in sessions)
-        print(f"  {d}: {len(sessions)} session(s), {premium} premium requests")
-        analysis = analyze_day(d, sessions, refresh=args.refresh, use_api=api_ok)
+        # Compute per-day AI credit total from tokens (server credits aren't
+        # always present yet; this matches what the report uses).
+        from report import _resolve_market_cost as _rmc, _credits as _cred
+        day_credits = sum(_cred(_rmc(s)) for s in sessions)
+        leg = f", {premium} legacy reqs" if premium else ""
+        print(f"  {d}: {len(sessions)} session(s), {day_credits:,} AI credits{leg}")
+        analysis = analyze_day(d, sessions, refresh=args.refresh,
+                               analysis_source=analysis_source)
         day_analyses.append((d, analysis, sessions))
         all_sessions.extend(sessions)
 
@@ -649,12 +767,19 @@ def main():
             print("  To unlock: delete the cache file(s) in cache/ and re-run.")
 
     heuristic_dates = analysis.get("heuristic_dates", [])
+    cli_dates = analysis.get("cli_dates", [])
+    total = len(analysis.get("active_dates", []))
+    if cli_dates:
+        n = len(cli_dates)
+        print(f"\n  NOTE: {n}/{total} day(s) used the Copilot CLI fallback "
+              f"(Models API was unavailable).")
+        print(f"  CLI results are full AI analysis — no quality degradation.")
     if heuristic_dates:
         n = len(heuristic_dates)
-        total = len(analysis.get("active_dates", []))
-        print(f"\n  WARNING: {n}/{total} day(s) used heuristic fallback (API unavailable).")
+        print(f"\n  WARNING: {n}/{total} day(s) used heuristic fallback "
+              f"(neither Models API nor Copilot CLI was available).")
         print(f"  Estimates for those days are approximate and likely inflated.")
-        print(f"  Re-run with --refresh when the GitHub Models API is available for accurate results.")
+        print(f"  Re-run with --refresh when AI analysis is available for accurate results.")
 
     from report import generate_html
     html = generate_html(report_label, analysis, all_sessions, max_width=960)
@@ -680,9 +805,18 @@ def main():
             print(" sent." if ok else " failed.")
 
     print("\nDone.")
-    if today in [d for d in dates]:
-        print("  Note: Active sessions (still open) may show incomplete metrics.")
-        print("    Close your Copilot session and re-run for full code/token data.")
+    burn_count = len(analysis.get("burn_findings") or [])
+    if burn_count > 0:
+        print(f"  See 'Where Your Credits Went' in the HTML report for {burn_count} observed")
+        print(f"    cost-saving opportunities ranked by impact.")
+    open_cnt = analysis.get("open_session_count", 0)
+    total_cnt = analysis.get("total_session_count", 0)
+    if open_cnt > 0:
+        plural = "s" if open_cnt != 1 else ""
+        print(f"  Note: {open_cnt} of {total_cnt} session{plural} did not write a clean shutdown")
+        print(f"    record (still active, crashed, or killed). Output tokens and compaction")
+        print(f"    costs are captured directly; non-compaction input tokens are not in the")
+        print(f"    event stream for those sessions, so credit totals are a lower bound.")
     print()
 
 
