@@ -1597,7 +1597,21 @@ def compute_active_time_quality(sessions: list) -> dict:
         for t in user_turns:
             mins = t["minutes"]
             if t["needs_handholding"]:
-                modes["Course-correcting"] += mins
+                # Learning queries can superficially trip the hand-holding
+                # patterns — e.g. "I don't understand how X works" matches
+                # the broad "don.t" rule, and "what's wrong with my mental
+                # model" matches the error vocabulary. When the message
+                # *also* carries a Learning intent, the primary goal is
+                # knowledge transfer and routing it to Course-correcting
+                # would understate genuine learning time. Same logic for
+                # Designing — "I don't like this layout, help me redesign"
+                # is a design question, not an AI correction.
+                if "Learning" in t["intents"]:
+                    modes["Learning"] += mins
+                elif "Designing" in t["intents"]:
+                    modes["Designing"] += mins
+                else:
+                    modes["Course-correcting"] += mins
                 continue
             # Trivial turns → grunt work
             if t["is_trivial"]:

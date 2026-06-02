@@ -17,13 +17,18 @@
 [modes]
 # mode_name | intent_match | description
 # First matching rule wins. Course-correcting is checked before these rules.
+# Learning BEFORE Researching — "how do I X" / "help me understand" / "what's
+# the best way" type queries match both Learning and Researching intents,
+# but they are fundamentally knowledge-acquisition questions and should
+# count as Learning. Researching stays for fact-finding (cost, limits,
+# what options exist, compare A vs B).
 # Refining BEFORE Building — a message with both Iterating+Building intents
 # is refinement (e.g. "also add X" matches both patterns).
 Designing           | Designing,Planning      | Design, strategy, architecture
 Analyzing           | Analyzing               | Data analysis, metrics, interpretation
 Reviewing           | Reviewing               | Code review, auditing, feedback
-Researching         | Researching,Investigating,Navigating | Exploring options, investigating
 Learning            | Learning                | Understanding concepts, knowledge transfer
+Researching         | Researching,Investigating,Navigating | Exploring options, investigating
 Refining            | Iterating               | Iterating, polishing, improving
 Building            | Building                | Writing code, generating files, running commands
 Delegating          | Shipping,Configuring    | Git ops, config, installs, routine tasks

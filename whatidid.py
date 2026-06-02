@@ -807,8 +807,8 @@ def main():
     print("\nDone.")
     burn_count = len(analysis.get("burn_findings") or [])
     if burn_count > 0:
-        print(f"  See 'Where Your Credits Went' in the HTML report for {burn_count} observed")
-        print(f"    cost-saving opportunities ranked by impact.")
+        print(f"  Expand any of the top expensive sessions in the HTML report to see")
+        print(f"    {burn_count} observed cost-saving opportunities tied to where they occurred.")
     open_cnt = analysis.get("open_session_count", 0)
     total_cnt = analysis.get("total_session_count", 0)
     if open_cnt > 0:

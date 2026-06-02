@@ -808,7 +808,30 @@ def _work_pattern(sessions: list) -> str:
 
 
 def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str:
-    """Section: 'How I Collaborated' — card grid showing how Copilot contributed."""
+    """Section: 'How I Collaborated' — SVG donut chart with adjacent labels.
+
+    A donut chart shows how active collaboration time split across the
+    work modes (Designing / Analyzing / Reviewing / Learning /
+    Researching / Refining / Building / Course-correcting / Delegating).
+    Labels sit directly next to each slice, connected by short leader
+    lines, so the eye doesn't have to bounce to a legend to decode
+    colors.
+
+    Implementation notes:
+      * Donut uses one ``<circle>`` per slice with ``stroke-dasharray``
+        and ``stroke-dashoffset`` for clean, scalable rendering. All
+        slices are rotated -90&deg; so 0% starts at 12 o'clock.
+      * Labels are positioned radially around the donut, then split
+        into left/right groups and collision-resolved vertically so
+        adjacent labels don't overlap.
+      * Each slice has a ``<title>`` for hover tooltips.
+      * Each label shows ``mode`` in bold, then ``%`` colored to match
+        its slice, then minutes/hours in a smaller muted line below.
+      * SVG renders in modern browsers, Gmail web, Apple Mail and
+        Outlook 365 web. Outlook desktop strips SVG; in that case
+        labels collapse but tooltips/raw text remain.
+    """
+    import math
     from harvest import compute_active_time_quality, _QUALITY_COLORS
 
     if project_label_map is None:
@@ -819,46 +842,22 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
     if total < 1:
         return ""
 
-    MODE_META = {
-        "Designing":         {"icon": "&#127912;", "desc": "Design, strategy, architecture",       "high_value": True},
-        "Analyzing":         {"icon": "&#128202;", "desc": "Data analysis, metrics, interpretation", "high_value": True},
-        "Reviewing":         {"icon": "&#128269;", "desc": "Code review, auditing, feedback",       "high_value": True},
-        "Researching":       {"icon": "&#128300;", "desc": "Exploring options, investigating",      "high_value": True},
-        "Learning":          {"icon": "&#127891;", "desc": "Understanding concepts, knowledge transfer", "high_value": True},
-        "Building":          {"icon": "&#128679;", "desc": "Writing code, generating files",        "high_value": True},
-        "Refining":          {"icon": "&#128260;", "desc": "Iterating, polishing, improving",       "high_value": True},
-        "Course-correcting": {"icon": "&#128295;", "desc": "Errors, retries, course-correcting AI", "high_value": False},
-        "Delegating":        {"icon": "&#9889;",   "desc": "Git ops, config, installs, routine",    "high_value": False},
-    }
+    HIGH_VALUE = {"Designing", "Analyzing", "Reviewing",
+                  "Researching", "Learning", "Building", "Refining"}
 
     sorted_modes = sorted(modes.items(), key=lambda x: -x[1])
+    visible = [(m, mins) for m, mins in sorted_modes if mins >= 0.1]
 
-    # Narrative stats — high-value vs low-value based on mode metadata.
-    # Unknown modes default to low-value so unexpected labels do not silently
-    # inflate the high-value percentage.
-    low_value_mins = sum(
-        mins for mode, mins in sorted_modes
-        if not MODE_META.get(mode, {}).get("high_value", False)
-    )
-    high_value_raw = (total - low_value_mins) / total * 100
-    course_raw = modes.get("Course-correcting", 0) / total * 100
-    delegating_raw = modes.get("Delegating", 0) / total * 100
-    high_value_pct = max(0, min(100, round(high_value_raw)))
-    course_pct = round(course_raw)
-    delegating_pct = round(delegating_raw)
+    # Narrative stats.
+    low_value_mins = sum(mins for m, mins in sorted_modes if m not in HIGH_VALUE)
+    high_value_pct = max(0, min(100, round((total - low_value_mins) / total * 100)))
+    course_pct = round(modes.get("Course-correcting", 0) / total * 100)
+    delegating_pct = round(modes.get("Delegating", 0) / total * 100)
     total_str = f"{total:.0f}m" if total < 60 else f"{total / 60:.1f}h"
-    n_modes = len([m for m in sorted_modes if m[1] >= 0.1])
+    n_modes = len(visible)
 
-    # Headline insight — list all high-value mode names from MODE_META so the
-    # copy stays consistent as modes are added or renamed. Sort alphabetically
-    # for a stable, readable order across runs.
-    hv_names = sorted(m.lower() for m, meta in MODE_META.items() if meta.get("high_value"))
-    if len(hv_names) > 1:
-        hv_list = ", ".join(hv_names[:-1]) + ", and " + hv_names[-1]
-    elif hv_names:
-        hv_list = hv_names[0]
-    else:
-        hv_list = "various activities"
+    hv_names = sorted(m.lower() for m in HIGH_VALUE)
+    hv_list = ", ".join(hv_names[:-1]) + ", and " + hv_names[-1] if len(hv_names) > 1 else hv_names[0]
     headline = (f"{high_value_pct}% of your collaboration was high-value work "
                 f"&mdash; {hv_list}.")
     sub_parts = []
@@ -868,48 +867,157 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
         sub_parts.append(f"{course_pct}% was spent course-correcting AI output")
     subtitle = " &middot; ".join(sub_parts) if sub_parts else ""
 
-    # Card grid — build explicit <tr> rows to avoid mismatched nesting.
-    visible = [(mode, mins) for mode, mins in sorted_modes if mins >= 0.1]
-    grid_rows = []
-    for pair_start in range(0, len(visible), 2):
-        pair = visible[pair_start:pair_start + 2]
-        cells = ""
-        for mode, mins in pair:
-            pct = mins / total * 100
-            meta = MODE_META.get(mode, {"icon": "", "desc": ""})
-            color = _QUALITY_COLORS.get(mode, C["muted"])
-            mins_str = f"{mins:.0f}m" if mins < 60 else f"{mins / 60:.1f}h"
-            bar_width = max(pct, 4)
-            cells += f"""
-          <td style="padding:5px;width:50%;vertical-align:top">
-            <table width="100%" cellpadding="0" cellspacing="0"
-                   style="border:1px solid {C['border']};border-left:4px solid {color};
-                          border-radius:6px;overflow:hidden">
-              <tr>
-                <td style="padding:10px 12px">
-                  <div style="display:flex;align-items:baseline;margin-bottom:6px">
-                    <span style="font-size:18px;margin-right:6px">{meta['icon']}</span>
-                    <span style="font-size:12px;font-weight:700;color:{C['text']}">{mode}</span>
-                    <span style="font-size:16px;font-weight:800;color:{color};margin-left:auto">
-                      {pct:.0f}%</span>
-                  </div>
-                  <div style="background:{C['bg']};border-radius:3px;height:8px;margin-bottom:6px;
-                              overflow:hidden">
-                    <div style="width:{bar_width:.0f}%;background:{color};height:100%;
-                                border-radius:3px"></div>
-                  </div>
-                  <div style="font-size:11px;color:{C['muted']};line-height:1.3">
-                    {meta['desc']} &middot; <strong style="color:{C['text']}">{mins_str}</strong></div>
-                </td>
-              </tr>
-            </table>
-          </td>"""
-        # Pad last row if it has only one card
-        if len(pair) == 1:
-            cells += '<td style="padding:5px;width:50%"></td>'
-        grid_rows.append(f"<tr>{cells}</tr>")
+    # ── SVG donut chart with adjacent labels ─────────────────────────────
+    SIZE_W = 540
+    SIZE_H = 300
+    CX = SIZE_W // 2             # 270
+    CY = SIZE_H // 2             # 150
+    R = 64                       # stroke centreline radius
+    SW = 28                      # stroke width (donut thickness)
+    CIRC = 2 * math.pi * R       # circumference
+    GAP = 1.5                    # gap between slices (in path units)
 
-    grid_html = "\n          ".join(grid_rows)
+    # Background track to mask rounding-error gaps with neutral grey.
+    slices_svg = (
+        f'<circle cx="{CX}" cy="{CY}" r="{R}" fill="none" '
+        f'stroke="{C["border"]}" stroke-width="{SW}" opacity="0.4"/>'
+    )
+
+    # Build slices and collect per-slice geometry for label placement.
+    label_data = []
+    cumulative = 0.0
+    for mode, mins in visible:
+        pct = mins / total
+        seg_len = pct * CIRC
+        visible_len = max(0.5, seg_len - GAP)
+        color = _QUALITY_COLORS.get(mode, C["muted"])
+        mins_str = f"{mins:.0f}m" if mins < 60 else f"{mins / 60:.1f}h"
+        pct_str = f"{pct * 100:.0f}%"
+        tooltip = f"{mode} \u2014 {pct_str} \u2014 {mins_str}"
+        slices_svg += (
+            f'<circle cx="{CX}" cy="{CY}" r="{R}" fill="none" '
+            f'stroke="{color}" stroke-width="{SW}" '
+            f'stroke-dasharray="{visible_len:.2f} {CIRC - visible_len:.2f}" '
+            f'stroke-dashoffset="{-cumulative:.2f}" '
+            f'transform="rotate(-90 {CX} {CY})">'
+            f'<title>{tooltip}</title>'
+            f'</circle>'
+        )
+
+        # Midpoint angle of this slice. ``phi`` is in standard math
+        # coords (0 = right, +y down because SVG y increases downward).
+        # We started at 12 o'clock and wrap clockwise, so:
+        mid_frac = (cumulative + seg_len / 2) / CIRC
+        phi = math.radians(mid_frac * 360 - 90)
+        slice_outer_r = R + SW / 2
+        # Initial anchor where leader exits the slice edge.
+        p1_x = CX + slice_outer_r * math.cos(phi)
+        p1_y = CY + slice_outer_r * math.sin(phi)
+        # Initial label y at radial extension (collision-resolved later).
+        init_y = CY + (slice_outer_r + 14) * math.sin(phi)
+        side = "right" if math.cos(phi) >= 0 else "left"
+        label_data.append({
+            "mode": mode, "pct": pct, "mins": mins,
+            "pct_str": pct_str, "mins_str": mins_str,
+            "color": color, "p1": (p1_x, p1_y),
+            "phi": phi, "side": side, "y": init_y,
+        })
+        cumulative += seg_len
+
+    # ── Resolve vertical collisions on each side ─────────────────────────
+    MIN_GAP = 28               # two-line label needs ~28 px
+    TOP_MARGIN = 16
+    BOTTOM_MARGIN = SIZE_H - 16
+
+    for side in ("left", "right"):
+        group = sorted([l for l in label_data if l["side"] == side],
+                       key=lambda d: d["y"])
+        # Forward pass: push down to maintain min gap.
+        for i in range(1, len(group)):
+            min_y = group[i - 1]["y"] + MIN_GAP
+            if group[i]["y"] < min_y:
+                group[i]["y"] = min_y
+        # If the last label overflows the bottom, shift the whole group
+        # up but never push the first above TOP_MARGIN.
+        if group and group[-1]["y"] > BOTTOM_MARGIN:
+            shift = group[-1]["y"] - BOTTOM_MARGIN
+            for d in group:
+                d["y"] = max(TOP_MARGIN, d["y"] - shift)
+        # Backward pass: same forward logic in reverse to maintain gap
+        # after the top-clamp from the previous step.
+        for i in range(len(group) - 2, -1, -1):
+            max_y = group[i + 1]["y"] - MIN_GAP
+            if group[i]["y"] > max_y:
+                group[i]["y"] = max_y
+        # Final top-clamp
+        if group and group[0]["y"] < TOP_MARGIN:
+            for d in group:
+                d["y"] = max(d["y"], TOP_MARGIN)
+
+    # ── Render leader lines + labels ─────────────────────────────────────
+    LABEL_X_LEFT = 10
+    LABEL_X_RIGHT = SIZE_W - 10
+    leaders_svg = ""
+    text_svg = ""
+    for d in label_data:
+        p1x, p1y = d["p1"]
+        side = d["side"]
+        # Bend point: short radial extension just outside the slice,
+        # then horizontal to the label x position.
+        bend_x = CX + (R + SW / 2 + 10) * math.cos(d["phi"])
+        # Constrain bend so the horizontal segment isn't backwards.
+        if side == "right":
+            bend_x = max(bend_x, p1x + 6)
+            label_x = LABEL_X_RIGHT
+            stub_x = label_x - 4
+            anchor = "end"
+        else:
+            bend_x = min(bend_x, p1x - 6)
+            label_x = LABEL_X_LEFT
+            stub_x = label_x + 4
+            anchor = "start"
+        leaders_svg += (
+            f'<polyline points="{p1x:.1f},{p1y:.1f} '
+            f'{bend_x:.1f},{d["y"]:.1f} {stub_x:.1f},{d["y"]:.1f}" '
+            f'fill="none" stroke="{C["border"]}" stroke-width="1"/>'
+        )
+        # Two-line label: name + colored % on top, minutes muted below.
+        text_svg += (
+            f'<text x="{label_x}" y="{d["y"] - 1}" text-anchor="{anchor}" '
+            f'font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" '
+            f'font-size="11" font-weight="700" fill="{C["text"]}">'
+            f'{d["mode"]} '
+            f'<tspan font-weight="700" fill="{d["color"]}">{d["pct_str"]}</tspan>'
+            f'</text>'
+            f'<text x="{label_x}" y="{d["y"] + 12}" text-anchor="{anchor}" '
+            f'font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" '
+            f'font-size="10" fill="{C["muted"]}">{d["mins_str"]}</text>'
+        )
+
+    # Centre labels — total active time + "ACTIVE" subtitle.
+    center_svg = (
+        f'<text x="{CX}" y="{CY - 2}" text-anchor="middle" '
+        f'font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" '
+        f'font-size="24" font-weight="700" fill="{C["text"]}">{total_str}</text>'
+        f'<text x="{CX}" y="{CY + 18}" text-anchor="middle" '
+        f'font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" '
+        f'font-size="9" letter-spacing="1.5" fill="{C["muted"]}">ACTIVE</text>'
+    )
+
+    donut_svg = (
+        f'<svg width="100%" viewBox="0 0 {SIZE_W} {SIZE_H}" '
+        f'preserveAspectRatio="xMidYMid meet" '
+        f'style="max-width:{SIZE_W}px;display:block;margin:0 auto" '
+        f'xmlns="http://www.w3.org/2000/svg" '
+        f'role="img" aria-label="Collaboration mix donut chart">'
+        f'{slices_svg}'
+        f'{leaders_svg}'
+        f'{text_svg}'
+        f'{center_svg}'
+        f'</svg>'
+    )
+
+    visual_html = f'<div style="margin-top:10px">{donut_svg}</div>'
 
     return f"""
   <tr>
@@ -924,11 +1032,9 @@ def _collaboration_intent(sessions: list, project_label_map: dict = None) -> str
       <div style="padding:16px 24px 18px">
         <div style="font-size:14px;font-weight:700;color:{C['text']};margin-bottom:4px;line-height:1.4">
           {headline}</div>
-        <div style="font-size:11px;color:{C['muted']};margin-bottom:16px">
+        <div style="font-size:11px;color:{C['muted']};margin-bottom:4px">
           {total_str} of active collaboration across {n_modes} modes &middot; {subtitle}</div>
-        <table width="100%" cellpadding="0" cellspacing="0">
-          {grid_html}
-        </table>
+        {visual_html}
       </div>
     </td>
   </tr>"""
@@ -1763,24 +1869,30 @@ def _narrative_block(goals: list, fallback: str) -> str:
 def _ai_investment_breakdown(goals: list, sessions: list, analysis: dict,
                              total_prs: int = 0,
                              project_label_map: dict = None) -> str:
-    """Three-part breakdown of where the AI investment went.
+    """Three-segment breakdown of where the AI investment went.
 
-    All three sub-sections answer questions a manager / engineer asks once
-    they know the headline credit number from the banner: *what did each
-    credit produce, what model burned them, and which sessions were the
-    most expensive?*
+    Each segment answers a question a manager / engineer asks once they
+    know the headline credit number from the banner: *which model burned
+    them, which sessions cost the most and why, and what patterns recur
+    across the period?* All three segments share the same dark-banner
+    visual treatment used by other top-level sections of the report, so
+    each one reads as its own distinct sub-section.
 
-    1. **Cost per outcome** — credits per goal completed · per session ·
-       per PR merged. Replaces the opaque tokens view with manager-
-       actionable per-outcome efficiency.
-    2. **Model mix** — credits + share-of-spend + request count per model,
+    1. **Model mix** — credits + share-of-spend + request count per model,
        sorted by credits desc. Surfaces "Opus 4.6 = 60% of spend" type
        insights without making attribution claims about *outcomes per
        model* (which is much harder and would need real per-goal model
        attribution).
-    3. **Top 5 most-expensive sessions** — single-session call-outs
-       (project · model · credits · open-market estimate). The same
-       "AI Investment" framing from the banner extends here.
+    2. **Top 5 most-expensive sessions** — single-session call-outs
+       (project · model · credits · open-market estimate). Each row
+       expands to show the aggregated burn-pattern findings observed in
+       that session, so "why this session cost what it did" is answered
+       in place rather than in a separate flat list.
+    3. **Patterns across all sessions** — cross-cutting roll-up of every
+       observed best-practice deviation, counted across the whole period.
+       Surfaces signals (like compaction storms or model thrash) whose
+       cost lands on *subsequent* turns and so would be misleading to
+       attribute to a single expensive session.
 
     Skipped entirely when no AI activity recorded (keeps reports that
     cover only completion-only or unmeasured sessions clean).
@@ -1792,26 +1904,7 @@ def _ai_investment_breakdown(goals: list, sessions: list, analysis: dict,
     if total_credits <= 0:
         return ""
 
-    # ── 1. Cost per outcome ──────────────────────────────────────────────
-    n_goals    = sum(1 for g in goals if g.get("human_hours", 0) > 0)
-    n_sessions = len(sessions)
-    cpg = total_credits / n_goals    if n_goals    else 0
-    cps = total_credits / n_sessions if n_sessions else 0
-    cpp = total_credits / total_prs  if total_prs  else 0
-
-    def _fmt_per(v: float) -> str:
-        if v <= 0:
-            return "—"
-        if v >= 1000:
-            return f"{int(round(v)):,}"
-        return f"{int(round(v))}"
-
-    cpg_str = _fmt_per(cpg)
-    cps_str = _fmt_per(cps)
-    cpp_str = _fmt_per(cpp) if total_prs else "—"
-    cpp_note = "no PRs merged" if not total_prs else f"across {total_prs} PR{'s' if total_prs != 1 else ''}"
-
-    # ── 2. Model mix ─────────────────────────────────────────────────────
+    # ── Model mix ────────────────────────────────────────────────────────
     auto = bool(analysis.get("auto_model_selection") or analysis.get("auto_model"))
     tokens_by_model = analysis.get("tokens_by_model", {}) or {}
     requests_by_model = analysis.get("requests_by_model", {}) or {}
@@ -1912,37 +2005,75 @@ def _ai_investment_breakdown(goals: list, sessions: list, analysis: dict,
         else:
             s["when"] = s["started"]
 
-    # ── Render ───────────────────────────────────────────────────────────
-    # Cost-per-outcome inline stats (3 cells)
-    cpo_html = f"""
-      <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px">
-        <tr>
-          <td style="width:33%;padding:6px 4px;text-align:center;
-                     background:{C['bg']};border:1px solid {C['border']}">
-            <div style="font-size:18px;font-weight:700;color:{C['text']}">{cpg_str}</div>
-            <div style="font-size:10px;color:{C['muted']};text-transform:uppercase;
-                        letter-spacing:0.5px;margin-top:2px">credits / goal</div>
-            <div style="font-size:10px;color:{C['muted']};margin-top:1px">
-              {n_goals} goal{'s' if n_goals != 1 else ''}</div>
-          </td>
-          <td style="width:34%;padding:6px 4px;text-align:center;
-                     background:{C['bg']};border:1px solid {C['border']};border-left:none">
-            <div style="font-size:18px;font-weight:700;color:{C['text']}">{cps_str}</div>
-            <div style="font-size:10px;color:{C['muted']};text-transform:uppercase;
-                        letter-spacing:0.5px;margin-top:2px">credits / session</div>
-            <div style="font-size:10px;color:{C['muted']};margin-top:1px">
-              {n_sessions} session{'s' if n_sessions != 1 else ''}</div>
-          </td>
-          <td style="width:33%;padding:6px 4px;text-align:center;
-                     background:{C['bg']};border:1px solid {C['border']};border-left:none">
-            <div style="font-size:18px;font-weight:700;color:{C['text']}">{cpp_str}</div>
-            <div style="font-size:10px;color:{C['muted']};text-transform:uppercase;
-                        letter-spacing:0.5px;margin-top:2px">credits / PR</div>
-            <div style="font-size:10px;color:{C['muted']};margin-top:1px">{cpp_note}</div>
-          </td>
-        </tr>
-      </table>"""
+    # ── Match burn findings to their session of origin ───────────────────
+    # Each finding carries (project, date) so we can group findings by
+    # the session that produced them, then render them inline under
+    # their session row. Project labels are normalised through the
+    # same map used for the session table so the join is reliable.
+    findings_all = analysis.get("burn_findings") or []
+    findings_by_session: dict = {}
+    for f in findings_all:
+        raw_p = f.get("project", "")
+        norm_p = project_label_map.get(raw_p, raw_p) or raw_p
+        key = (norm_p, f.get("date", ""))
+        findings_by_session.setdefault(key, []).append(f)
 
+    for s in top_sessions:
+        key = (s["project"], s["date"])
+        raw = findings_by_session.get(key, [])
+        # Aggregate per-session findings:
+        #  * drop low-impact findings (< max(20 cr, 0.5% of session spend))
+        #    — including flag-only kinds like compaction_storm whose direct
+        #    credit attribution is 0; their real cost falls on later turns
+        #    (cache invalidation, input-token re-sends) so listing them
+        #    here under "why this session cost what it did" would be
+        #    misleading. They still surface in the cross-session rollup
+        #    below where the framing is "patterns observed", not cost,
+        #  * group remaining findings by kind so repeated patterns
+        #    (e.g. hot_file across multiple files) show once with combined
+        #    credits and a merged evidence line,
+        #  * sort by combined credits and keep the top 5 distinct kinds.
+        sess_cred = s.get("credits", 0) or 0
+        threshold = max(20, int(sess_cred * 0.005))
+        kept: list = []
+        for f in raw:
+            cr = _burn_finding_credits(f)
+            if cr < threshold:
+                continue
+            kept.append(f)
+
+        from collections import defaultdict as _dd
+        groups: dict = _dd(list)
+        for f in kept:
+            groups[f.get("kind", "")].append(f)
+
+        aggregated: list = []
+        for kind, group in groups.items():
+            group.sort(key=lambda f: -_burn_finding_credits(f))
+            total_cr = sum(_burn_finding_credits(f) for f in group)
+            top = dict(group[0])  # copy so we don't mutate the source
+            if len(group) > 1:
+                # Concatenate up to 3 unique evidence snippets so the reader
+                # can see WHAT recurred without drowning in repetition.
+                evidences: list = []
+                for f in group:
+                    ev = (f.get("evidence", "") or "").strip()
+                    if ev and ev not in evidences:
+                        evidences.append(ev)
+                    if len(evidences) >= 3:
+                        break
+                merged_ev = " &middot; ".join(evidences)
+                if len(group) > 3:
+                    merged_ev += f" &middot; +{len(group) - 3} more"
+                top["evidence"] = f"{len(group)}\u00d7 \u2014 {merged_ev}"
+            top["_total_credits"] = total_cr
+            top["_count"] = len(group)
+            aggregated.append(top)
+
+        aggregated.sort(key=lambda f: -f.get("_total_credits", 0))
+        s["findings"] = aggregated[:5]
+
+    # ── Render ───────────────────────────────────────────────────────────
     # Model mix table
     if model_rows:
         mix_rows = ""
@@ -1968,8 +2099,13 @@ def _ai_investment_breakdown(goals: list, sessions: list, analysis: dict,
                      border-bottom:1px solid {C['border']}">{reqs:,} req{'s' if reqs != 1 else ''}</td>
         </tr>"""
         mix_html = f"""
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-top:18px;margin-bottom:6px">Model mix</div>
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">Model Mix</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          Credits and request volume by model</div>
+      </td></tr></table>
+      <div style="padding:14px 24px">
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border-collapse:collapse;background:{C['bg']};
                     border:1px solid {C['border']}">
@@ -1986,17 +2122,18 @@ def _ai_investment_breakdown(goals: list, sessions: list, analysis: dict,
                      text-align:right;border-bottom:1px solid {C['border']}">Requests</th>
         </tr>
         {mix_rows}
-      </table>"""
+      </table>
+      </div>"""
     else:
         mix_html = ""
 
-    # Top expensive sessions table
+    # Top expensive sessions table — each row expands to show the burn
+    # findings observed in that session. Findings live where the spend
+    # happened, so the question "why was THIS session expensive?" gets
+    # answered in place instead of in a separate flat list.
     if top_sessions:
         sess_rows = ""
         for i, s in enumerate(top_sessions, 1):
-            # Render skills as small inline pills under the project name so
-            # users can see what kind of work each expensive session involved
-            # without claiming any per-skill credit attribution.
             skills_html = ""
             if s.get("skills"):
                 pills = "".join(
@@ -2006,29 +2143,163 @@ def _ai_investment_breakdown(goals: list, sessions: list, analysis: dict,
                     for sk in s["skills"]
                 )
                 skills_html = f'<div style="margin-top:3px">{pills}</div>'
+
+            s_findings = s.get("findings", [])
+            n_find = len(s_findings)
+            sess_id = f"sess-{i}"
+
+            # Header cell shows a chevron only when there are findings to expand.
+            if n_find > 0:
+                chev_html = (
+                    f'<span id="{sess_id}-arrow" style="font-size:10px;'
+                    f'color:{C["accent"]};margin-right:5px">&#9654;</span>'
+                )
+                count_pill = (
+                    f'<span style="font-size:9px;color:{C["accent"]};'
+                    f'background:{C["accent_lt"]};padding:1px 6px;'
+                    f'border-radius:7px;margin-left:6px;font-weight:600">'
+                    f'{n_find} finding{"s" if n_find != 1 else ""}</span>'
+                )
+                row_attrs = (
+                    f' id="{sess_id}-hdr" onclick="toggleDetail(\'{sess_id}\')" '
+                    f'style="cursor:pointer"'
+                )
+            else:
+                chev_html = ""
+                count_pill = ""
+                row_attrs = ""
+
             sess_rows += f"""
-        <tr>
-          <td style="padding:6px 8px;font-size:11px;color:{C['muted']};
-                     border-bottom:1px solid {C['border']};width:24px;vertical-align:top">#{i}</td>
-          <td style="padding:6px 8px;font-size:11px;color:{C['text']};
+        <tr{row_attrs}>
+          <td style="padding:8px;font-size:11px;color:{C['muted']};
+                     border-bottom:1px solid {C['border']};width:36px;vertical-align:top">
+            {chev_html}#{i}
+          </td>
+          <td style="padding:8px;font-size:11px;color:{C['text']};
                      border-bottom:1px solid {C['border']};vertical-align:top">
-            <div>{s['project']}</div>
+            <div>{s['project']}{count_pill}</div>
             {f'<div style="font-size:10px;color:{C["muted"]};margin-top:1px">{s["when"]}</div>' if s['when'] else ''}
             {skills_html}
           </td>
-          <td style="padding:6px 8px;font-size:11px;color:{C['muted']};
+          <td style="padding:8px;font-size:11px;color:{C['muted']};
                      border-bottom:1px solid {C['border']};vertical-align:top">{s['model']}</td>
-          <td style="padding:6px 8px;font-size:11px;color:{C['text']};text-align:right;
+          <td style="padding:8px;font-size:11px;color:{C['text']};text-align:right;
                      border-bottom:1px solid {C['border']};vertical-align:top">{_fmt_credits(s['credits'])}</td>
-          <td style="padding:6px 8px;font-size:11px;color:{C['muted']};text-align:right;
+          <td style="padding:8px;font-size:11px;color:{C['muted']};text-align:right;
                      border-bottom:1px solid {C['border']};vertical-align:top">{s['pct']:.0f}%</td>
-          <td style="padding:6px 8px;font-size:11px;color:{C['muted']};text-align:right;
+          <td style="padding:8px;font-size:11px;color:{C['muted']};text-align:right;
                      border-bottom:1px solid {C['border']};vertical-align:top">~${s['market']:,.2f}</td>
         </tr>"""
+
+            if n_find > 0:
+                # Inline findings rendered inside a hidden <tr> that spans all
+                # 6 columns. Detail rendering mirrors the standalone-section
+                # layout but is more compact (no per-row title, no source
+                # citation footer) because the rows are nested inside a row
+                # the reader already drilled into.
+                fr_html = ""
+                for f in s_findings:
+                    meta = _bp_meta(f.get("kind", ""))
+                    icon = meta.get("icon", "•")
+                    label = meta.get("label", f.get("kind", ""))
+                    source = meta.get("source", "")
+                    source_url = meta.get("source_url", "")
+                    cr = f.get("_total_credits", _burn_finding_credits(f))
+                    n_occ = f.get("_count", 1)
+                    evidence = (f.get("evidence", "") or "").strip()
+                    detail = (f.get("detail", "") or "").strip()
+                    advice = (f.get("advice", "") or "").strip()
+                    if cr > 0 and n_occ > 1:
+                        credits_str = f"{_fmt_credits(cr)} cred. &middot; {n_occ}\u00d7"
+                    elif cr > 0:
+                        credits_str = f"{_fmt_credits(cr)} cred."
+                    elif n_occ > 1:
+                        credits_str = f"{n_occ}\u00d7"
+                    else:
+                        credits_str = "\u2014"
+                    source_html = ""
+                    if source and source_url:
+                        source_html = (
+                            f' &middot; <a href="{source_url}" target="_blank" '
+                            f'style="color:{C["muted"]};text-decoration:none;'
+                            f'border-bottom:1px dotted {C["border"]}">{source}</a>'
+                        )
+                    elif source:
+                        source_html = f' &middot; {source}'
+                    fr_html += f"""
+            <tr>
+              <td style="vertical-align:top;padding:8px 6px 8px 0;width:26px;font-size:16px">
+                {icon}
+              </td>
+              <td style="vertical-align:top;padding:8px 0;border-bottom:1px solid {C['border']}">
+                <div style="font-size:11px;font-weight:700;color:{C['text']};margin-bottom:2px">
+                  {label}: <span style="font-weight:500;color:{C['muted']}">{evidence}</span>
+                </div>
+                <div style="font-size:10px;color:{C['text']};line-height:1.45;margin-bottom:3px">
+                  {detail}
+                </div>
+                <div style="font-size:10px;color:{C['accent']};line-height:1.45">
+                  <strong style="color:{C['text']}">Try next time:</strong> {advice}{source_html}
+                </div>
+              </td>
+              <td style="vertical-align:top;padding:8px 0 8px 10px;text-align:right;
+                         font-size:10px;color:{C['muted']};white-space:nowrap;
+                         border-bottom:1px solid {C['border']}">{credits_str}</td>
+            </tr>"""
+
+                sess_rows += f"""
+        <tr id="{sess_id}-tasks" style="display:none">
+          <td colspan="6" style="background:{C['subtle']};padding:10px 16px 6px;
+                                 border-bottom:1px solid {C['border']}">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              {fr_html}
+            </table>
+          </td>
+        </tr>"""
+
+        # ── Cross-session rollup: counts by kind across ALL sessions ────
+        # Quick "patterns I see across the whole period" line so readers
+        # don't lose the bird's-eye view when findings live inside session
+        # rows. We count every kind across every session, not just the
+        # top-5, so the rollup is informative even when most spend lives
+        # outside the top expensive sessions. Rendered as its own segment
+        # (with the standard dark banner) so it reads as a distinct
+        # cross-cutting view rather than a footer to the sessions table.
+        from collections import Counter as _C
+        kind_counts = _C(f.get("kind", "") for f in findings_all)
+        n_total_sessions = max(1, len(sessions))
+        rollup_html = ""
+        if kind_counts:
+            parts = []
+            for kind, cnt in kind_counts.most_common(8):
+                meta = _bp_meta(kind)
+                icon = meta.get("icon", "•")
+                label = meta.get("label", kind)
+                parts.append(
+                    f'<span style="font-size:11px;color:{C["text"]};margin-right:14px;'
+                    f'white-space:nowrap;display:inline-block;padding:2px 0">{icon} '
+                    f'<strong>{cnt}</strong> '
+                    f'<span style="color:{C["muted"]}">{label.lower()}</span></span>'
+                )
+            rollup_html = f"""
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">Patterns across all {n_total_sessions} session{'s' if n_total_sessions != 1 else ''}</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          Cross-cutting cost-saving signals observed across the period</div>
+      </td></tr></table>
+      <div style="padding:14px 24px;line-height:1.9">
+        {"".join(parts)}
+      </div>"""
+
         sess_html = f"""
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-top:18px;margin-bottom:6px">
-        Top {len(top_sessions)} most-expensive session{'s' if len(top_sessions) != 1 else ''}</div>
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">Top {len(top_sessions)} most-expensive session{'s' if len(top_sessions) != 1 else ''}</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          Click a row to see why it cost what it did</div>
+      </td></tr></table>
+      <div style="padding:14px 24px">
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border-collapse:collapse;background:{C['bg']};
                     border:1px solid {C['border']}">
@@ -2047,23 +2318,25 @@ def _ai_investment_breakdown(goals: list, sessions: list, analysis: dict,
                      text-align:right;border-bottom:1px solid {C['border']}">~$ market</th>
         </tr>
         {sess_rows}
-      </table>"""
+      </table>
+      </div>"""
     else:
         sess_html = ""
+        rollup_html = ""
 
     return f"""
   <tr>
-    <td style="background:{C['card']};padding:14px 24px;
+    <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
-                  color:{C['text']};margin-bottom:4px">AI Investment Breakdown</div>
-      <div style="font-size:11px;color:{C['muted']};margin-bottom:4px">
-        Where {_fmt_credits(total_credits)} credits went — all figures are estimates from
-        measured tokens &times; GitHub's published per-model rates.</div>
-      {cpo_html}
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">AI Investment Breakdown</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          Where {_fmt_credits(total_credits)} credits went &middot; all figures are estimates from measured tokens &times; GitHub's published per-model rates</div>
+      </td></tr></table>
       {mix_html}
       {sess_html}
-      {_render_burn_findings_html(analysis, C, project_label_map)}
+      {rollup_html}
     </td>
   </tr>"""
 
