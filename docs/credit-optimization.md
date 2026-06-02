@@ -13,8 +13,7 @@
 flags ties back to a public source you can read for yourself. The report
 shows:
 
-- **What was charged** &mdash; estimated from measured tokens at 
-  per-model rates.
+- **What was charged** &mdash; estimated from measured tokens at per-model rates.
 - **Where it was charged** &mdash; the session, the goal, the model, and the
   turn that produced the spike.
 - **Why it's flagged** &mdash; the published practice that was missed, with
