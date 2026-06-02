@@ -2,7 +2,13 @@
 harvest.py — Read GitHub Copilot session event files and extract structured activity data.
 
 CLI sessions are stored at ~/.copilot/session-state/<uuid>/events.jsonl
-VS Code sessions are stored at <appdata>/Code/User/globalStorage/emptyWindowChatSessions/<uuid>.jsonl
+
+VS Code Copilot Chat sessions live in two locations, both scanned:
+  - <appdata>/Code/User/globalStorage/emptyWindowChatSessions/<uuid>.jsonl
+        (chats opened in an empty VS Code window — no folder/workspace)
+  - <appdata>/Code/User/workspaceStorage/<hash>/chatSessions/<uuid>.jsonl
+        (chats opened with a folder/workspace — where most activity lives)
+The sibling workspace.json supplies the workspace folder for cwd enrichment.
 """
 import json
 import os as _os
@@ -10,7 +16,7 @@ import re as _re
 import sys as _sys
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import unquote as _url_unquote
+from urllib.parse import unquote as _url_unquote, urlparse as _url_parse
 
 SESSION_DIR = Path.home() / ".copilot" / "session-state"
 
@@ -952,23 +958,83 @@ def get_sessions_for_date(target_date: str) -> list:
 
 # ── VS Code Session Harvesting ───────────────────────────────────────────────
 
-def _get_vscode_chat_dir() -> Path | None:
-    """Cross-platform path to VS Code emptyWindowChatSessions directory."""
+def _vscode_user_dirs() -> "list[Path]":
+    """Cross-platform list of VS Code per-user directories (just 'Code' for now)."""
     if _sys.platform == "win32":
         appdata = _os.environ.get("APPDATA", "")
         if appdata:
-            p = Path(appdata) / "Code" / "User" / "globalStorage" / "emptyWindowChatSessions"
-            if p.is_dir():
-                return p
-    elif _sys.platform == "darwin":
-        p = Path.home() / "Library" / "Application Support" / "Code" / "User" / "globalStorage" / "emptyWindowChatSessions"
-        if p.is_dir():
-            return p
-    else:  # Linux
-        p = Path.home() / ".config" / "Code" / "User" / "globalStorage" / "emptyWindowChatSessions"
-        if p.is_dir():
-            return p
-    return None
+            return [Path(appdata) / "Code" / "User"]
+        return []
+    if _sys.platform == "darwin":
+        return [Path.home() / "Library" / "Application Support" / "Code" / "User"]
+    return [Path.home() / ".config" / "Code" / "User"]
+
+
+def _vscode_workspace_cwd(workspace_json: Path) -> str:
+    """Return the local workspace folder path from a VS Code workspace.json.
+
+    Handles the common ``{"folder": "file:///c%3A/path"}`` shape, including:
+      - percent-encoded paths (urllib unquote)
+      - Windows drive letters served as ``file:///c%3A/...`` (strip leading slash)
+      - UNC / network paths served with a netloc (``file://server/share/...``)
+      - returns ``""`` for non-local schemes (``vscode-remote://``, ``untitled:``)
+        or any malformed / missing / multi-root workspace files
+    """
+    try:
+        data = json.loads(workspace_json.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    folder = data.get("folder", "") if isinstance(data, dict) else ""
+    if not isinstance(folder, str) or not folder:
+        return ""
+    try:
+        parsed = _url_parse(folder)
+    except Exception:
+        return ""
+    if parsed.scheme != "file":
+        return ""
+    path = _url_unquote(parsed.path or "")
+    if parsed.netloc and parsed.netloc.lower() != "localhost":
+        # UNC path: file://server/share/folder -> \\server\share\folder
+        return "\\\\" + parsed.netloc + path.replace("/", "\\")
+    if _re.match(r"^/[A-Za-z]:/", path):
+        # Windows drive: /c:/Users/... -> c:\Users\...
+        path = path[1:]
+    if not path:
+        return ""
+    try:
+        return str(Path(path))
+    except Exception:
+        return ""
+
+
+def _get_vscode_chat_dirs() -> "list[tuple[Path, str]]":
+    """All VS Code Copilot Chat session directories with optional workspace cwd hints.
+
+    Returns a list of ``(chat_dir, workspace_cwd)`` tuples.  ``workspace_cwd``
+    is the absolute path to the workspace folder for workspace-scoped sessions,
+    or ``""`` for empty-window sessions (no folder open).
+    """
+    results: "list[tuple[Path, str]]" = []
+    for base in _vscode_user_dirs():
+        ews = base / "globalStorage" / "emptyWindowChatSessions"
+        if ews.is_dir():
+            results.append((ews, ""))
+        ws_root = base / "workspaceStorage"
+        if ws_root.is_dir():
+            try:
+                ws_entries = list(ws_root.iterdir())
+            except OSError:
+                ws_entries = []
+            for ws_dir in ws_entries:
+                if not ws_dir.is_dir():
+                    continue
+                chat_dir = ws_dir / "chatSessions"
+                if not chat_dir.is_dir():
+                    continue
+                cwd_hint = _vscode_workspace_cwd(ws_dir / "workspace.json")
+                results.append((chat_dir, cwd_hint))
+    return results
 
 
 def _vscode_epoch_to_iso(epoch_ms: int | float) -> str:
@@ -1096,282 +1162,297 @@ def get_vscode_sessions_for_date(target_date: str) -> list:
     parsed; the inner loop filters events by date so non-matching turns are
     skipped cheaply even in large files.
     """
-    chat_dir = _get_vscode_chat_dir()
-    if not chat_dir:
+    chat_dirs = _get_vscode_chat_dirs()
+    if not chat_dirs:
         return []
 
     sessions = []
 
-    for jsonl_file in chat_dir.glob("*.jsonl"):
-        # ── Fast date pre-filter: read only first line (kind=0 header) ────
-        try:
-            with open(jsonl_file, encoding="utf-8") as f:
-                first_line = f.readline().strip()
-            if not first_line:
-                continue
-            header = json.loads(first_line)
-            if header.get("kind") != 0:
-                continue
-            hv = header.get("v", {})
-            creation_ms = hv.get("creationDate", 0)
-            if not creation_ms:
-                continue
-            creation_date = datetime.fromtimestamp(creation_ms / 1000).strftime("%Y-%m-%d")
-        except Exception:
-            continue
-
-        # Skip files created after the target date — they can't have activity
-        # on a date before they existed.  Files created *before* target_date
-        # are always parsed because long-lived sessions can span weeks.
-        # The inner loop filters individual events by date, so large files
-        # that don't match still exit quickly.
-        try:
-            td = datetime.strptime(target_date, "%Y-%m-%d")
-            cd = datetime.strptime(creation_date, "%Y-%m-%d")
-            if cd > td:
-                continue
-        except Exception:
-            pass
-
-        # ── Full parse ────────────────────────────────────────────────────
-        session_id = hv.get("sessionId", jsonl_file.stem)
-        model_used = ""
-        input_state = hv.get("inputState", {})
-        if isinstance(input_state, dict):
-            sel_model = input_state.get("selectedModel", {})
-            if isinstance(sel_model, dict):
-                model_used = sel_model.get("identifier", "")
-
-        messages = []
-        tool_summaries = []  # tools pending attachment to previous request
-        files_touched = set()
-        cwd = ""
-        session_start = None
-        session_end = None
-        inline_model_pricing: dict = {}
-
-        # Bootstrap inline pricing from the session header itself — the
-        # header carries ``selectedModel.metadata`` which is the most
-        # reliable signal even when no requests have run yet.
-        _vscode_collect_inline_pricing(hv, inline_model_pricing)
-
-        # ── Token & timing accumulators (sparse VS Code JSONL schema) ─────
-        # Output tokens: kind=1 patch with key path ["requests", N,
-        #   "completionTokens"] — cumulative for the whole turn; latest
-        #   value wins per request index.
-        # Input tokens : sum of every inline ``promptTokens`` field across
-        #   all events (each tool-call round resends the full context, and
-        #   the API bills each round, so summing matches actual billing).
-        # API time    : kind=1 patch with key ["requests", N, "elapsedMs"]
-        #   OR ["requests", N, "result"].timings.totalElapsed.
-        # TTFT (bonus): ["requests", N, "result"].timings.firstProgress.
-        # Per-request model id : recorded on the kind=2 chat turn event.
-        completion_by_req: dict = {}
-        elapsed_by_req: dict    = {}
-        ttft_by_req: dict       = {}
-        prompt_tokens_total     = 0
-        output_tokens_inline    = 0  # not used for billing, kept for parity
-
-        try:
-            with open(jsonl_file, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except Exception:
-                        continue
-
-                    kind = obj.get("kind")
-                    v = obj.get("v")
-
-                    # Sum inline token fields across the whole event tree.
-                    pp, oo = _vscode_walk_token_fields(obj)
-                    prompt_tokens_total += pp
-                    output_tokens_inline += oo
-
-                    # Capture any inline pricing metadata that appears
-                    # (e.g. ``inputState`` patches carrying a fresh
-                    # ``selectedModel.metadata`` block after a mid-session
-                    # model switch).
-                    _vscode_collect_inline_pricing(obj, inline_model_pricing)
-
-                    # kind=1 sparse patches: workspace context + per-request
-                    # token/timing updates.
-                    if kind == 1:
-                        # Workspace context (existing behaviour)
-                        if isinstance(v, dict):
-                            meta = v.get("metadata", {})
-                            if isinstance(meta, dict) and not cwd:
-                                for rendered in meta.get("renderedUserMessage", []):
-                                    if isinstance(rendered, dict):
-                                        txt = rendered.get("text", "")
-                                        m = _re.search(r'current file is ([^\n]+)', txt)
-                                        if m:
-                                            fp = m.group(1).strip()
-                                            cwd = str(Path(fp).parent)
-                                            break
-
-                        # Per-request token/timing patches
-                        k = obj.get("k")
-                        if (isinstance(k, list) and len(k) >= 3
-                                and k[0] == "requests" and isinstance(k[1], int)):
-                            req_idx = k[1]
-                            field = k[2]
-                            if field == "completionTokens" and isinstance(v, int):
-                                completion_by_req[req_idx] = v  # latest wins
-                            elif field == "elapsedMs" and isinstance(v, (int, float)):
-                                elapsed_by_req[req_idx] = int(v)
-                            elif field == "result" and isinstance(v, dict):
-                                tim = v.get("timings", {})
-                                if isinstance(tim, dict):
-                                    if "totalElapsed" in tim and req_idx not in elapsed_by_req:
-                                        elapsed_by_req[req_idx] = int(tim["totalElapsed"])
-                                    if "firstProgress" in tim:
-                                        ttft_by_req[req_idx] = int(tim["firstProgress"])
-
-                    # kind=2: chat turns
-                    if kind != 2 or not isinstance(v, list):
-                        continue
-
-                    for item in v:
-                        if not isinstance(item, dict):
-                            continue
-
-                        # ── Request (user turn with AI response) ──────────
-                        if "requestId" in item and "message" in item:
-                            ts_ms = item.get("timestamp", 0)
-                            ts_iso = _vscode_epoch_to_iso(ts_ms) if ts_ms else ""
-                            if not ts_iso or ts_iso[:10] != target_date:
-                                continue
-
-                            if not session_start:
-                                session_start = ts_iso
-                            session_end = ts_iso
-
-                            msg = item.get("message", {})
-                            text = msg.get("text", "") if isinstance(msg, dict) else str(msg)
-                            text = _strip_injected_context(text).strip()
-
-                            if not text or _is_approval(text):
-                                continue
-
-                            # Attach any pending tool summaries to the previous message
-                            if tool_summaries and messages and messages[-1]["role"] == "user":
-                                messages[-1]["tools_after"].extend(tool_summaries)
-                                tool_summaries = []
-
-                            if not model_used:
-                                model_used = item.get("modelId", "")
-
-                            messages.append({
-                                "role":        "user",
-                                "text":        text,
-                                "timestamp":   ts_iso,
-                                "tools_after": [],
-                            })
-
-                        # ── Tool invocation ───────────────────────────────
-                        elif item.get("kind") == "toolInvocationSerialized":
-                            tool_id = item.get("toolId", "")
-                            ptm = item.get("pastTenseMessage", "")
-                            if isinstance(ptm, dict):
-                                ptm = ptm.get("value", "")
-                            summary = ptm or tool_id
-                            tool_summaries.append(summary)
-
-                            # Track files from edit/create tools
-                            tool_lower = tool_id.lower()
-                            if any(kw in tool_lower for kw in ("edit", "create", "write", "replace")):
-                                fp = _extract_file_path_from_markdown(
-                                    ptm if isinstance(ptm, str) else str(ptm)
-                                )
-                                if fp:
-                                    files_touched.add(fp.replace("\\", "/"))
-
-        except Exception:
-            continue
-
-        # Attach any remaining tool summaries
-        if tool_summaries and messages and messages[-1]["role"] == "user":
-            messages[-1]["tools_after"].extend(tool_summaries)
-
-        user_messages = [m for m in messages if m["role"] == "user"]
-        if not user_messages:
-            continue
-
-        project_name = Path(cwd).name if cwd else session_id[:12]
-        all_modified = files_touched
-
-        # Line counts not available from VS Code sessions
-        total_lines = 0
-        if all_modified:
-            logic_files = sum(1 for f in all_modified
-                              if _os.path.splitext(f)[1].lower() in _LOGIC_EXTS)
-            logic_frac = logic_files / len(all_modified) if all_modified else 1.0
-        else:
-            logic_frac = 1.0
-        lines_logic = round(total_lines * logic_frac)
-        lines_boilerplate = total_lines - lines_logic
-
-        # Aggregate token + timing extraction from the JSONL.
-        out_tokens_total = sum(completion_by_req.values())
-        in_tokens_total  = prompt_tokens_total
-        total_api_ms     = sum(elapsed_by_req.values())
-        request_count    = len(completion_by_req) or len(elapsed_by_req)
-
-        norm_model = _normalize_vscode_model(model_used)
-        tokens_by_model: dict = {}
-        requests_by_model: dict = {}
-        if norm_model and (in_tokens_total or out_tokens_total):
-            tokens_by_model[norm_model] = {
-                "input":          in_tokens_total,
-                "output":         out_tokens_total,
-                "cache_read":     0,   # VS Code JSONL does not expose cache breakdown
-                "cache_creation": 0,
-            }
-        if norm_model and request_count:
-            requests_by_model[norm_model] = request_count
-
-        sessions.append({
-            "session_id":        session_id,
-            "project":           project_name,
-            "project_path":      cwd or str(jsonl_file),
-            "repository":        "",
-            "branch":            "",
-            "entrypoint":        "vscode",
-            "date":              target_date,
-            "messages":          messages,
-            "tokens":            {"input":          in_tokens_total,
-                                  "output":         out_tokens_total,
-                                  "cache_read":     0,
-                                  "cache_creation": 0,
-                                  "total":          in_tokens_total + out_tokens_total},
-            "tokens_by_model":   tokens_by_model,
-            "premium_requests":  request_count,
-            "requests_by_model": requests_by_model,
-            "ai_credits":        None,
-            "ai_credits_by_model": {},
-            "inline_model_pricing": inline_model_pricing,
-            "plan":              _os.environ.get("COPILOT_PLAN", "").strip(),
-            "auto_model_selection": False,
-            "session_state":     "complete",  # VS Code JSONL is read end-to-end so always complete
-            "total_api_ms":      total_api_ms,
-            "code_changes":      {"filesModified": sorted(all_modified)} if all_modified else {},
-            "model_used":        norm_model or model_used,
-            "session_start":     session_start,
-            "session_end":       session_end,
-            "git_repos":         [],
-            "git_ops":           [],
-            "workspace_summary": "",
-            "tool_invocations":  sum(len(m.get("tools_after", [])) for m in messages if m["role"] == "user"),
-            "files_touched":     sorted(all_modified),
-            "lines_logic":       lines_logic,
-            "lines_boilerplate": lines_boilerplate,
-        })
+    for chat_dir, cwd_hint in chat_dirs:
+        for jsonl_file in chat_dir.glob("*.jsonl"):
+            session = _parse_vscode_chat_file(jsonl_file, target_date, cwd_hint)
+            if session is not None:
+                sessions.append(session)
 
     return sessions
+
+
+def _parse_vscode_chat_file(
+    jsonl_file: Path, target_date: str, cwd_hint: str
+) -> "dict | None":
+    """Parse a single VS Code chat JSONL file. Returns a session dict or None.
+
+    ``cwd_hint`` seeds the session's working directory when the file lives in a
+    workspace-scoped storage location; it is overridden by inline metadata only
+    if it was empty (preserving the original empty-window fallback behaviour).
+    """
+    # ── Fast date pre-filter: read only first line (kind=0 header) ────
+    try:
+        with open(jsonl_file, encoding="utf-8") as f:
+            first_line = f.readline().strip()
+        if not first_line:
+            return None
+        header = json.loads(first_line)
+        if header.get("kind") != 0:
+            return None
+        hv = header.get("v", {})
+        creation_ms = hv.get("creationDate", 0)
+        if not creation_ms:
+            return None
+        creation_date = datetime.fromtimestamp(creation_ms / 1000).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+    # Skip files created after the target date — they can't have activity
+    # on a date before they existed.  Files created *before* target_date
+    # are always parsed because long-lived sessions can span weeks.
+    # The inner loop filters individual events by date, so large files
+    # that don't match still exit quickly.
+    try:
+        td = datetime.strptime(target_date, "%Y-%m-%d")
+        cd = datetime.strptime(creation_date, "%Y-%m-%d")
+        if cd > td:
+            return None
+    except Exception:
+        pass
+
+    # ── Full parse ────────────────────────────────────────────────────
+    session_id = hv.get("sessionId", jsonl_file.stem)
+    model_used = ""
+    input_state = hv.get("inputState", {})
+    if isinstance(input_state, dict):
+        sel_model = input_state.get("selectedModel", {})
+        if isinstance(sel_model, dict):
+            model_used = sel_model.get("identifier", "")
+
+    messages = []
+    tool_summaries = []  # tools pending attachment to previous request
+    files_touched = set()
+    cwd = cwd_hint
+    session_start = None
+    session_end = None
+    inline_model_pricing: dict = {}
+
+    # Bootstrap inline pricing from the session header itself — the
+    # header carries ``selectedModel.metadata`` which is the most
+    # reliable signal even when no requests have run yet.
+    _vscode_collect_inline_pricing(hv, inline_model_pricing)
+
+    # ── Token & timing accumulators (sparse VS Code JSONL schema) ─────
+    # Output tokens: kind=1 patch with key path ["requests", N,
+    #   "completionTokens"] — cumulative for the whole turn; latest
+    #   value wins per request index.
+    # Input tokens : sum of every inline ``promptTokens`` field across
+    #   all events (each tool-call round resends the full context, and
+    #   the API bills each round, so summing matches actual billing).
+    # API time    : kind=1 patch with key ["requests", N, "elapsedMs"]
+    #   OR ["requests", N, "result"].timings.totalElapsed.
+    # TTFT (bonus): ["requests", N, "result"].timings.firstProgress.
+    # Per-request model id : recorded on the kind=2 chat turn event.
+    completion_by_req: dict = {}
+    elapsed_by_req: dict    = {}
+    ttft_by_req: dict       = {}
+    prompt_tokens_total     = 0
+    output_tokens_inline    = 0  # not used for billing, kept for parity
+
+    try:
+        with open(jsonl_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+
+                kind = obj.get("kind")
+                v = obj.get("v")
+
+                # Sum inline token fields across the whole event tree.
+                pp, oo = _vscode_walk_token_fields(obj)
+                prompt_tokens_total += pp
+                output_tokens_inline += oo
+
+                # Capture any inline pricing metadata that appears
+                # (e.g. ``inputState`` patches carrying a fresh
+                # ``selectedModel.metadata`` block after a mid-session
+                # model switch).
+                _vscode_collect_inline_pricing(obj, inline_model_pricing)
+
+                # kind=1 sparse patches: workspace context + per-request
+                # token/timing updates.
+                if kind == 1:
+                    # Workspace context (existing behaviour)
+                    if isinstance(v, dict):
+                        meta = v.get("metadata", {})
+                        if isinstance(meta, dict) and not cwd:
+                            for rendered in meta.get("renderedUserMessage", []):
+                                if isinstance(rendered, dict):
+                                    txt = rendered.get("text", "")
+                                    m = _re.search(r'current file is ([^\n]+)', txt)
+                                    if m:
+                                        fp = m.group(1).strip()
+                                        cwd = str(Path(fp).parent)
+                                        break
+
+                    # Per-request token/timing patches
+                    k = obj.get("k")
+                    if (isinstance(k, list) and len(k) >= 3
+                            and k[0] == "requests" and isinstance(k[1], int)):
+                        req_idx = k[1]
+                        field = k[2]
+                        if field == "completionTokens" and isinstance(v, int):
+                            completion_by_req[req_idx] = v  # latest wins
+                        elif field == "elapsedMs" and isinstance(v, (int, float)):
+                            elapsed_by_req[req_idx] = int(v)
+                        elif field == "result" and isinstance(v, dict):
+                            tim = v.get("timings", {})
+                            if isinstance(tim, dict):
+                                if "totalElapsed" in tim and req_idx not in elapsed_by_req:
+                                    elapsed_by_req[req_idx] = int(tim["totalElapsed"])
+                                if "firstProgress" in tim:
+                                    ttft_by_req[req_idx] = int(tim["firstProgress"])
+
+                # kind=2: chat turns
+                if kind != 2 or not isinstance(v, list):
+                    continue
+
+                for item in v:
+                    if not isinstance(item, dict):
+                        continue
+
+                    # ── Request (user turn with AI response) ──────────
+                    if "requestId" in item and "message" in item:
+                        ts_ms = item.get("timestamp", 0)
+                        ts_iso = _vscode_epoch_to_iso(ts_ms) if ts_ms else ""
+                        if not ts_iso or ts_iso[:10] != target_date:
+                            continue
+
+                        if not session_start:
+                            session_start = ts_iso
+                        session_end = ts_iso
+
+                        msg = item.get("message", {})
+                        text = msg.get("text", "") if isinstance(msg, dict) else str(msg)
+                        text = _strip_injected_context(text).strip()
+
+                        if not text or _is_approval(text):
+                            continue
+
+                        # Attach any pending tool summaries to the previous message
+                        if tool_summaries and messages and messages[-1]["role"] == "user":
+                            messages[-1]["tools_after"].extend(tool_summaries)
+                            tool_summaries = []
+
+                        if not model_used:
+                            model_used = item.get("modelId", "")
+
+                        messages.append({
+                            "role":        "user",
+                            "text":        text,
+                            "timestamp":   ts_iso,
+                            "tools_after": [],
+                        })
+
+                    # ── Tool invocation ───────────────────────────────
+                    elif item.get("kind") == "toolInvocationSerialized":
+                        tool_id = item.get("toolId", "")
+                        ptm = item.get("pastTenseMessage", "")
+                        if isinstance(ptm, dict):
+                            ptm = ptm.get("value", "")
+                        summary = ptm or tool_id
+                        tool_summaries.append(summary)
+
+                        # Track files from edit/create tools
+                        tool_lower = tool_id.lower()
+                        if any(kw in tool_lower for kw in ("edit", "create", "write", "replace")):
+                            fp = _extract_file_path_from_markdown(
+                                ptm if isinstance(ptm, str) else str(ptm)
+                            )
+                            if fp:
+                                files_touched.add(fp.replace("\\", "/"))
+
+    except Exception:
+        return None
+
+    # Attach any remaining tool summaries
+    if tool_summaries and messages and messages[-1]["role"] == "user":
+        messages[-1]["tools_after"].extend(tool_summaries)
+
+    user_messages = [m for m in messages if m["role"] == "user"]
+    if not user_messages:
+        return None
+
+    project_name = Path(cwd).name if cwd else session_id[:12]
+    all_modified = files_touched
+
+    # Line counts not available from VS Code sessions
+    total_lines = 0
+    if all_modified:
+        logic_files = sum(1 for f in all_modified
+                          if _os.path.splitext(f)[1].lower() in _LOGIC_EXTS)
+        logic_frac = logic_files / len(all_modified) if all_modified else 1.0
+    else:
+        logic_frac = 1.0
+    lines_logic = round(total_lines * logic_frac)
+    lines_boilerplate = total_lines - lines_logic
+
+    # Aggregate token + timing extraction from the JSONL.
+    out_tokens_total = sum(completion_by_req.values())
+    in_tokens_total  = prompt_tokens_total
+    total_api_ms     = sum(elapsed_by_req.values())
+    request_count    = len(completion_by_req) or len(elapsed_by_req)
+
+    norm_model = _normalize_vscode_model(model_used)
+    tokens_by_model: dict = {}
+    requests_by_model: dict = {}
+    if norm_model and (in_tokens_total or out_tokens_total):
+        tokens_by_model[norm_model] = {
+            "input":          in_tokens_total,
+            "output":         out_tokens_total,
+            "cache_read":     0,   # VS Code JSONL does not expose cache breakdown
+            "cache_creation": 0,
+        }
+    if norm_model and request_count:
+        requests_by_model[norm_model] = request_count
+
+    return {
+        "session_id":        session_id,
+        "project":           project_name,
+        "project_path":      cwd or str(jsonl_file),
+        "repository":        "",
+        "branch":            "",
+        "entrypoint":        "vscode",
+        "date":              target_date,
+        "messages":          messages,
+        "tokens":            {"input":          in_tokens_total,
+                              "output":         out_tokens_total,
+                              "cache_read":     0,
+                              "cache_creation": 0,
+                              "total":          in_tokens_total + out_tokens_total},
+        "tokens_by_model":   tokens_by_model,
+        "premium_requests":  request_count,
+        "requests_by_model": requests_by_model,
+        "ai_credits":        None,
+        "ai_credits_by_model": {},
+        "inline_model_pricing": inline_model_pricing,
+        "plan":              _os.environ.get("COPILOT_PLAN", "").strip(),
+        "auto_model_selection": False,
+        "session_state":     "complete",  # VS Code JSONL is read end-to-end so always complete
+        "total_api_ms":      total_api_ms,
+        "code_changes":      {"filesModified": sorted(all_modified)} if all_modified else {},
+        "model_used":        norm_model or model_used,
+        "session_start":     session_start,
+        "session_end":       session_end,
+        "git_repos":         [],
+        "git_ops":           [],
+        "workspace_summary": "",
+        "tool_invocations":  sum(len(m.get("tools_after", [])) for m in messages if m["role"] == "user"),
+        "files_touched":     sorted(all_modified),
+        "lines_logic":       lines_logic,
+        "lines_boilerplate": lines_boilerplate,
+    }
 
 
 def compute_elapsed_minutes(session_start: str, session_end: str) -> float:
