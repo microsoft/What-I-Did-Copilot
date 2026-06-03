@@ -37,7 +37,11 @@
 <a id="get-started"></a>
 ## Try it now
 
-**Option A — Install as a Copilot CLI plugin** *(on GitHub CLI only)*
+Pick whichever matches how you use Copilot &mdash; all three install and run the same thing.
+
+**Option A &mdash; Copilot CLI plugin** *(requires the GitHub Copilot CLI)*
+
+In any Copilot CLI session:
 
 ```bash
 /plugin install whatidid@awesome-copilot
@@ -49,15 +53,19 @@ Then just run:
 whatidid                # defaults to a 7-day lookback
 ```
 
-**Option B — Clone the repo**
+**Option B &mdash; VS Code (Awesome Copilot marketplace)** *(zero clone, zero terminal)*
+
+1. Open the **Command Palette** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) &rarr; **Chat: Plugins**  
+   *(or type `@agentPlugins` in the Extensions search view)*
+2. Search **`whatidid`** &rarr; click **Install**
+3. In Copilot Chat, just ask:
+   > *"give me a 7-day Copilot report"* &nbsp;·&nbsp; *"whatidid this month"* &nbsp;·&nbsp; *"summarize what Copilot helped me with today"*
+
+**Option C &mdash; Clone the repo** *(maximum control, dev-mode)*
 
 ```bash
 git clone https://github.com/microsoft/What-I-Did-Copilot.git
 cd What-I-Did-Copilot
-```
-
-```bash
-copilot or code         # to open Copilot CLI or VS Code
 python whatidid.py      # defaults to a 7-day lookback
 ```
 
