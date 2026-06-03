@@ -1,0 +1,90 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "What I Did: Generate Report",
+            "type": "shell",
+            "command": "${command:python.interpreterPath}",
+            "args": [
+                "whatidid.py",
+                "--date",
+                "${input:period}",
+                "${input:refresh}",
+                "${input:email}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "focus": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "What I Did: Generate Report (custom date or range)",
+            "type": "shell",
+            "command": "${command:python.interpreterPath}",
+            "args": [
+                "whatidid.py",
+                "--date",
+                "${input:customDate}",
+                "${input:refresh}",
+                "${input:email}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "focus": true
+            },
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "period",
+            "type": "pickString",
+            "description": "How far back should the report look?",
+            "default": "7D",
+            "options": [
+                { "label": "Today only", "value": "today" },
+                { "label": "Last 7 days", "value": "7D" },
+                { "label": "Last 14 days", "value": "14D" },
+                { "label": "Last 30 days", "value": "30D" },
+                { "label": "Last 90 days", "value": "90D" }
+            ]
+        },
+        {
+            "id": "customDate",
+            "type": "promptString",
+            "description": "Enter a single date (YYYY-MM-DD) or a lookback like 45D",
+            "default": "2026-06-03"
+        },
+        {
+            "id": "refresh",
+            "type": "pickString",
+            "description": "Re-run the AI analysis, or reuse cached results?",
+            "default": "",
+            "options": [
+                { "label": "Use cached analysis (fast, cheap)", "value": "" },
+                { "label": "Refresh — re-run AI analysis (uses tokens)", "value": "--refresh" }
+            ]
+        },
+        {
+            "id": "email",
+            "type": "pickString",
+            "description": "Email the report, or just save the HTML file?",
+            "default": "",
+            "options": [
+                { "label": "Save HTML only", "value": "" },
+                { "label": "Send via Outlook", "value": "--email" }
+            ]
+        }
+    ]
+}

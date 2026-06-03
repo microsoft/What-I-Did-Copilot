@@ -1,0 +1,75 @@
+{
+    "name": "what-i-did-copilot",
+    "displayName": "What I Did — Copilot Impact Report",
+    "description": "Generate a branded HTML impact report of what GitHub Copilot helped you accomplish — pick a date range, click Generate, view it in the editor.",
+    "version": "0.2.0",
+    "publisher": "whatidid",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/microsoft/What-I-Did-Copilot.git"
+    },
+    "engines": {
+        "vscode": "^1.85.0"
+    },
+    "categories": [
+        "Other",
+        "Visualization"
+    ],
+    "keywords": [
+        "copilot",
+        "report",
+        "productivity",
+        "analytics",
+        "impact"
+    ],
+    "activationEvents": [
+        "onStartupFinished"
+    ],
+    "main": "./out/extension.js",
+    "icon": "media/icon.png",
+    "contributes": {
+        "commands": [
+            {
+                "command": "whatidid.openPanel",
+                "title": "What I Did: Open Report Builder",
+                "category": "What I Did"
+            },
+            {
+                "command": "whatidid.run",
+                "title": "What I Did: Generate Report (last settings)",
+                "category": "What I Did"
+            }
+        ],
+        "configuration": {
+            "title": "What I Did",
+            "properties": {
+                "whatidid.pythonPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to the Python interpreter used to run the report. Leave empty to auto-detect (uses the Python extension's selected interpreter, then falls back to 'python')."
+                },
+                "whatidid.scriptPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Full path to whatidid.py. Leave empty to use the copy bundled with this extension, or to auto-detect one in the open workspace."
+                },
+                "whatidid.openInEditor": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "After generating, preview the report inside VS Code. When off, the report only opens in your default browser."
+                }
+            }
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile && node scripts/bundle-pysrc.mjs",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "bundle": "node scripts/bundle-pysrc.mjs"
+    },
+    "devDependencies": {
+        "@types/node": "^20.x",
+        "@types/vscode": "^1.85.0",
+        "typescript": "^5.4.0"
+    }
+}

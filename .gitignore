@@ -18,10 +18,27 @@ report_*.html
 Thumbs.db
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/extensions.json
 .idea/
 *.swp
 *.swo
 
 # Claude local settings
 .claude/
+
+# Scratch & working files
+_temp/
+_backup/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# VS Code extension build artifacts
+vscode-extension/node_modules/
+vscode-extension/out/
+vscode-extension/pysrc/
+*.vsix

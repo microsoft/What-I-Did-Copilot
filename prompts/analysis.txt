@@ -60,6 +60,18 @@ TITLE RULE: The goal title must describe the PRIMARY DELIVERABLE, not the first 
 If a session starts with "prepare for github" but spends 80% of time building a report tool,
 the title should be about the report tool, not the git setup.
 
+CANONICAL NAME RULE (overrides everything below): Each session header includes a line
+"CANONICAL PROJECT NAME (anchor the goal label on this): <name>". That <name> is the real
+workspace folder / git repository the work happened in. You MUST build the goal label around
+that canonical name. NEVER name a goal after the wording of the first user message or the
+chat session's auto-generated title — those reflect how the conversation opened, not which
+project it was for. If several sessions share the same canonical name, they are the same
+project: merge them and use one label built on that name.
+  CANONICAL = "what-i-did-copilot"  →  label "What-I-Did-Copilot reporting tool" ✓
+  First prompt was "fix the token count"  →  do NOT label the goal "Fix the token count" ✗
+EXCEPTION: when the canonical name is a user home directory (see ROOT/HOME FOLDER EXCEPTION
+above), fall back to the actual subject/files of the work to name the project.
+
 LABEL RULE: The label must include enough context to identify the project. Use the repo name,
 the primary file/tool being worked on, or the product name. Someone reading just the labels
 should know WHICH project each line refers to.
@@ -76,10 +88,26 @@ NEVER write anything that implies the human was unclear, imprecise, or needed to
 NEVER ASSUME CONTEXT NOT IN THE TRANSCRIPT.
 DO use the actual file or document name when it appears in the tool calls.
 
-GOOD framing:
-  ✓ "Designed and shipped X" — confident, direct
-  ✓ "Built X with Y capability" — outcome-focused
-  ✓ "Delivered X that does Y" — value-focused
+SPECIFICITY IS THE WHOLE POINT. Every title, label, summary, and outcome must name the CONCRETE
+thing that was built, changed, or fixed — the actual feature, file, capability, or behavior. Lead
+with a strong past-tense verb (Built, Added, Fixed, Wired, Replaced, Rewrote, Shipped, Integrated).
+A reader who knows nothing about the project should learn exactly WHAT now exists or works.
+
+BANNED — vague filler that says nothing. Never use these words/phrases as the payload of a sentence:
+  ✗ "enhanced functionality", "improved capabilities", "better performance", "more comprehensive"
+  ✗ "various updates", "several improvements", "general enhancements", "streamlined the process"
+  ✗ "made changes to", "worked on", "updated X for Y" where Y is a vague benefit
+  If you catch yourself writing one of these, replace it with the specific feature or behavior.
+
+GOOD framing (concrete — names the actual thing):
+  ✓ "Added multi-recipient support to the report email draft, splitting on commas and semicolons"
+  ✓ "Fixed the M365 usage processor so audit-log bundles explode into per-user rows"
+  ✓ "Replaced the COM send path with a prefilled .eml draft that opens in the user's mail app"
+
+BAD framing (vague — could describe any work on any project):
+  ✗ "Enhanced the PAX App with new functionality"
+  ✗ "The tool now generates more comprehensive reports"
+  ✗ "Made improvements to the Python script"
 
 ═══════════════════════════════════════════
 RULE 3 — EFFORT ESTIMATES (research-calibrated)
@@ -194,19 +222,19 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
 {{
   "headline": "One punchy sentence — the most significant thing accomplished today",
   "primary_focus": "2-4 words (e.g. 'Productivity tooling', 'Deck strategy')",
-  "day_narrative": "Exactly 2 sentences. What was accomplished and why it matters. Confident tone, plain English.",
+  "day_narrative": "Exactly 2 sentences. Name the actual projects and the concrete things delivered in each — not vague benefits. Confident tone, plain English.",
   "goals": [
     {{
       "title": "Business outcome title (verb-first, MUST include the project/repo/tool name)",
       "label": "2-5 word noun phrase identifying the deliverable AND which project (e.g. 'What-I-Did-Copilot reporting tool', 'Frontier Firm analysis report')",
-      "summary": "1 sentence, max 20 words. What exists now that didn't before. Confident tone.",
+      "summary": "1 sentence, max 24 words. Lead with a past-tense verb and name the concrete feature/file/behavior that now exists or works. No vague filler (see BANNED list).",
       "human_hours": <sum of task hours>,
       "project": "exact project name from the SESSION header",
       "docs_referenced": ["filenames of docs actually analyzed or produced — empty list if none"],
       "tasks": [
         {{
           "title": "Implementation step (verb-first)",
-          "what_got_done": "One sentence, max 18 words. Outcome only — no tool names.",
+          "what_got_done": "One sentence, max 22 words. Lead with a past-tense verb and name the concrete artifact or behavior. Outcome only — no tool names, no vague filler.",
           "domain_skills": ["1-2 from: {domain_list}"],
           "tech_skills": ["0-2 from: {tech_list} (omit if none)"],
           "task_type": "one of: Development | Bug Fix & Debug | Analysis & Research | Design & UX | Execution & Ops",

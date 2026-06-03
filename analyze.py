@@ -8,6 +8,9 @@ import json
 import os
 import re
 import subprocess
+import time
+import random
+import http.client
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -27,7 +30,42 @@ API_URL = "https://models.github.ai/inference/chat/completions"
 MODEL   = "openai/gpt-4o-mini"
 
 # ~3000 tokens, leaving ~5000 for prompt + response
-MAX_TRANSCRIPT_CHARS = 12000
+MAX_TRANSCRIPT_CHARS = 25000
+
+
+def _retry_delay(err, attempt: int) -> float:
+    """Seconds to wait before the next retry, with exponential backoff.
+
+    Honors a ``Retry-After`` header (seconds) when the server provides one on a
+    429/503; otherwise uses exponential backoff with jitter, capped at 60s.
+    """
+    if err is not None:
+        retry_after = err.headers.get("Retry-After") if getattr(err, "headers", None) else None
+        if retry_after:
+            try:
+                return min(float(retry_after), 60.0)
+            except ValueError:
+                pass
+    return min(2.0 ** attempt + random.uniform(0, 1.0), 60.0)
+
+
+def _is_context_length_error(code: int, body: str) -> bool:
+    """True if an HTTP error indicates the request exceeded the model's context.
+
+    Covers the explicit 413 (Payload Too Large) status as well as the 400/422
+    responses GitHub Models returns with a context-length message in the body.
+    """
+    if code == 413:
+        return True
+    if code in (400, 422):
+        b = (body or "").lower()
+        return any(s in b for s in (
+            "context length", "context_length", "maximum context",
+            "too long", "too large", "tokens_limit", "token limit",
+            "maximum number of tokens", "reduce the length",
+        ))
+    return False
+
 
 def _load_taxonomy() -> tuple:
     """Load domain and tech skill lists from prompts/skills_taxonomy.txt."""
@@ -283,19 +321,26 @@ def check_api_health() -> tuple:
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return "auth", f"Authentication failed (HTTP {e.code}). Run `gh auth login` to refresh your token."
-        return "down", f"API returned HTTP {e.code}."
-    except urllib.error.URLError:
-        return "down", "API unreachable (timed out)."
+        if e.code == 429:
+            retry_after = e.headers.get("Retry-After") if e.headers else None
+            wait = f" Retry after {retry_after}s." if retry_after else ""
+            return "down", f"Rate limited (HTTP 429) — too many requests to the GitHub Models API.{wait}"
+        reason = (e.reason or "").strip() if hasattr(e, "reason") else ""
+        suffix = f" — {reason}" if reason else ""
+        return "down", f"API returned HTTP {e.code}{suffix}."
+    except urllib.error.URLError as e:
+        return "down", f"API unreachable ({e.reason})."
     except Exception as e:
-        return "down", f"API check failed ({e})."
+        return "down", f"API check failed ({type(e).__name__}: {e})."
 
 
 def _build_transcript(sessions: list) -> str:
     lines = []
     for s in sessions:
-        proj   = s["project"]
-        repo   = s.get("repository", "")
-        branch = s.get("branch", "")
+        proj      = s["project"]
+        repo      = s.get("repository", "")
+        branch    = s.get("branch", "")
+        proj_path = s.get("project_path", "")
 
         header = f"PROJECT: {proj}"
         if repo:
@@ -303,6 +348,16 @@ def _build_transcript(sessions: list) -> str:
         if branch:
             header += f" | BRANCH: {branch}"
         lines.append(f"\n=== {header} | SESSION: {s['session_id'][:8]} ===")
+
+        # Authoritative project identity. This is the real workspace folder /
+        # git repository the work happened in — the goal label MUST be built
+        # around this name, never around the wording of the first user message.
+        anchor = repo or proj
+        if anchor:
+            anchor_line = f"CANONICAL PROJECT NAME (anchor the goal label on this): {anchor}"
+            if proj_path and proj_path not in (anchor, ""):
+                anchor_line += f"  [workspace folder: {proj_path}]"
+            lines.append(anchor_line)
 
         if s.get("session_start") and s.get("session_end"):
             lines.append(f"Time: {s['session_start'][11:19]} → {s['session_end'][11:19]} UTC")
@@ -403,15 +458,17 @@ def _build_analysis_prompt(transcript: str, domain_list: str, tech_list: str) ->
     )
 
 
-def _prepare_prompt(sessions: list) -> str:
+def _prepare_prompt(sessions: list, max_chars: int = MAX_TRANSCRIPT_CHARS) -> str:
     """Build the analysis prompt for a list of sessions.
 
     Centralises transcript construction, truncation, and domain/tech list
-    formatting so every fallback branch uses identical inputs.
+    formatting so every fallback branch uses identical inputs. ``max_chars``
+    caps the transcript length and can be lowered to recover from a server-side
+    context-length rejection.
     """
     transcript = _build_transcript(sessions)
-    if len(transcript) > MAX_TRANSCRIPT_CHARS:
-        transcript = transcript[:MAX_TRANSCRIPT_CHARS] + "\n\n[... transcript truncated for length ...]"
+    if len(transcript) > max_chars:
+        transcript = transcript[:max_chars] + "\n\n[... transcript truncated for length ...]"
     domain_list = ", ".join(DOMAIN_SKILLS[:6]) + ", ..."
     tech_list   = ", ".join(TECH_SKILLS[:6])   + ", ..."
     return _build_analysis_prompt(transcript, domain_list, tech_list)
@@ -750,35 +807,82 @@ def analyze_day(target_date: str, sessions: list, refresh: bool = False,
               "Run `gh auth login` to enable semantic analysis.)")
         return _attach_metrics(_fallback_analysis(target_date, sessions))
 
-    payload = json.dumps({
-        "model":       MODEL,
-        "max_tokens":  3000,
-        "temperature": 0,
-        "messages":    [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
+    # Build the request payload inside the loop so an oversized-prompt rejection
+    # can rebuild it from a shrunken transcript and retry. ``shrink_caps`` holds
+    # progressively smaller transcript budgets to fall back to on a 413/400
+    # context-length error.
+    current_prompt = prompt
+    shrink_caps    = [16000, 8000]
 
-    req = urllib.request.Request(
-        API_URL, data=payload,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "content-type":  "application/json",
-        },
-        method="POST",
-    )
+    def _build_req(p: str) -> urllib.request.Request:
+        payload = json.dumps({
+            "model":       MODEL,
+            "max_tokens":  3000,
+            "temperature": 0,
+            "messages":    [{"role": "user", "content": p}],
+        }).encode("utf-8")
+        return urllib.request.Request(
+            API_URL, data=payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "content-type":  "application/json",
+            },
+            method="POST",
+        )
 
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            response = json.loads(resp.read().decode("utf-8"))
-        raw = response["choices"][0]["message"]["content"].strip()
-        raw = _extract_json(raw)
-        analysis = json.loads(raw)
-        return _finalize_and_cache(analysis, "ai")
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with urllib.request.urlopen(_build_req(current_prompt), timeout=120) as resp:
+                response = json.loads(resp.read().decode("utf-8"))
+            raw = response["choices"][0]["message"]["content"].strip()
+            raw = _extract_json(raw)
+            analysis = json.loads(raw)
+            return _finalize_and_cache(analysis, "ai")
 
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()[:300]
-        print(f"  WARNING: API error {e.code}: {body}")
-    except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
-        print(f"  WARNING: API unavailable ({type(e).__name__}).")
+        except urllib.error.HTTPError as e:
+            # Reading the error body can itself raise (e.g. IncompleteRead on a
+            # truncated 429 response), so guard it — never let cleanup crash.
+            try:
+                body = e.read().decode("utf-8", "replace")[:300]
+            except Exception:
+                body = ""
+            # Context-length / payload-too-large: shrink the transcript and retry
+            # at a smaller budget instead of burning attempts on the same size.
+            if _is_context_length_error(e.code, body):
+                if shrink_caps:
+                    new_cap = shrink_caps.pop(0)
+                    current_prompt = _prepare_prompt(sessions, new_cap)
+                    print(f"  API {e.code} (prompt too large); "
+                          f"shrinking transcript to {new_cap:,} chars and retrying...")
+                    continue
+                print(f"  WARNING: prompt still too large after shrinking "
+                      f"(API {e.code}). Falling back.")
+                break
+            # 429 (rate limit) and 5xx are transient: back off and retry.
+            if e.code == 429 or 500 <= e.code < 600:
+                if attempt < max_attempts:
+                    delay = _retry_delay(e, attempt)
+                    print(f"  API {e.code} (attempt {attempt}/{max_attempts}); "
+                          f"retrying in {delay:.0f}s...")
+                    time.sleep(delay)
+                    continue
+            print(f"  WARNING: API error {e.code}: {body}")
+            break
+        except (urllib.error.URLError, http.client.IncompleteRead,
+                ConnectionError, TimeoutError) as e:
+            # Network-level hiccup — retry a few times before giving up.
+            if attempt < max_attempts:
+                delay = _retry_delay(None, attempt)
+                print(f"  API connection issue ({type(e).__name__}); "
+                      f"retrying in {delay:.0f}s...")
+                time.sleep(delay)
+                continue
+            print(f"  WARNING: API unavailable ({type(e).__name__}).")
+            break
+        except (json.JSONDecodeError, KeyError) as e:
+            print(f"  WARNING: API returned unexpected data ({type(e).__name__}).")
+            break
 
     # API failed — try Copilot CLI before falling back to heuristic
     print("  Trying Copilot CLI as fallback...")

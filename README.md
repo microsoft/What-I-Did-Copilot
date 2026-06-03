@@ -2,6 +2,8 @@
 
 <br>
 
+<img src="https://raw.githubusercontent.com/microsoft/What-I-Did-Copilot/main/docs/images/logo.png" alt="What I Did with Copilot logo" width="120">
+
 # 📝 What I Did — GitHub Copilot Impact Report
 
 ### One command. See everything you built with Copilot — and the leverage you're getting from your seat.
@@ -37,7 +39,24 @@
 <a id="get-started"></a>
 ## Try it now
 
-Pick whichever matches how you use Copilot &mdash; all three install and run the same thing.
+The fastest way is the **VS Code extension** &mdash; one click, no terminal. Prefer the
+command line? The Copilot CLI plugin and a plain clone work exactly the same way.
+
+### ⭐ Easiest &mdash; the VS Code extension *(one click, no terminal)*
+
+1. Open the **Extensions** view (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>),
+   search **`What I Did`**, and click **Install**
+   *(or install the bundled `what-i-did-copilot-*.vsix` via **Extensions: Install from VSIX&hellip;**)*.
+2. Click **✦ What I Did** in the status bar, or run **What I Did: Open Report Builder** from the Command Palette.
+3. Pick a time range, flip any toggles, and click **Generate my report**. The finished report opens right inside VS Code.
+
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/microsoft/What-I-Did-Copilot/main/docs/images/report-builder.png" alt="The What I Did Report Builder inside VS Code" width="640">
+
+</div>
+
+### Prefer the command line?
 
 **Option A &mdash; Copilot CLI plugin** *(requires the GitHub Copilot CLI)*
 
@@ -53,7 +72,7 @@ Then just run:
 whatidid                # defaults to a 7-day lookback
 ```
 
-**Option B &mdash; VS Code (Awesome Copilot marketplace)** *(zero clone, zero terminal)*
+**Option B &mdash; VS Code chat plugin (Awesome Copilot marketplace)**
 
 1. Open the **Command Palette** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) &rarr; **Chat: Plugins**  
    *(or type `@agentPlugins` in the Extensions search view)*
@@ -94,6 +113,8 @@ That's it. A report opens in your browser showing your last 7 days with Copilot.
 | ⏰ **Activity heatmap** | When you collaborate and how your day breaks down. *When is AI most useful in your workflow?* |
 | 📐 **Estimation evidence** | Transparent methodology grounded in [13 peer-reviewed sources](docs/effort-estimation-methodology.md). *Why should anyone trust these numbers?* |
 | 💸 **Credit-burn patterns** | Every flagged pattern cites the Anthropic / OpenAI / GitHub guidance it implements &mdash; with clickable sources. *Where am I burning credits, and what does the published guidance say?* See the [credit-optimization methodology](docs/credit-optimization.md). |
+
+> 📊 **A note on the numbers.** Credit and cost figures are estimates, calculated from the token counts in your local session logs and GitHub's published per-model rates. They give an accurate picture of the *shape* of your AI usage, but your actual GitHub bill can differ depending on your plan, included credit allowance, and billing details that aren't visible in local logs.
 
 ---
 
