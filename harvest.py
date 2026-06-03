@@ -2121,9 +2121,17 @@ def compute_elapsed_minutes(session_start: str, session_end: str) -> float:
 def compute_active_minutes(messages: list) -> float:
     """Estimate active engagement time from message timestamps.
 
-    Sums intervals between consecutive messages where the gap is under
-    5 minutes.  Longer gaps represent idle time (user away or thinking)
-    and are excluded from the active total.
+    Sums intervals between consecutive messages, capping each interval at
+    10 minutes.  Long gaps are presumed to mix focused thinking/reading with
+    pure idle time (user away from keyboard), so we credit the threshold's
+    worth of work for each long gap rather than dropping it entirely.
+
+    Rationale: in agentic workflows much of the user's wall-clock time is
+    spent reading diffs, watching tools run, or reasoning between prompts.
+    Dropping any gap over 5 minutes — the prior behavior — discarded most
+    of that lived experience and produced a metric that consistently
+    underreported felt engagement.  Capping at the threshold yields a
+    conservative-but-not-zero credit for those intervals.
     """
     timestamps = []
     for m in messages:
@@ -2140,13 +2148,12 @@ def compute_active_minutes(messages: list) -> float:
         return 1.0  # Single message ≈ 1 min engagement
 
     timestamps.sort()
-    ACTIVE_THRESHOLD = 300  # 5 minutes in seconds
+    ACTIVE_THRESHOLD = 600  # 10 minutes in seconds
     active_s = 0.0
 
     for i in range(1, len(timestamps)):
         gap = (timestamps[i] - timestamps[i - 1]).total_seconds()
-        if gap <= ACTIVE_THRESHOLD:
-            active_s += gap
+        active_s += min(gap, ACTIVE_THRESHOLD)
 
     active_s += 30  # buffer for final message processing
     return round(active_s / 60, 1)
