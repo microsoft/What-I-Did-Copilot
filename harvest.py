@@ -648,9 +648,8 @@ def _build_session_from_events(
     Tool-call field names are accepted in both CLI form (``name`` /
     ``input``) and VS Code form (``toolName`` / ``arguments``), so the
     same extraction works against either source.
-
-    Returns ``None`` when the session has no user messages on
-    ``target_date`` (matches the original CLI behaviour at line 913-914).
+    Returns ``None`` when the session has no user messages on ``target_date``
+    (matches the original CLI behaviour).
     """
     if not events:
         return None
