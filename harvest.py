@@ -621,6 +621,35 @@ def _read_jsonl_events(path: Path) -> list:
     return events
 
 
+def _read_jsonl_events_for_date(path: Path, target_date: str) -> list:
+    """Stream a JSON-lines file and retain only session.start + target-date events."""
+    events = []
+    has_target_date = False
+    saw_session_start = False
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                ts = event.get("timestamp", "") or ""
+                if event.get("type") == "session.start" and not saw_session_start:
+                    events.append(event)
+                    saw_session_start = True
+                elif ts[:10] == target_date:
+                    events.append(event)
+                    has_target_date = True
+    except Exception:
+        return []
+    if not has_target_date:
+        return []
+    return events
+
+
 def _build_session_from_events(
     events: list,
     target_date: str,
@@ -1337,7 +1366,7 @@ def get_vscode_transcripts_for_date(
                     except Exception:
                         pass
 
-                events = _read_jsonl_events(jsonl_file)
+                events = _read_jsonl_events_for_date(jsonl_file, target_date)
                 if not events:
                     continue
 
