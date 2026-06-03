@@ -1291,10 +1291,9 @@ def get_vscode_transcripts_for_date(
     ``get_vscode_sessions_for_date(skip=…)`` so the lossy chatSessions
     store doesn't double-count any sessionId already captured here.
 
-    Pre-filter: any transcript file whose newest event timestamp is
-    older than ``target_date`` is skipped without a full read. Files
-    created later than ``target_date`` are also skipped — they cannot
-    contain events on a date before they existed.
+    Pre-filter: any transcript file whose filesystem mtime is older than
+    ``target_date`` is skipped without a full read. This heuristic avoids
+    parsing huge transcripts that have not been written recently.
     """
     sessions: list = []
     harvested: set = set()
