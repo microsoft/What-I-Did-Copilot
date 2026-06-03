@@ -67,11 +67,16 @@ whatidid                # defaults to a 7-day lookback
 
 **Option C &mdash; Clone the repo** *(maximum control, dev-mode)*
 
+Open a terminal (Windows Terminal, Terminal.app, or your favourite shell &mdash; including VS Code's built-in terminal), then:
+
 ```bash
+gh auth login                                           # one-time: authenticate to GitHub (enables AI analysis)
 git clone https://github.com/microsoft/What-I-Did-Copilot.git
 cd What-I-Did-Copilot
-python whatidid.py      # defaults to a 7-day lookback
+python whatidid.py                                      # defaults to a 7-day lookback
 ```
+
+Prerequisites: **Python 3.10+**, **[`git`](https://git-scm.com/)**, and **[GitHub CLI (`gh`)](https://cli.github.com/)**. See the [full requirements table](#requirements) below.
 
 That's it. A report opens in your browser showing your last 7 days with Copilot.
 
