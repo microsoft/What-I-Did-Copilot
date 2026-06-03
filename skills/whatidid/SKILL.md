@@ -5,16 +5,18 @@ description: "Generate a daily analytics report of what GitHub Copilot helped ac
 
 # What I Did (Copilot) — Impact Report Generator
 
-Run the following from the repo root to generate and email today's activity report:
+Run the following from the repo root to generate and email today's activity report. Use `--email` with **no argument** so the tool auto-detects the user's address (from `gh` / git config) — never substitute a literal placeholder like `user@example.com`:
 
 ```bash
-python whatidid.py --email user@example.com
+python whatidid.py --email
 ```
 
 If the user asks for a specific date range, use:
 ```bash
-python whatidid.py --date 30D --email user@example.com
+python whatidid.py --date 30D --email
 ```
+
+To send to a specific address instead of the auto-detected one, pass it explicitly: `--email someone@example.com`.
 
 After running, tell the user:
 - How many sessions and projects were found

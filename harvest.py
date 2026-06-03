@@ -25,6 +25,25 @@ from urllib.parse import unquote as _url_unquote, urlparse as _url_parse
 
 SESSION_DIR = Path.home() / ".copilot" / "session-state"
 
+# VS Code chatSessions JSONL files occasionally contain a single
+# multi-hundred-megabyte line — a full-state snapshot or an embedded blob
+# (e.g. a base64 image/attachment or a giant tool dump). ``json.loads`` on
+# such a line takes minutes and gigabytes of RAM, stalling the harvest. These
+# lines never carry the small per-request token/timing patches the parser
+# extracts, so any line past this size is skipped. Override with the
+# WHATIDID_MAX_LINE_MB env var if a future schema needs a larger ceiling.
+try:
+    _MAX_VSCODE_LINE_BYTES = int(float(_os.environ.get("WHATIDID_MAX_LINE_MB", "16")) * 1048576)
+except (TypeError, ValueError):
+    _MAX_VSCODE_LINE_BYTES = 16 * 1048576
+
+# Inline per-model pricing blocks sit only a few levels deep in the chat JSONL
+# (``v.metadata`` ≈ depth 2; ``v.inputState.selectedModel.metadata`` ≈ depth 4).
+# The recursive pricing scan is capped at this depth so it never descends into
+# the deeply nested message/tool-result content of a large chat-turn line —
+# that content carries no pricing and walking it node-by-node stalls the harvest.
+_INLINE_PRICING_MAX_DEPTH = 8
+
 _LOGIC_EXTS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java", ".cs",
     ".cpp", ".c", ".h", ".hpp", ".sh", ".bash", ".zsh", ".ps1", ".rb",
@@ -650,6 +669,81 @@ def _read_jsonl_events_for_date(path: Path, target_date: str) -> list:
     return events
 
 
+# Process-lifetime cache of parsed transcript files. A multi-day report calls
+# the per-date harvest once per day, but each transcript only needs to be read
+# from disk a single time: we stream it once, bucket its records by activity
+# date, and serve every subsequent date query from memory. This avoids
+# re-streaming the same (sometimes hundreds-of-MB) transcript dozens of times.
+_TRANSCRIPT_BUCKET_CACHE: "dict[str, dict]" = {}
+
+
+def _load_transcript_buckets(path: Path) -> dict:
+    """Parse a transcript JSONL file exactly once and bucket records by date.
+
+    Returns ``{"session_start": <first session.start event or None>,
+    "buckets": {YYYY-MM-DD: [events...]}}``. Combined with
+    ``_events_for_date_from_cache`` this reproduces the exact event list that
+    ``_read_jsonl_events_for_date`` returns for any date, while reading the
+    file from disk only once per process.
+    """
+    key = str(path)
+    cached = _TRANSCRIPT_BUCKET_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    session_start = None
+    saw_session_start = False
+    buckets: "dict[str, list]" = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                # First session.start is retained out-of-band and prepended to
+                # every date's slice — exactly as _read_jsonl_events_for_date
+                # does (its first branch wins over the date filter, and never
+                # sets has_target_date for the session.start line itself).
+                if event.get("type") == "session.start" and not saw_session_start:
+                    session_start = event
+                    saw_session_start = True
+                    continue
+                ts = event.get("timestamp", "") or ""
+                d = ts[:10]
+                if d:
+                    buckets.setdefault(d, []).append(event)
+    except Exception:
+        entry = {"session_start": None, "buckets": {}}
+        _TRANSCRIPT_BUCKET_CACHE[key] = entry
+        return entry
+
+    entry = {"session_start": session_start, "buckets": buckets}
+    _TRANSCRIPT_BUCKET_CACHE[key] = entry
+    return entry
+
+
+def _events_for_date_from_cache(path: Path, target_date: str) -> list:
+    """Return the same event list as ``_read_jsonl_events_for_date`` for a date,
+    sourced from the parse-once bucket cache.
+
+    Mirrors the original semantics precisely: a date with no own events yields
+    ``[]`` (even if a session.start exists), and otherwise the first
+    session.start (when present) is prepended to that date's events.
+    """
+    entry = _load_transcript_buckets(path)
+    date_events = entry["buckets"].get(target_date)
+    if not date_events:
+        return []
+    ss = entry["session_start"]
+    if ss is not None:
+        return [ss] + date_events
+    return date_events
+
+
 def _build_session_from_events(
     events: list,
     target_date: str,
@@ -878,11 +972,25 @@ def _build_session_from_events(
                           or shutdown_data.get("modelSelectionMode") == "auto")
         for model_name, model_data in shutdown_data.get("modelMetrics", {}).items():
             usage = model_data.get("usage", {}) or {}
+            input_tokens   = int(usage.get("inputTokens", 0)      or 0)
+            cache_read     = int(usage.get("cacheReadTokens", 0)  or 0)
+            cache_creation = int(usage.get("cacheWriteTokens", 0) or 0)
+            # ``inputTokens`` is the full prompt size; the cached portion is
+            # billed at the cache-read/cache-write rate, not the input rate.
+            # GitHub bills only the *fresh* (uncached) prompt at the input
+            # rate. Prefer the server's explicit fresh count when present
+            # (``tokenDetails.input.tokenCount``), otherwise derive it.
+            token_details  = model_data.get("tokenDetails") or {}
+            fresh_meta     = (token_details.get("input") or {}).get("tokenCount")
+            if isinstance(fresh_meta, int):
+                fresh_input = fresh_meta
+            else:
+                fresh_input = max(0, input_tokens - cache_read - cache_creation)
             tokens_by_model[model_name] = {
-                "input":          usage.get("inputTokens", 0)      or 0,
-                "output":         usage.get("outputTokens", 0)     or 0,
-                "cache_read":     usage.get("cacheReadTokens", 0)  or 0,
-                "cache_creation": usage.get("cacheWriteTokens", 0) or 0,
+                "input":          fresh_input,
+                "output":         int(usage.get("outputTokens", 0) or 0),
+                "cache_read":     cache_read,
+                "cache_creation": cache_creation,
             }
             requests_meta = model_data.get("requests", {}) or {}
             if requests_meta.get("count"):
@@ -1048,18 +1156,41 @@ def get_sessions_for_date(target_date: str) -> list:
                 sessions.append(session)
 
     # ── VS Code agent transcripts ──────────────────────────────────────
-    # Authoritative event log (same schema as CLI events.jsonl) — parsed
-    # first so the chatSessions pass can dedupe against (workspace,
-    # sessionId) we've already covered.
+    # Authoritative event log for messages/activity (complete turn history
+    # and burn-pattern signals) — but transcripts carry NO token counts.
     transcript_sessions, transcript_ids = get_vscode_transcripts_for_date(target_date)
-    sessions.extend(transcript_sessions)
 
-    # ── VS Code chatSessions (UI rehydration store) ────────────────────
-    # Sparse rolling-window snapshots; only the sessions NOT already
-    # captured by the agent transcripts above are added (transcripts
-    # are complete; chatSessions can drop most turns of a multi-turn
-    # session).
-    sessions.extend(get_vscode_sessions_for_date(target_date, skip=transcript_ids))
+    # ── VS Code chatSessions (authoritative token source) ──────────────
+    # The chatSessions store carries the per-request billed token counts
+    # (result.metadata.promptTokens / outputTokens) that the transcripts
+    # lack. Parse every chatSessions file, then:
+    #   (a) overlay its tokens onto the matching transcript session, and
+    #   (b) include any chatSessions session that has no transcript at all.
+    chat_sessions = get_vscode_sessions_for_date(target_date)
+    chat_by_key = {s["_vskey"]: s for s in chat_sessions if s.get("_vskey")}
+
+    for s in transcript_sessions:
+        src = chat_by_key.get(s.get("_vskey"))
+        if src and src.get("tokens", {}).get("total"):
+            s["tokens"]            = src["tokens"]
+            s["tokens_by_model"]   = src["tokens_by_model"]
+            s["requests_by_model"] = src["requests_by_model"]
+            s["premium_requests"]  = src.get("premium_requests", 0)
+            if src.get("inline_model_pricing"):
+                s["inline_model_pricing"] = src["inline_model_pricing"]
+            if not s.get("total_api_ms"):
+                s["total_api_ms"] = src.get("total_api_ms", 0)
+        sessions.append(s)
+
+    # chatSessions with no transcript counterpart stand alone (they carry
+    # both their own lossy message history and their token data).
+    for key, cs in chat_by_key.items():
+        if key not in transcript_ids:
+            sessions.append(cs)
+
+    # Strip the internal merge key before returning.
+    for s in sessions:
+        s.pop("_vskey", None)
 
     return sessions
 
@@ -1169,35 +1300,7 @@ def _extract_file_path_from_markdown(text: str) -> str:
     return ""
 
 
-def _vscode_walk_token_fields(node) -> "tuple[int, int]":
-    """Recursively sum inline ``promptTokens`` and ``outputTokens`` in a JSON tree.
-
-    VS Code records per-tool-call token usage inline inside response payloads.
-    Each round of a multi-turn chat re-sends the full conversation context,
-    so summing every ``promptTokens`` value across all rounds matches what
-    the underlying API actually bills.
-
-    Returns ``(prompt_total, output_total)``.
-    """
-    prompt = output = 0
-    if isinstance(node, dict):
-        for k, v in node.items():
-            if isinstance(v, int):
-                if k == "promptTokens":
-                    prompt += v
-                elif k == "outputTokens":
-                    output += v
-            else:
-                pp, oo = _vscode_walk_token_fields(v)
-                prompt += pp; output += oo
-    elif isinstance(node, list):
-        for x in node:
-            pp, oo = _vscode_walk_token_fields(x)
-            prompt += pp; output += oo
-    return prompt, output
-
-
-def _vscode_collect_inline_pricing(node, out: dict) -> None:
+def _vscode_collect_inline_pricing(node, out: dict, _depth: int = 0) -> None:
     """Walk a JSON tree and collect any inline per-model pricing metadata.
 
     VS Code Copilot Chat session JSONL embeds authoritative per-model rates
@@ -1221,7 +1324,16 @@ def _vscode_collect_inline_pricing(node, out: dict) -> None:
 
     Mutates ``out`` in place: ``{model_id: {input, output, cache_read,
     cache_creation, multiplier, _source}}``.
+
+    These pricing blocks live only a few levels deep (``v.metadata`` or
+    ``v.inputState.selectedModel.metadata`` in the sparse patch schema), so the
+    walk is bounded to ``_INLINE_PRICING_MAX_DEPTH``. Without this bound a
+    single large chat-turn line — a deeply nested tree of message text and tool
+    results, none of which carries pricing — would be traversed node-by-node in
+    pure Python and stall the harvest for minutes.
     """
+    if _depth > _INLINE_PRICING_MAX_DEPTH:
+        return
     if isinstance(node, dict):
         # Detect a pricing block. ``id`` is required for keying; rates are
         # required to be useful. Multiplier-only blocks (e.g. GPT-5.2-Codex
@@ -1245,10 +1357,10 @@ def _vscode_collect_inline_pricing(node, out: dict) -> None:
                 entry["multiplier"] = node["multiplierNumeric"]
             entry["_source"] = "vscode_inline"
         for v in node.values():
-            _vscode_collect_inline_pricing(v, out)
+            _vscode_collect_inline_pricing(v, out, _depth + 1)
     elif isinstance(node, list):
         for item in node:
-            _vscode_collect_inline_pricing(item, out)
+            _vscode_collect_inline_pricing(item, out, _depth + 1)
 
 
 def _normalize_vscode_model(model_id: str) -> str:
@@ -1295,6 +1407,7 @@ def get_vscode_sessions_for_date(
                 continue
             session = _parse_vscode_chat_file(jsonl_file, target_date, cwd_hint)
             if session is not None:
+                session["_vskey"] = (workspace_key, jsonl_file.stem)
                 sessions.append(session)
 
     return sessions
@@ -1326,11 +1439,6 @@ def get_vscode_transcripts_for_date(
     sessions: list = []
     harvested: set = set()
 
-    try:
-        td_dt = datetime.strptime(target_date, "%Y-%m-%d")
-    except Exception:
-        td_dt = None
-
     for base in _vscode_user_dirs():
         ws_root = base / "workspaceStorage"
         if not ws_root.is_dir():
@@ -1348,25 +1456,11 @@ def get_vscode_transcripts_for_date(
             cwd_hint = _vscode_workspace_cwd(ws_dir / "workspace.json")
             workspace_key = ws_dir.name
             for jsonl_file in tx_dir.glob("*.jsonl"):
-                # Cheap pre-filter: if the file hasn't been written to since
-                # target_date, it can't contain events from that day. Avoids
-                # parsing huge transcripts (one in-the-wild user has a
-                # multi-hundred-MB transcript file).
-                try:
-                    st = jsonl_file.stat()
-                except OSError:
-                    continue
-                if st.st_size == 0:
-                    continue
-                if td_dt is not None:
-                    try:
-                        mtime_dt = datetime.fromtimestamp(st.st_mtime)
-                        if mtime_dt.date() < td_dt.date():
-                            continue
-                    except Exception:
-                        pass
-
-                events = _read_jsonl_events_for_date(jsonl_file, target_date)
+                # Each transcript is streamed from disk only once per process
+                # and its records bucketed by date (_load_transcript_buckets);
+                # every date in a multi-day window is then served from memory
+                # instead of re-reading the file (some are hundreds of MB).
+                events = _events_for_date_from_cache(jsonl_file, target_date)
                 if not events:
                     continue
 
@@ -1378,10 +1472,217 @@ def get_vscode_transcripts_for_date(
                     entrypoint="vscode",
                 )
                 if session is not None:
+                    session["_vskey"] = (workspace_key, jsonl_file.stem)
                     sessions.append(session)
                     harvested.add((workspace_key, jsonl_file.stem))
 
     return sessions, harvested
+
+
+# Process-lifetime cache of decoded chat-file lines. A multi-day report harvests
+# each date separately, calling _parse_vscode_chat_file once per day, but every
+# day re-reads and re-decodes the same JSONL files from disk. Some chat files are
+# hundreds of MB, so re-streaming them ~30 times dominates the wall-clock time.
+# We decode each file's lines exactly once (skipping pathologically large lines
+# just as the parse loop does) and serve every subsequent date from memory.
+_VSCODE_FILE_CACHE: "dict" = {}
+_VSCODE_FILE_CACHE_BYTES = 0
+try:
+    _VSCODE_FILE_CACHE_BUDGET = int(float(_os.environ.get("WHATIDID_LINE_CACHE_MB", "2048")) * 1048576)
+except (TypeError, ValueError):
+    _VSCODE_FILE_CACHE_BUDGET = 2048 * 1048576
+# Only memoize files large enough that re-reading them per day measurably hurts;
+# small files are cheap to re-stream and don't warrant the resident memory.
+_VSCODE_FILE_CACHE_MIN = 4 * 1048576
+
+# Reused decoder for incremental extraction from giant kind=0 headers.
+_VSCODE_JSON_DECODER = json.JSONDecoder()
+
+
+def _giant_header_decode_after_key(raw: str, key: str, search_limit: int = 0):
+    """``raw_decode`` the JSON value that follows the first ``"key":`` in ``raw``.
+
+    Lets us pull a small scalar/object field out of a multi-hundred-MB kind=0
+    header line without materialising the whole object tree. Returns the decoded
+    value, or ``None`` if the key is absent or the value can't be decoded.
+    """
+    needle = '"' + key + '"'
+    kpos = raw.find(needle, 0, search_limit) if search_limit else raw.find(needle)
+    if kpos == -1:
+        return None
+    colon = raw.find(":", kpos + len(needle))
+    if colon == -1:
+        return None
+    i = colon + 1
+    n = len(raw)
+    while i < n and raw[i] in " \t\r\n":
+        i += 1
+    try:
+        val, _ = _VSCODE_JSON_DECODER.raw_decode(raw, i)
+        return val
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _extract_giant_header(raw: str) -> "tuple[int, dict]":
+    """Reconstruct a slim header value (``v``) dict from a giant kind=0 header.
+
+    The header embeds a full editor-state snapshot whose bulk is message bodies,
+    tool results and file contents; loading it whole exhausts memory. Instead we
+    walk only the ``requests`` array element-by-element with ``raw_decode`` (so
+    peak memory is a single request, never the whole tree), keeping the
+    per-request token metadata the billing math needs, plus the small
+    ``creationDate`` / ``sessionId`` / ``selectedModel`` fields. Everything else
+    is discarded. The returned ``hv`` is shaped exactly like the parsed
+    ``header["v"]`` so the normal parse path consumes it unchanged.
+
+    Returns ``(creation_ms, hv)``; ``creation_ms`` is ``0`` when the header
+    carries no usable ``creationDate``.
+    """
+    hv: dict = {}
+    creation_ms = 0
+    cd = _giant_header_decode_after_key(raw, "creationDate", 1048576)
+    if isinstance(cd, (int, float)):
+        creation_ms = int(cd)
+        hv["creationDate"] = creation_ms
+    sid = _giant_header_decode_after_key(raw, "sessionId", 1048576)
+    if isinstance(sid, str):
+        hv["sessionId"] = sid
+    sel = _giant_header_decode_after_key(raw, "selectedModel", 1048576)
+    if isinstance(sel, dict):
+        hv["inputState"] = {"selectedModel": sel}
+
+    # Locate the top-level ``requests`` array and walk its elements. JSON from
+    # VS Code is compact, so the array opens immediately after ``"requests":``.
+    stubs: list = []
+    n = len(raw)
+    kpos = raw.find('"requests"')
+    while kpos != -1:
+        j = kpos + len('"requests"')
+        while j < n and raw[j] in " \t\r\n":
+            j += 1
+        if j < n and raw[j] == ":":
+            j += 1
+            while j < n and raw[j] in " \t\r\n":
+                j += 1
+            if j < n and raw[j] == "[":
+                i = j + 1
+                while True:
+                    while i < n and raw[i] in " \t\r\n,":
+                        i += 1
+                    if i >= n or raw[i] == "]":
+                        break
+                    try:
+                        obj, end = _VSCODE_JSON_DECODER.raw_decode(raw, i)
+                    except (json.JSONDecodeError, ValueError):
+                        break
+                    i = end
+                    if not isinstance(obj, dict):
+                        continue
+                    stub = {
+                        "timestamp":        obj.get("timestamp"),
+                        "modelId":          obj.get("modelId"),
+                        "completionTokens": obj.get("completionTokens"),
+                    }
+                    res = obj.get("result")
+                    md = res.get("metadata") if isinstance(res, dict) else None
+                    if isinstance(md, dict):
+                        stub["result"] = {"metadata": {
+                            "promptTokens":  md.get("promptTokens"),
+                            "outputTokens":  md.get("outputTokens"),
+                            "resolvedModel": md.get("resolvedModel"),
+                            "summaries":     md.get("summaries"),
+                        }}
+                    stubs.append(stub)
+                break
+        kpos = raw.find('"requests"', kpos + 1)
+    hv["requests"] = stubs
+    return creation_ms, hv
+
+
+def _load_vscode_chat_file_lines(jsonl_file: Path):
+    """Read a chat JSONL file once and return ``(creation_ms, hv, lines)``.
+
+    ``lines`` is the ordered list of decoded line objects with pathologically
+    large lines (>``_MAX_VSCODE_LINE_BYTES``) skipped — exactly the objects the
+    parse loop would otherwise re-decode on every per-date call. Results are
+    cached per ``(path, mtime, size)`` under a byte budget so the cache cannot
+    grow without bound. Returns ``(0, {}, None)`` when the file cannot be read
+    or carries no valid kind=0 header with a ``creationDate``.
+    """
+    global _VSCODE_FILE_CACHE_BYTES
+    try:
+        st = jsonl_file.stat()
+        key = (str(jsonl_file), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return 0, {}, None
+    cached = _VSCODE_FILE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    creation_ms = 0
+    hv: dict = {}
+    lines: list = []
+    retained_bytes = 0
+    try:
+        with open(jsonl_file, encoding="utf-8") as f:
+            first = True
+            for raw in f:
+                if first:
+                    first = False
+                    if len(raw) > _MAX_VSCODE_LINE_BYTES:
+                        # Giant kind=0 header (it embeds a full editor-state
+                        # snapshot). Parsing it with ``json.loads`` would build a
+                        # multi-GB object tree, so reconstruct a slim ``v`` dict —
+                        # creationDate, sessionId, selectedModel pricing and the
+                        # per-request token metadata — by walking only the
+                        # ``requests`` array element-by-element. Dropping the
+                        # header outright used to discard the bulk of every long
+                        # session's billed tokens. The per-turn lines that follow
+                        # are still decoded normally.
+                        creation_ms, hv = _extract_giant_header(raw)
+                        reqs = hv.get("requests")
+                        if reqs:
+                            retained_bytes += 200 * len(reqs)
+                            lines.append({"kind": 0, "v": hv})
+                        continue
+                    s = raw.strip()
+                    if not s:
+                        return 0, {}, None
+                    try:
+                        header = json.loads(s)
+                    except Exception:
+                        return 0, {}, None
+                    if header.get("kind") != 0:
+                        return 0, {}, None
+                    hv = header.get("v", {}) or {}
+                    creation_ms = hv.get("creationDate", 0)
+                    retained_bytes += len(raw)
+                    lines.append(header)
+                    continue
+                if len(raw) > _MAX_VSCODE_LINE_BYTES:
+                    continue
+                s = raw.strip()
+                if not s:
+                    continue
+                try:
+                    obj = json.loads(s)
+                except Exception:
+                    continue
+                retained_bytes += len(raw)
+                lines.append(obj)
+    except Exception:
+        return 0, {}, None
+
+    if not creation_ms:
+        return 0, {}, None
+
+    result = (creation_ms, hv, lines)
+    if (st.st_size >= _VSCODE_FILE_CACHE_MIN
+            and _VSCODE_FILE_CACHE_BYTES + retained_bytes <= _VSCODE_FILE_CACHE_BUDGET):
+        _VSCODE_FILE_CACHE[key] = result
+        _VSCODE_FILE_CACHE_BYTES += retained_bytes
+    return result
 
 
 def _parse_vscode_chat_file(
@@ -1393,19 +1694,12 @@ def _parse_vscode_chat_file(
     workspace-scoped storage location; it is overridden by inline metadata only
     if it was empty (preserving the original empty-window fallback behaviour).
     """
-    # ── Fast date pre-filter: read only first line (kind=0 header) ────
+    # ── Fast date pre-filter (parse-once: decode the file a single time and
+    # serve every per-date call from the in-process cache) ────────────────
+    creation_ms, hv, lines = _load_vscode_chat_file_lines(jsonl_file)
+    if not creation_ms or lines is None:
+        return None
     try:
-        with open(jsonl_file, encoding="utf-8") as f:
-            first_line = f.readline().strip()
-        if not first_line:
-            return None
-        header = json.loads(first_line)
-        if header.get("kind") != 0:
-            return None
-        hv = header.get("v", {})
-        creation_ms = hv.get("creationDate", 0)
-        if not creation_ms:
-            return None
         creation_date = datetime.fromtimestamp(creation_ms / 1000).strftime("%Y-%m-%d")
     except Exception:
         return None
@@ -1446,40 +1740,102 @@ def _parse_vscode_chat_file(
     _vscode_collect_inline_pricing(hv, inline_model_pricing)
 
     # ── Token & timing accumulators (sparse VS Code JSONL schema) ─────
-    # Output tokens: kind=1 patch with key path ["requests", N,
-    #   "completionTokens"] — cumulative for the whole turn; latest
-    #   value wins per request index.
-    # Input tokens : sum of every inline ``promptTokens`` field across
-    #   all events (each tool-call round resends the full context, and
-    #   the API bills each round, so summing matches actual billing).
+    # The chat document is a ``requests`` array built incrementally. The
+    # kind=0 header carries the array of past requests; new requests are
+    # appended via kind=2 records whose ``k`` is ``["requests"]``; and the
+    # billed token counts for each request arrive as sparse kind=1 patches
+    # keyed by the request's *absolute* array index
+    # (``["requests", N, "result"]`` carries ``metadata.promptTokens`` /
+    # ``metadata.outputTokens`` / ``metadata.summaries[].usage`` with the
+    # cached-token split, and ``["requests", N, "completionTokens"]`` the
+    # full generated-output count). Reading only the kind=2 result metadata
+    # — as an earlier version did — missed the bulk of these patches and
+    # severely under-counted both input and output tokens.
+    #
+    # GitHub bills the *fresh* (uncached) prompt at the input rate, the
+    # cached prompt at the (≈10× cheaper) cache-read rate, and the full
+    # output at the output rate. When the per-request usage summary is
+    # present we use its exact split; otherwise we fall back to the
+    # request-level ``promptTokens`` / ``completionTokens``.
+    #
     # API time    : kind=1 patch with key ["requests", N, "elapsedMs"]
     #   OR ["requests", N, "result"].timings.totalElapsed.
     # TTFT (bonus): ["requests", N, "result"].timings.firstProgress.
-    # Per-request model id : recorded on the kind=2 chat turn event.
-    completion_by_req: dict = {}
+    req_slots: dict = {}    # absolute request index -> token/timing slot
     elapsed_by_req: dict    = {}
     ttft_by_req: dict       = {}
-    prompt_tokens_total     = 0
-    output_tokens_inline    = 0  # not used for billing, kept for parity
+
+    def _slot(idx: int) -> dict:
+        s = req_slots.get(idx)
+        if s is None:
+            s = {"ts_ms": 0, "model": "", "prompt": None, "output_meta": None,
+                 "completion": None, "summ_prompt": None, "cached": None,
+                 "summ_completion": None}
+            req_slots[idx] = s
+        return s
+
+    def _apply_req_meta(slot: dict, meta) -> None:
+        if not isinstance(meta, dict):
+            return
+        pt = meta.get("promptTokens")
+        if isinstance(pt, int):
+            slot["prompt"] = pt
+        ot = meta.get("outputTokens")
+        if isinstance(ot, int):
+            slot["output_meta"] = ot
+        rmodel = meta.get("resolvedModel")
+        if rmodel and not slot["model"]:
+            slot["model"] = rmodel
+        # An agentic request can fire several auto-summarization rounds, each
+        # a distinct billed model call recorded as its own ``summaries[]``
+        # entry. Sum across every round so none are dropped. The sum is stored
+        # by overwrite (not ``+=``) so repeated calls on the same metadata —
+        # header seed, kind=1 patch, kind=2 append — stay idempotent.
+        summ_p = 0
+        summ_c = 0
+        summ_comp = 0
+        have_summ = False
+        for sm in (meta.get("summaries") or []):
+            usage = (sm.get("usage") or {}) if isinstance(sm, dict) else {}
+            if not usage:
+                continue
+            det = usage.get("prompt_tokens_details") or {}
+            if isinstance(usage.get("prompt_tokens"), int):
+                summ_p += usage["prompt_tokens"]
+                have_summ = True
+            if isinstance(det.get("cached_tokens"), int):
+                summ_c += det["cached_tokens"]
+            if isinstance(usage.get("completion_tokens"), int):
+                summ_comp += usage["completion_tokens"]
+        if have_summ:
+            slot["summ_prompt"] = summ_p
+            slot["cached"] = summ_c
+            slot["summ_completion"] = summ_comp
+
+    # Seed slots from the header's existing ``requests`` array, then track
+    # the next index so kind=2 appends line up with the kind=1 patches.
+    header_requests = hv.get("requests")
+    if isinstance(header_requests, list):
+        for _i, _r in enumerate(header_requests):
+            if not isinstance(_r, dict):
+                continue
+            _s = _slot(_i)
+            _ts = _r.get("timestamp")
+            if isinstance(_ts, (int, float)):
+                _s["ts_ms"] = int(_ts)
+            if _r.get("modelId") and not _s["model"]:
+                _s["model"] = _r["modelId"]
+            if isinstance(_r.get("completionTokens"), int):
+                _s["completion"] = _r["completionTokens"]
+            _apply_req_meta(_s, (_r.get("result") or {}).get("metadata"))
+        next_req_index = len(header_requests)
+    else:
+        next_req_index = 0
 
     try:
-        with open(jsonl_file, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    continue
-
+        for obj in lines:
                 kind = obj.get("kind")
                 v = obj.get("v")
-
-                # Sum inline token fields across the whole event tree.
-                pp, oo = _vscode_walk_token_fields(obj)
-                prompt_tokens_total += pp
-                output_tokens_inline += oo
 
                 # Capture any inline pricing metadata that appears
                 # (e.g. ``inputState`` patches carrying a fresh
@@ -1509,9 +1865,7 @@ def _parse_vscode_chat_file(
                             and k[0] == "requests" and isinstance(k[1], int)):
                         req_idx = k[1]
                         field = k[2]
-                        if field == "completionTokens" and isinstance(v, int):
-                            completion_by_req[req_idx] = v  # latest wins
-                        elif field == "elapsedMs" and isinstance(v, (int, float)):
+                        if field == "elapsedMs" and isinstance(v, (int, float)):
                             elapsed_by_req[req_idx] = int(v)
                         elif field == "result" and isinstance(v, dict):
                             tim = v.get("timings", {})
@@ -1520,10 +1874,22 @@ def _parse_vscode_chat_file(
                                     elapsed_by_req[req_idx] = int(tim["totalElapsed"])
                                 if "firstProgress" in tim:
                                     ttft_by_req[req_idx] = int(tim["firstProgress"])
+                            _apply_req_meta(_slot(req_idx), v.get("metadata"))
+                        elif field == "completionTokens" and isinstance(v, (int, float)):
+                            _slot(req_idx)["completion"] = int(v)
+                        elif field == "promptTokens" and isinstance(v, (int, float)):
+                            _slot(req_idx)["prompt"] = int(v)
+                        elif field == "outputTokens" and isinstance(v, (int, float)):
+                            _slot(req_idx)["output_meta"] = int(v)
 
                 # kind=2: chat turns
                 if kind != 2 or not isinstance(v, list):
                     continue
+
+                # A record whose ``k`` is exactly ``["requests"]`` appends a
+                # brand-new request to the array — that is when a new
+                # absolute index is allocated.
+                is_append = obj.get("k") == ["requests"]
 
                 for item in v:
                     if not isinstance(item, dict):
@@ -1531,6 +1897,22 @@ def _parse_vscode_chat_file(
 
                     # ── Request (user turn with AI response) ──────────
                     if "requestId" in item and "message" in item:
+                        # Allocate this request's absolute array index when
+                        # it is first appended, and capture any inline token
+                        # metadata it already carries.
+                        if is_append:
+                            idx = next_req_index
+                            next_req_index += 1
+                            s = _slot(idx)
+                            _raw_ts = item.get("timestamp")
+                            if isinstance(_raw_ts, (int, float)):
+                                s["ts_ms"] = int(_raw_ts)
+                            if item.get("modelId") and not s["model"]:
+                                s["model"] = item["modelId"]
+                            if isinstance(item.get("completionTokens"), int):
+                                s["completion"] = item["completionTokens"]
+                            _apply_req_meta(s, (item.get("result") or {}).get("metadata"))
+
                         ts_ms = item.get("timestamp", 0)
                         ts_iso = _vscode_epoch_to_iso(ts_ms) if ts_ms else ""
                         if not ts_iso or ts_iso[:10] != target_date:
@@ -1589,7 +1971,27 @@ def _parse_vscode_chat_file(
 
     user_messages = [m for m in messages if m["role"] == "user"]
     if not user_messages:
-        return None
+        # A header-only chat file carries no extractable user-message turns —
+        # its turn text lives in the giant editor-state snapshot that is
+        # deliberately not materialised. It can still hold billed requests for
+        # this date in its per-request slots, so only discard the session when
+        # it has neither messages nor any dated, token-bearing request;
+        # otherwise the billing aggregated below would be silently dropped.
+        has_dated_tokens = False
+        for s in req_slots.values():
+            ts_ms = s.get("ts_ms") or 0
+            if not ts_ms:
+                continue
+            ts_iso = _vscode_epoch_to_iso(ts_ms)
+            if not ts_iso or ts_iso[:10] != target_date:
+                continue
+            if (s.get("prompt") or s.get("summ_prompt") or s.get("completion")
+                    or s.get("summ_completion") or s.get("output_meta")
+                    or s.get("cached")):
+                has_dated_tokens = True
+                break
+        if not has_dated_tokens:
+            return None
 
     project_name = Path(cwd).name if cwd else session_id[:12]
     all_modified = files_touched
@@ -1605,24 +2007,65 @@ def _parse_vscode_chat_file(
     lines_logic = round(total_lines * logic_frac)
     lines_boilerplate = total_lines - lines_logic
 
-    # Aggregate token + timing extraction from the JSONL.
-    out_tokens_total = sum(completion_by_req.values())
-    in_tokens_total  = prompt_tokens_total
-    total_api_ms     = sum(elapsed_by_req.values())
-    request_count    = len(completion_by_req) or len(elapsed_by_req)
-
-    norm_model = _normalize_vscode_model(model_used)
+    # Aggregate billed tokens per model from the per-request slots, keeping
+    # only requests whose own timestamp falls on the target date (a single
+    # long-lived chat file spans many days). Each request is attributed to
+    # the model that produced it, with the billed split:
+    #   • input      = fresh (uncached) prompt tokens
+    #   • cache_read = cached prompt tokens (billed ~10× cheaper)
+    #   • output     = full generated tokens
+    # An agentic request bills several distinct model calls: the main answer
+    # round (``promptTokens`` / ``completionTokens``) plus any number of
+    # auto-summarization rounds (each captured in ``summaries[]`` with its own
+    # usage). The most complete accounting sums them all — the base request
+    # prompt plus every summarization round — so no recorded billed call is
+    # dropped. When no summaries are present, ``promptTokens`` is the only
+    # recorded prompt, used as input with no separable cache.
     tokens_by_model: dict = {}
     requests_by_model: dict = {}
-    if norm_model and (in_tokens_total or out_tokens_total):
-        tokens_by_model[norm_model] = {
-            "input":          in_tokens_total,
-            "output":         out_tokens_total,
-            "cache_read":     0,   # VS Code JSONL does not expose cache breakdown
-            "cache_creation": 0,
-        }
-    if norm_model and request_count:
-        requests_by_model[norm_model] = request_count
+    fallback_model = _normalize_vscode_model(model_used)
+    date_request_count = 0
+    for s in req_slots.values():
+        ts_ms = s.get("ts_ms") or 0
+        if not ts_ms:
+            continue
+        ts_iso = _vscode_epoch_to_iso(ts_ms)
+        if not ts_iso or ts_iso[:10] != target_date:
+            continue
+
+        base_prompt = s.get("prompt") or 0
+        main_output = (s.get("completion")
+                       or s.get("output_meta") or 0)
+        if isinstance(s.get("cached"), int):
+            summ_prompt = s.get("summ_prompt") or 0
+            cached = s.get("cached") or 0
+            summ_completion = s.get("summ_completion") or 0
+            fresh_input = base_prompt + max(0, summ_prompt - cached)
+            cache_read = cached
+            output = main_output + summ_completion
+        else:
+            fresh_input = base_prompt
+            cache_read = 0
+            output = main_output
+        if not (fresh_input or cache_read or output):
+            continue
+
+        rm = _normalize_vscode_model(s.get("model")) or fallback_model or "unknown"
+        b = tokens_by_model.setdefault(
+            rm, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0})
+        b["input"]      += fresh_input
+        b["output"]     += output
+        b["cache_read"] += cache_read
+        requests_by_model[rm] = requests_by_model.get(rm, 0) + 1
+        date_request_count += 1
+
+    in_tokens_total  = sum(b["input"]      for b in tokens_by_model.values())
+    out_tokens_total = sum(b["output"]     for b in tokens_by_model.values())
+    cr_tokens_total  = sum(b["cache_read"] for b in tokens_by_model.values())
+    total_api_ms     = sum(elapsed_by_req.values())
+    request_count    = date_request_count or len(elapsed_by_req)
+
+    norm_model = fallback_model
 
     return {
         "session_id":        session_id,
@@ -1635,9 +2078,9 @@ def _parse_vscode_chat_file(
         "messages":          messages,
         "tokens":            {"input":          in_tokens_total,
                               "output":         out_tokens_total,
-                              "cache_read":     0,
+                              "cache_read":     cr_tokens_total,
                               "cache_creation": 0,
-                              "total":          in_tokens_total + out_tokens_total},
+                              "total":          in_tokens_total + out_tokens_total + cr_tokens_total},
         "tokens_by_model":   tokens_by_model,
         "premium_requests":  request_count,
         "requests_by_model": requests_by_model,

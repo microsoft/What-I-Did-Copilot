@@ -20,6 +20,7 @@ Triggered as a Copilot skill via /whatididghcp
 import argparse
 import io
 import json as _json
+import os
 import re as _re
 import subprocess
 import sys
@@ -44,6 +45,17 @@ sys.stderr = _ensure_utf8_stream(sys.stderr)
 sys.path.insert(0, str(Path(__file__).parent))
 
 DEFAULT_EMAIL = ""  # Auto-detected from GitHub API or git config
+
+# Per-day AI analyses are independent and I/O-bound (one network round-trip to
+# the analysis API each), so they run in a small thread pool. The default of 5
+# matches the GitHub Models "Low" tier concurrent-request cap for gpt-4o-mini;
+# going higher just triggers 429s and serial self-heal retries (net slower). If
+# a day still degrades to the heuristic fallback under load it is re-analysed
+# serially so results are identical to a sequential run. Overridable for tuning.
+try:
+    _ANALYZE_WORKERS = max(1, int(os.environ.get("WHATIDID_ANALYZE_WORKERS", "5")))
+except (TypeError, ValueError):
+    _ANALYZE_WORKERS = 5
 
 # Lookback pattern: e.g. 7D, 30d, 14D
 _LOOKBACK_RE = _re.compile(r'^(\d+)[dD]$')
@@ -487,8 +499,13 @@ def _print_summary(analysis: dict):
         print(f"  Code impact:                 +{lines_added} / -{lines_removed} lines")
 
 
-def _save_and_open(html: str, label: str) -> Path:
-    output_path = Path(__file__).parent / f"report_{label}.html"
+def _save_and_open(html: str, label: str, out_dir: "str | None" = None) -> Path:
+    base = Path(out_dir).expanduser() if out_dir else Path(__file__).parent
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        base = Path(__file__).parent
+    output_path = base / f"report_{label}.html"
     output_path.write_text(html, encoding="utf-8")
     print(f"\nHTML report saved: {output_path}")
     try:
@@ -548,50 +565,183 @@ def _detect_email() -> str:
     return DEFAULT_EMAIL
 
 
-def _send_outlook_email(subject: str, html: str, to_email: str) -> bool:
-    """Send an email via Outlook COM automation with the full HTML report as the body.
-    Returns True on success, False if Outlook is unavailable or the send fails."""
-    import tempfile, os
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".html", encoding="utf-8", delete=False
+def _normalize_recipients(raw: str) -> str:
+    """Turn a comma- and/or semicolon-separated recipient string into the
+    RFC-5322 comma-separated form mail clients expect. Either separator (or a
+    mix of both) is accepted; surrounding whitespace and empty entries are
+    dropped while order is preserved."""
+    parts = _re.split(r"[;,]", raw or "")
+    seen = []
+    for p in parts:
+        addr = p.strip()
+        if addr and addr not in seen:
+            seen.append(addr)
+    return ", ".join(seen)
+
+
+def _build_email_summary_html(analysis: dict, report_label: str) -> str:
+    """Build an Outlook-safe HTML summary for the email body.
+
+    Uses only table layout, the ``bgcolor`` attribute, and inline styles — no
+    gradients, flexbox, or external CSS — so it renders consistently in the
+    Outlook (Word engine) renderer as well as New Outlook, Gmail, and Apple
+    Mail. The full interactive report rides separately as an .html attachment.
+    """
+    import html as _html
+
+    HOURLY_RATE = 72  # keep in step with report.HOURLY_RATE
+
+    headline  = (analysis.get("headline") or "GitHub Copilot Impact Report").strip()
+    narrative = (analysis.get("day_narrative") or "").strip()
+    goals     = analysis.get("goals") or []
+    total_h   = sum(float(g.get("human_hours") or 0) for g in goals)
+    value     = total_h * HOURLY_RATE
+    n_proj    = len(goals)
+    span      = report_label.replace("_", " ")
+
+    esc = _html.escape
+
+    # Project rows
+    rows = ""
+    for i, g in enumerate(goals):
+        title   = esc((g.get("title") or g.get("label") or "Project").strip())
+        summary = esc((g.get("summary") or "").strip())
+        hours   = float(g.get("human_hours") or 0)
+        hours_s = (f"{hours:.1f}h" if hours else "")
+        row_bg  = "#ffffff" if i % 2 == 0 else "#f6f8fa"
+        rows += (
+            f'<tr>'
+            f'<td bgcolor="{row_bg}" valign="top" style="padding:10px 14px;border-bottom:1px solid #dde1e7;'
+            f'font-family:Segoe UI,Arial,sans-serif">'
+            f'<div style="font-size:14px;font-weight:700;color:#1b1f23;line-height:1.35">{title}</div>'
+            + (f'<div style="font-size:13px;color:#4a4f54;line-height:1.45;margin-top:3px">{summary}</div>'
+               if summary else "")
+            + f'</td>'
+            f'<td bgcolor="{row_bg}" valign="top" align="right" style="padding:10px 14px;border-bottom:1px solid #dde1e7;'
+            f'font-family:Segoe UI,Arial,sans-serif;white-space:nowrap;width:70px">'
+            f'<span style="font-size:14px;font-weight:700;color:#0078d4">{hours_s}</span>'
+            f'</td>'
+            f'</tr>'
+        )
+
+    narrative_block = (
+        f'<tr><td bgcolor="#ffffff" style="padding:6px 20px 14px;'
+        f'font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#3a3f44;line-height:1.5">'
+        f'{esc(narrative)}</td></tr>'
+        if narrative else ""
     )
+
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f0f2f5">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f0f2f5" style="background:#f0f2f5">
+<tr><td align="center" style="padding:20px 12px">
+<table width="640" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff"
+       style="width:640px;max-width:640px;background:#ffffff;border:1px solid #dde1e7">
+
+  <tr>
+    <td bgcolor="#24292f" style="background:#24292f;padding:18px 20px;font-family:Segoe UI,Arial,sans-serif">
+      <div style="font-size:10px;color:#b0b6bd;letter-spacing:1px;text-transform:uppercase;margin-bottom:5px">
+        {esc(span)} &nbsp;&middot;&nbsp; GitHub Copilot Impact Report</div>
+      <div style="font-size:18px;font-weight:700;color:#ffffff;line-height:1.35">{esc(headline)}</div>
+    </td>
+  </tr>
+
+  {narrative_block}
+
+  <tr>
+    <td bgcolor="#1a7f37" style="background:#1a7f37;padding:14px 20px;text-align:center;
+        font-family:Segoe UI,Arial,sans-serif">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:#cdeccd">
+        Value Delivered</div>
+      <div style="font-size:30px;font-weight:700;color:#ffffff;line-height:1.1;margin-top:4px">
+        ${value:,.0f}</div>
+      <div style="font-size:12px;color:#d8efd8;margin-top:3px">
+        {total_h:.1f}h &times; ${HOURLY_RATE}/hr blended rate
+        &nbsp;&middot;&nbsp; {n_proj} project{'s' if n_proj != 1 else ''}</div>
+    </td>
+  </tr>
+
+  <tr>
+    <td bgcolor="#ffffff" style="padding:16px 20px 6px;font-family:Segoe UI,Arial,sans-serif">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#6a737d">
+        What Got Delivered</div>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:0 20px 16px">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="border:1px solid #dde1e7;border-collapse:collapse">
+        {rows}
+      </table>
+    </td>
+  </tr>
+
+  <tr>
+    <td bgcolor="#f6f8fa" style="background:#f6f8fa;padding:12px 20px;border-top:1px solid #dde1e7;
+        font-family:Segoe UI,Arial,sans-serif;font-size:12px;color:#6a737d;line-height:1.5">
+      The full interactive report &mdash; with task-level evidence, skills,
+      collaboration patterns, and AI investment &mdash; is attached as an HTML file.
+      Open <strong style="color:#1b1f23">report_{esc(report_label)}.html</strong> in any browser.
+    </td>
+  </tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+
+
+def _open_email_draft(subject: str, html: str, to_email: str, label: str = "report",
+                      body_html: str = "") -> bool:
+    """Open a prefilled, sendable email draft in the user's default mail client.
+
+    Writes a standards-compliant .eml file carrying a short summary in the body
+    (plain text, plus an optional Outlook-safe HTML summary when ``body_html`` is
+    given) and the full HTML report as an .html attachment, with the
+    ``X-Unsent: 1`` header that tells mail clients (classic Outlook, New Outlook,
+    Windows Mail) to open it as an editable draft the user can review and Send
+    through their own account. This works even when no account is configured for
+    COM automation. ``to_email`` may list several recipients separated by commas
+    and/or semicolons. Returns True if the draft was handed off to the mail
+    client, False otherwise.
+    """
+    import tempfile, os
+    from email.message import EmailMessage
     try:
-        tmp.write(html)
-        tmp.close()
-        # Single-quoted PowerShell strings are literal — no backslash escaping needed,
-        # only single quotes need doubling.
-        ps_path = tmp.name.replace("'", "''")
-        escaped_subject = subject.replace("'", "''")
-        escaped_to = to_email.replace("'", "''")
-        ps = (
-            f"$html = Get-Content -Path '{ps_path}' -Raw -Encoding UTF8;"
-            f"$ol = New-Object -ComObject Outlook.Application;"
-            f"$mail = $ol.CreateItem(0);"
-            f"$mail.Subject = '{escaped_subject}';"
-            f"$mail.To = '{escaped_to}';"
-            f"$mail.HTMLBody = $html;"
-            f"$mail.Send();"
-            f"$ol.Session.SendAndReceive($true);"
-            f"Start-Sleep -Seconds 5"
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["To"] = _normalize_recipients(to_email)
+        msg["X-Unsent"] = "1"
+        msg.set_content(
+            "Your GitHub Copilot impact report summary is below, and the full "
+            "interactive report is attached as an HTML file. Open the attachment "
+            "to view it, then click Send."
         )
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps],
-            timeout=60,
-            capture_output=True,
-            text=True,
+        if body_html:
+            msg.add_alternative(body_html, subtype="html")
+        msg.add_attachment(
+            html.encode("utf-8"),
+            maintype="text",
+            subtype="html",
+            filename=f"report_{label}.html",
         )
-        if result.returncode != 0:
-            print(f"\n  [email error] {result.stderr.strip() or result.stdout.strip()}")
-            return False
+
+        fd, path = tempfile.mkstemp(suffix=".eml", prefix="copilot_report_")
+        with os.fdopen(fd, "wb") as f:
+            f.write(bytes(msg))
+
+        # Hand the draft to the default .eml handler (New Outlook on this machine).
+        try:
+            os.startfile(path)  # type: ignore[attr-defined]  # Windows-only
+        except AttributeError:
+            subprocess.run(["cmd", "/c", "start", "", path], check=False)
         return True
     except Exception as exc:
         print(f"\n  [email error] {exc}")
         return False
-    finally:
-        try:
-            os.unlink(tmp.name)
-        except Exception:
-            pass
 
 
 def _preprocess_argv(argv: list) -> list:
@@ -622,6 +772,11 @@ def main():
                         help="Freeze estimates after this run — future --refresh calls will be ignored")
     parser.add_argument("--email",   nargs="?", const=True, default=False,
                         help="Send report via Outlook (auto-detects email, or pass an explicit address)")
+    parser.add_argument("--non-interactive", dest="non_interactive", action="store_true",
+                        help="Never prompt for input; on AI-analysis failure, fall straight back to the "
+                             "heuristic estimate. Used when launched from the VS Code extension.")
+    parser.add_argument("--out-dir", dest="out_dir", default=None,
+                        help="Directory to save the HTML report (default: the folder containing this script)")
     args = parser.parse_args(_preprocess_argv(sys.argv[1:]))
 
     today = date.today().isoformat()
@@ -690,13 +845,19 @@ def main():
             print(f"[FAIL] {cli_msg}")
             print(f"  The AI analysis API is currently unreachable and the Copilot CLI fallback is unavailable.")
             print(f"  Without either, estimates will use a less accurate heuristic approach.\n")
-            print(f"  Options:")
-            print(f"    1. Retry the API automatically (up to {MAX_RETRIES}× at 1-min intervals)")
-            print(f"    2. Continue now with heuristic fallback\n")
-            try:
-                choice = input("  Enter choice [1]: ").strip()
-            except (EOFError, KeyboardInterrupt):
+            if args.non_interactive:
+                print(f"  Proceeding with heuristic fallback.")
+                print(f"  (Re-run later with the AI analysis available for more accurate estimates.)\n")
+                analysis_source = "heuristic"
                 choice = "2"
+            else:
+                print(f"  Options:")
+                print(f"    1. Retry the API automatically (up to {MAX_RETRIES}× at 1-min intervals)")
+                print(f"    2. Continue now with heuristic fallback\n")
+                try:
+                    choice = input("  Enter choice [1]: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    choice = "2"
 
             if choice == "2":
                 print("\n  Proceeding with heuristic fallback.\n")
@@ -731,6 +892,11 @@ def main():
     day_analyses = []
     all_sessions = []
 
+    from report import _resolve_market_cost as _rmc, _credits as _cred
+
+    # Phase 1 — harvest each day sequentially (cheap, file I/O) and print the
+    # per-day line in date order, byte-for-byte identical to the original loop.
+    pending = []  # [(date, sessions)] for non-empty days, in date order
     for d in dates:
         sessions = get_sessions_for_date(d)
         if not sessions:
@@ -738,14 +904,52 @@ def main():
         premium = sum(s.get("premium_requests", 0) for s in sessions)
         # Compute per-day AI credit total from tokens (server credits aren't
         # always present yet; this matches what the report uses).
-        from report import _resolve_market_cost as _rmc, _credits as _cred
         day_credits = sum(_cred(_rmc(s)) for s in sessions)
         leg = f", {premium} legacy reqs" if premium else ""
         print(f"  {d}: {len(sessions)} session(s), {day_credits:,} AI credits{leg}")
-        analysis = analyze_day(d, sessions, refresh=args.refresh,
-                               analysis_source=analysis_source)
-        day_analyses.append((d, analysis, sessions))
+        pending.append((d, sessions))
         all_sessions.extend(sessions)
+
+    # Phase 2 — run the per-day AI analysis concurrently. Each call is an
+    # independent, I/O-bound network round-trip, so a small thread pool collapses
+    # the wall-clock time. Results are keyed by date and reassembled in the
+    # original order below, so the merge — and therefore every figure in the
+    # report — is identical to the sequential path.
+    def _analyze_one(day, sess, force_refresh=None):
+        return analyze_day(
+            day, sess,
+            refresh=args.refresh if force_refresh is None else force_refresh,
+            analysis_source=analysis_source,
+        )
+
+    results_by_date = {}
+    if pending:
+        workers = min(_ANALYZE_WORKERS, len(pending))
+        if workers <= 1:
+            for d, sessions in pending:
+                results_by_date[d] = _analyze_one(d, sessions)
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(_analyze_one, d, sessions): d
+                           for d, sessions in pending}
+                for fut in futures:
+                    results_by_date[futures[fut]] = fut.result()
+
+        # Safety net: if concurrency caused any day to transiently degrade to the
+        # heuristic fallback (e.g. a momentary API rate limit) while the API was
+        # healthy, re-analyse those days one at a time so the dataset matches a
+        # clean sequential AI run. No-op on the happy path.
+        if analysis_source == "api":
+            degraded = [(d, s) for d, s in pending
+                        if results_by_date[d].get("analysis_method") == "heuristic"]
+            for d, sessions in degraded:
+                retry = _analyze_one(d, sessions, force_refresh=True)
+                if retry.get("analysis_method") != "heuristic":
+                    results_by_date[d] = retry
+
+    for d, sessions in pending:
+        day_analyses.append((d, results_by_date[d], sessions))
 
     if not day_analyses:
         print(f"\nNo Copilot sessions found for {report_label}.")
@@ -792,7 +996,7 @@ def main():
     from report import generate_html
     html = generate_html(report_label, analysis, all_sessions, max_width=960)
 
-    _save_and_open(html, report_label)
+    _save_and_open(html, report_label, args.out_dir)
 
     if args.email is not False:
         # Resolve recipient email
@@ -805,12 +1009,15 @@ def main():
         else:
             to_email = args.email
         if to_email:
+            to_email = _normalize_recipients(to_email)
+        if to_email:
             # Generate a narrower version for email clients (Outlook, Gmail)
             email_html = generate_html(report_label, analysis, all_sessions, max_width=700)
+            summary_html = _build_email_summary_html(analysis, report_label)
             subject = f"My GitHub Copilot Impact | {report_label.replace('_', ' ')}"
-            print(f"  Sending email to: {to_email} ...", end="", flush=True)
-            ok = _send_outlook_email(subject, email_html, to_email)
-            print(" sent." if ok else " failed.")
+            print(f"  Opening a prefilled draft to {to_email} in your mail app ...", end="", flush=True)
+            ok = _open_email_draft(subject, email_html, to_email, report_label, summary_html)
+            print(" opened — review and click Send." if ok else " failed.")
 
     print("\nDone.")
     burn_count = len(analysis.get("burn_findings") or [])
