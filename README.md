@@ -37,7 +37,11 @@
 <a id="get-started"></a>
 ## Try it now
 
-**Option A — Install as a Copilot CLI plugin** *(on GitHub CLI only)*
+Pick whichever matches how you use Copilot &mdash; all three install and run the same thing.
+
+**Option A &mdash; Copilot CLI plugin** *(requires the GitHub Copilot CLI)*
+
+In any Copilot CLI session:
 
 ```bash
 /plugin install whatidid@awesome-copilot
@@ -49,17 +53,30 @@ Then just run:
 whatidid                # defaults to a 7-day lookback
 ```
 
-**Option B — Clone the repo**
+**Option B &mdash; VS Code (Awesome Copilot marketplace)** *(zero clone, zero terminal)*
+
+1. Open the **Command Palette** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) &rarr; **Chat: Plugins**  
+   *(or type `@agentPlugins` in the Extensions search view)*
+2. Search **`whatidid`** &rarr; click **Install**
+3. In Copilot Chat, just ask:
+   > *"give me a 7-day Copilot report"* &nbsp;·&nbsp; *"whatidid this month"* &nbsp;·&nbsp; *"summarize what Copilot helped me with today"*
+
+> 💡 **Power user tip:** the plugin is a full Python checkout under  
+> `~/.copilot/installed-plugins/awesome-copilot/whatidid/` (Windows: `%USERPROFILE%\.copilot\...`).  
+> `cd` there and run `python whatidid.py --30D` directly. Note this is the marketplace-pinned release &mdash; run `copilot plugin update whatidid@awesome-copilot` to refresh, or use Option C for true latest-`main`.
+
+**Option C &mdash; Clone the repo** *(maximum control, dev-mode)*
+
+Open a terminal (Windows Terminal, Terminal.app, or your favourite shell &mdash; including VS Code's built-in terminal), then:
 
 ```bash
+gh auth login                                           # one-time: authenticate to GitHub (enables AI analysis)
 git clone https://github.com/microsoft/What-I-Did-Copilot.git
 cd What-I-Did-Copilot
+python whatidid.py                                      # defaults to a 7-day lookback
 ```
 
-```bash
-copilot or code         # to open Copilot CLI or VS Code
-python whatidid.py      # defaults to a 7-day lookback
-```
+Prerequisites: **Python 3.10+**, **[`git`](https://git-scm.com/)**, and **[GitHub CLI (`gh`)](https://cli.github.com/)**. See the [full requirements table](#requirements) below.
 
 That's it. A report opens in your browser showing your last 7 days with Copilot.
 
