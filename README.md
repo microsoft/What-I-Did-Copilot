@@ -61,6 +61,10 @@ whatidid                # defaults to a 7-day lookback
 3. In Copilot Chat, just ask:
    > *"give me a 7-day Copilot report"* &nbsp;·&nbsp; *"whatidid this month"* &nbsp;·&nbsp; *"summarize what Copilot helped me with today"*
 
+> 💡 **Power user tip:** the plugin is a full Python checkout under  
+> `~/.copilot/installed-plugins/awesome-copilot/whatidid/` (Windows: `%USERPROFILE%\.copilot\...`).  
+> `cd` there and run `python whatidid.py --30D` directly. Note this is the marketplace-pinned release &mdash; run `copilot plugin update whatidid@awesome-copilot` to refresh, or use Option C for true latest-`main`.
+
 **Option C &mdash; Clone the repo** *(maximum control, dev-mode)*
 
 ```bash
