@@ -3,11 +3,16 @@ harvest.py — Read GitHub Copilot session event files and extract structured ac
 
 CLI sessions are stored at ~/.copilot/session-state/<uuid>/events.jsonl
 
-VS Code Copilot Chat sessions live in two locations, both scanned:
+VS Code Copilot Chat sessions live in three locations, all scanned:
   - <appdata>/Code/User/globalStorage/emptyWindowChatSessions/<uuid>.jsonl
         (chats opened in an empty VS Code window — no folder/workspace)
   - <appdata>/Code/User/workspaceStorage/<hash>/chatSessions/<uuid>.jsonl
-        (chats opened with a folder/workspace — where most activity lives)
+        (UI-rehydration store — sparse rolling-window snapshot, may capture
+        only a few turns of a multi-turn session)
+  - <appdata>/Code/User/workspaceStorage/<hash>/GitHub.copilot-chat/transcripts/<uuid>.jsonl
+        (authoritative agent event log — same event-stream schema as the
+        CLI's events.jsonl, so the CLI parser is reused; preferred over
+        chatSessions for the same sessionId because it is complete)
 The sibling workspace.json supplies the workspace folder for cwd enrichment.
 """
 import json
@@ -594,364 +599,439 @@ def _summarise_tools(run: list) -> str:
     return ", ".join(f"{n} ×{c[n]}" if c[n] > 1 else n for n in c)
 
 
+def _read_jsonl_events(path: Path) -> list:
+    """Read a JSON-lines file and return the parsed events list.
+
+    Skips blank lines and lines that fail to parse. Returns an empty list
+    if the file is missing or unreadable.
+    """
+    events = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    return events
+
+
+def _build_session_from_events(
+    events: list,
+    target_date: str,
+    *,
+    session_id: str,
+    source_path: Path,
+    cwd_default: str = "",
+    repository_default: str = "",
+    branch_default: str = "",
+    workspace_summary: str = "",
+    entrypoint: str = "copilot",
+) -> "dict | None":
+    """Build a per-date session dict from an events list.
+
+    Shared by the CLI events.jsonl path and the VS Code agent transcript
+    path (workspaceStorage/<hash>/GitHub.copilot-chat/transcripts/<id>.jsonl)
+    — both use the same event-stream schema (``type``/``data``/``timestamp``).
+
+    ``cwd_default`` / ``repository_default`` / ``branch_default`` come from
+    out-of-band workspace metadata (``workspace.yaml`` for CLI,
+    ``workspace.json`` for VS Code). They are used only as fallbacks when
+    ``session.start.data.context`` doesn't carry the field — preserving the
+    original CLI behaviour.
+
+    Tool-call field names are accepted in both CLI form (``name`` /
+    ``input``) and VS Code form (``toolName`` / ``arguments``), so the
+    same extraction works against either source.
+
+    Returns ``None`` when the session has no user messages on
+    ``target_date`` (matches the original CLI behaviour at line 913-914).
+    """
+    if not events:
+        return None
+
+    # Quick check: does this session touch the target date?
+    has_target_date = False
+    for e in events:
+        ts = e.get("timestamp", "")
+        if ts and ts[:10] == target_date:
+            has_target_date = True
+            break
+
+    if not has_target_date:
+        return None
+
+    # Pull session context from session.start
+    session_ctx = {}
+    for e in events:
+        if e.get("type") == "session.start":
+            session_ctx = e.get("data", {}).get("context", {}) or {}
+            break
+
+    cwd        = session_ctx.get("cwd", "")        or cwd_default
+    repository = session_ctx.get("repository", "") or repository_default
+    branch     = session_ctx.get("branch", "")     or branch_default
+
+    project_name = Path(cwd).name if cwd else source_path.name[:12]
+
+    # Extract user messages and tool summaries
+    messages      = []
+    session_start = None
+    session_end   = None
+    git_ops_list  = []
+    files_touched = set()  # files from edit/create tool events
+
+    for e in events:
+        ts = e.get("timestamp", "")
+        if not ts or ts[:10] != target_date:
+            continue
+
+        if not session_start:
+            session_start = ts
+        session_end = ts
+
+        etype = e.get("type", "")
+
+        if etype == "user.message":
+            raw = e.get("data", {}).get("content", "")
+            if isinstance(raw, str) and raw.strip():
+                text = _strip_injected_context(raw).strip()
+                if text and not _is_approval(text):
+                    messages.append({
+                        "role":        "user",
+                        "text":        text,
+                        "timestamp":   ts,
+                        "tools_after": [],
+                    })
+
+        elif etype == "assistant.message":
+            tool_requests = e.get("data", {}).get("toolRequests", []) or []
+            for tr in tool_requests:
+                if not isinstance(tr, dict):
+                    continue
+                # CLI uses ``name``/``input``; VS Code agent transcripts use
+                # ``toolName``/``arguments``. Accept both so the same logic
+                # extracts files touched and tool summaries from either source.
+                tool_name_raw = tr.get("name") or tr.get("toolName") or ""
+                summary = tr.get("intentionSummary") or tool_name_raw
+                if summary and messages and messages[-1]["role"] == "user":
+                    messages[-1]["tools_after"].append(summary)
+
+                tool_name_lower = tool_name_raw.lower()
+                if tool_name_lower in ("edit", "create"):
+                    args = tr.get("input") or tr.get("arguments") or {}
+                    path_str = args.get("path", "") if isinstance(args, dict) else ""
+                    if not path_str and summary:
+                        pm = _re.search(r'[\\/]([^\\/]+\.\w{1,8})\.?\s*$', summary)
+                        if pm:
+                            path_str = pm.group(1)
+                    if path_str:
+                        files_touched.add(path_str.replace("\\", "/"))
+
+        elif etype == "tool.execution_complete":
+            tool_name = e.get("data", {}).get("toolName", "")
+            if "pull_request" in tool_name.lower() or "pr" in tool_name.lower():
+                if e.get("data", {}).get("success", False):
+                    git_ops_list.append("pr")
+
+    # Detect PRs and commits from user messages and tool summaries
+    _pr_keywords = {"create the pr", "create a pr", "create pr", "gh pr create",
+                    "pull request", "open a pr", "open pr", "submit pr"}
+    _commit_keywords = {"commit", "git commit", "push to remote", "push to origin",
+                        "push it", "commit and push"}
+    for m in messages:
+        txt = m["text"].lower().strip()
+        tools_text = " ".join(m.get("tools_after", [])).lower()
+        if any(k in txt for k in _pr_keywords) or "create pr" in tools_text:
+            if "pr" not in git_ops_list[-1:]:  # Avoid consecutive dupes
+                git_ops_list.append("pr")
+        if any(k in txt for k in _commit_keywords) or "commit" in tools_text:
+            if "commit" not in git_ops_list[-1:]:
+                git_ops_list.append("commit")
+
+    # Two-phase token/credit extraction.
+    #
+    # Phase 1 always walks every event and accumulates the per-event signals
+    # the agent emits directly. Phase 2 reconciles: when `session.shutdown`
+    # is present we use its server-rolled-up `modelMetrics` as canonical;
+    # otherwise we reconstruct from per-event data (the only way to attribute
+    # cost to sessions that crashed, were killed, are still active, or were
+    # suspended — i.e. sessions which never write a clean shutdown record).
+    #
+    # No modeling or estimation: only token counts that the CLI emits in
+    # the event stream are used. Anything we don't have direct data for
+    # (e.g. per-turn input tokens for non-compaction calls) stays 0 and the
+    # session is flagged `session_state="open"` so the report can disclose
+    # that costs are a lower bound.
+    tokens_by_model = {}  # {model_name: {input, output, cache_read, cache_creation}}
+    requests_by_model = {}  # {model_name: api_call_count}
+    ai_credits = None  # server-emitted credit total if available
+    ai_credits_by_model = {}  # {model_name: credits_used} if present
+    premium_requests = 0
+    total_api_ms     = 0
+    code_changes     = {}
+    model_used       = ""
+    plan_tier        = ""
+    auto_model       = False
+
+    # ── Phase 1: per-event accumulation (always runs) ────────────────────
+    #
+    # IMPORTANT: every per-event signal is date-filtered to `target_date`.
+    # Without this, a single multi-day open session would inflate totals
+    # by N× when the report aggregates across the dates it touches (the
+    # same session.tokens would be returned N times by N harvest calls).
+    per_msg_output_by_model: dict = {}
+    per_msg_count_by_model:  dict = {}
+    compaction_blocks:       list = []
+    last_assistant_model = ""
+    shutdown_data: "dict | None" = None
+    shutdown_ts:   str           = ""
+
+    for e in events:
+        t = e.get("type")
+        d = e.get("data") or {}
+        ts = e.get("timestamp", "") or ""
+        on_target_day = ts[:10] == target_date
+
+        if t == "assistant.message":
+            if not on_target_day:
+                continue
+            m = d.get("model") or "unknown"
+            out = d.get("outputTokens") or 0
+            per_msg_count_by_model[m] = per_msg_count_by_model.get(m, 0) + 1
+            if isinstance(out, (int, float)) and out > 0:
+                per_msg_output_by_model[m] = per_msg_output_by_model.get(m, 0) + int(out)
+            if m and m != "unknown":
+                last_assistant_model = m
+        elif t == "session.compaction_complete":
+            if not on_target_day:
+                continue
+            ctu = d.get("compactionTokensUsed") or {}
+            if ctu:
+                compaction_blocks.append(ctu)
+        elif t == "session.shutdown":
+            # Capture every shutdown (use the last one if multiple exist).
+            # Whether we attribute its rollup to *this* date is decided in
+            # Phase 2 based on the shutdown timestamp.
+            shutdown_data = d
+            shutdown_ts   = ts
+
+    # ── Phase 2: reconcile ───────────────────────────────────────────────
+    session_state = "unknown"
+
+    # The shutdown rollup is the *entire* session bill. Only credit it to
+    # the date the shutdown actually fired on, otherwise a multi-day
+    # session would over-count its tokens on every date it touches.
+    shutdown_on_target = (shutdown_data is not None
+                          and shutdown_ts[:10] == target_date)
+
+    if shutdown_on_target:
+        # Clean shutdown present today — trust the server-rolled-up totals.
+        session_state    = "complete"
+        premium_requests = shutdown_data.get("totalPremiumRequests", 0)
+        total_api_ms     = shutdown_data.get("totalApiDurationMs", 0)
+        code_changes     = shutdown_data.get("codeChanges", {})
+        model_used       = shutdown_data.get("currentModel", "") or last_assistant_model
+        # AI Credits billing fields (June 2026+) — read if present.
+        if "totalAiCredits" in shutdown_data:
+            ai_credits = shutdown_data.get("totalAiCredits")
+        elif "totalAICredits" in shutdown_data:
+            ai_credits = shutdown_data.get("totalAICredits")
+        elif "totalCredits" in shutdown_data:
+            ai_credits = shutdown_data.get("totalCredits")
+        plan_tier  = shutdown_data.get("planTier") or shutdown_data.get("plan") or ""
+        auto_model = bool(shutdown_data.get("autoModelSelection")
+                          or shutdown_data.get("autoModel")
+                          or shutdown_data.get("modelSelectionMode") == "auto")
+        for model_name, model_data in shutdown_data.get("modelMetrics", {}).items():
+            usage = model_data.get("usage", {}) or {}
+            tokens_by_model[model_name] = {
+                "input":          usage.get("inputTokens", 0)      or 0,
+                "output":         usage.get("outputTokens", 0)     or 0,
+                "cache_read":     usage.get("cacheReadTokens", 0)  or 0,
+                "cache_creation": usage.get("cacheWriteTokens", 0) or 0,
+            }
+            requests_meta = model_data.get("requests", {}) or {}
+            if requests_meta.get("count"):
+                requests_by_model[model_name] = requests_meta["count"]
+            credits_meta = (model_data.get("creditsUsed")
+                            or model_data.get("credits"))
+            if credits_meta is not None:
+                ai_credits_by_model[model_name] = credits_meta
+    else:
+        # No shutdown on this date — use the date-filtered per-event totals.
+        # This covers: still-open sessions, crashed/killed sessions, and
+        # multi-day sessions whose shutdown fired on a different date.
+        has_per_event = bool(per_msg_count_by_model or compaction_blocks)
+        session_state = "open" if has_per_event else "unknown"
+        model_used    = last_assistant_model
+
+        def _bucket(m: str) -> dict:
+            if m not in tokens_by_model:
+                tokens_by_model[m] = {"input": 0, "output": 0,
+                                      "cache_read": 0, "cache_creation": 0}
+            return tokens_by_model[m]
+
+        # Direct fact: per-message output tokens summed by model
+        # (already restricted to events on target_date in Phase 1).
+        for m, out in per_msg_output_by_model.items():
+            _bucket(m)["output"] += out
+
+        # Direct fact: each compaction on target_date emits exact
+        # tokenDetails (the same data GitHub uses to bill nano-AIU).
+        # Attribute to the model that ran the compaction call.
+        for ctu in compaction_blocks:
+            m = ctu.get("model") or "unknown"
+            b = _bucket(m)
+            b["input"]          += int(ctu.get("inputTokens", 0)      or 0)
+            b["output"]         += int(ctu.get("outputTokens", 0)     or 0)
+            b["cache_read"]     += int(ctu.get("cacheReadTokens", 0)  or 0)
+            b["cache_creation"] += int(ctu.get("cacheWriteTokens", 0) or 0)
+
+        # Request count per model — proxy from assistant.message count.
+        # We don't claim these are "premium requests" (that distinction is
+        # server-side); leave the top-level premium_requests at 0 so
+        # downstream effort estimation falls back to other signals.
+        for m, c in per_msg_count_by_model.items():
+            requests_by_model[m] = c
+
+        # Plan tier may still be supplied via env var below.
+
+    # Derive scalar `tokens` totals from the per-model breakdown so both
+    # code paths produce the same canonical shape.
+    tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
+    for mt in tokens_by_model.values():
+        for k in tokens:
+            tokens[k] += mt.get(k, 0) or 0
+    tokens["total"] = sum(tokens.values())
+
+    # Plan can also be supplied via env var (COPILOT_PLAN=pro|pro+|max|business|enterprise)
+    # when the session log doesn't carry it. Useful for individuals on monthly plans.
+    if not plan_tier:
+        plan_tier = _os.environ.get("COPILOT_PLAN", "").strip()
+
+    # Merge files: shutdown data + tool event extraction
+    shutdown_files = set(code_changes.get("filesModified", []))
+    all_modified = shutdown_files | files_touched
+    if all_modified and not shutdown_files:
+        code_changes.setdefault("filesModified", sorted(all_modified))
+
+    # Split lines into logic vs boilerplate by file extension.
+    # Copilot sessions don't give per-file line counts, so estimate from
+    # the proportion of modified files with logic extensions.
+    total_lines = code_changes.get("linesAdded", 0)
+    if all_modified:
+        import os
+        logic_files = sum(1 for f in all_modified
+                          if os.path.splitext(f)[1].lower() in _LOGIC_EXTS)
+        logic_frac = logic_files / len(all_modified)
+    else:
+        logic_frac = 1.0  # no file info → assume all logic
+    lines_logic = round(total_lines * logic_frac)
+    lines_boilerplate = total_lines - lines_logic
+
+    user_messages = [m for m in messages if m["role"] == "user"]
+    if not user_messages:
+        return None
+
+    git_repos = [repository] if repository else []
+
+    return {
+        "session_id":        session_id,
+        "project":           project_name,
+        "project_path":      cwd or str(source_path),
+        "repository":        repository,
+        "branch":            branch,
+        "entrypoint":        entrypoint,
+        "date":              target_date,
+        "messages":          messages,
+        "tokens":            tokens,
+        "tokens_by_model":   tokens_by_model,
+        "premium_requests":  premium_requests,
+        "requests_by_model": requests_by_model,
+        "ai_credits":        ai_credits,           # None when server didn't emit
+        "ai_credits_by_model": ai_credits_by_model,
+        "plan":              plan_tier,
+        "auto_model_selection": auto_model,
+        "session_state":     session_state,        # complete | open | unknown
+        "total_api_ms":      total_api_ms,
+        "code_changes":      code_changes,
+        "model_used":        model_used,
+        "session_start":     session_start,
+        "session_end":       session_end,
+        "git_repos":         git_repos,
+        "git_ops":           git_ops_list,
+        "workspace_summary": workspace_summary,
+        "tool_invocations":  sum(len(m.get("tools_after", [])) for m in messages if m["role"] == "user"),
+        "files_touched":     sorted(all_modified),
+        "lines_logic":       lines_logic,
+        "lines_boilerplate": lines_boilerplate,
+        # Per-session burn findings (cost-saving opportunities). Token counts
+        # are observational only; credit conversion happens in the renderer.
+        "burn_findings":     _analyze_burn_patterns(events, target_date),
+    }
+
+
 def get_sessions_for_date(target_date: str) -> list:
     """
     Find all Copilot sessions with activity on target_date (YYYY-MM-DD).
     Returns a list of session dicts compatible with the whatidid schema.
+
+    Scans CLI sessions (~/.copilot/session-state/) AND every VS Code Copilot
+    Chat source (empty-window, workspace chatSessions, agent transcripts).
+    VS Code harvesting always runs even when the CLI directory doesn't exist
+    (e.g. VS Code-only users).
     """
     sessions = []
 
-    if not SESSION_DIR.exists():
-        return sessions
-
-    for session_dir in SESSION_DIR.iterdir():
-        if not session_dir.is_dir():
-            continue
-
-        events_file   = session_dir / "events.jsonl"
-        workspace_file = session_dir / "workspace.yaml"
-
-        if not events_file.exists():
-            continue
-
-        workspace = _read_workspace(workspace_file)
-
-        # Parse all events
-        events = []
-        try:
-            with open(events_file, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        events.append(json.loads(line))
-                    except Exception:
-                        continue
-        except Exception:
-            continue
-
-        if not events:
-            continue
-
-        # Quick check: does this session touch the target date?
-        has_target_date = False
-        for e in events:
-            ts = e.get("timestamp", "")
-            if ts and ts[:10] == target_date:
-                has_target_date = True
-                break
-
-        if not has_target_date:
-            continue
-
-        # Pull session context from session.start
-        session_ctx = {}
-        for e in events:
-            if e.get("type") == "session.start":
-                session_ctx = e.get("data", {}).get("context", {})
-                break
-
-        cwd        = session_ctx.get("cwd", "")        or workspace.get("cwd", "")
-        repository = session_ctx.get("repository", "") or workspace.get("repository", "")
-        branch     = session_ctx.get("branch", "")     or workspace.get("branch", "")
-
-        project_name = Path(cwd).name if cwd else session_dir.name[:12]
-
-        # Extract user messages and tool summaries
-        messages      = []
-        session_start = None
-        session_end   = None
-        git_ops_list  = []
-        files_touched = set()  # files from edit/create tool events
-
-        for e in events:
-            ts = e.get("timestamp", "")
-            if not ts or ts[:10] != target_date:
+    # ── CLI sessions ────────────────────────────────────────────────────
+    if SESSION_DIR.exists():
+        for session_dir in SESSION_DIR.iterdir():
+            if not session_dir.is_dir():
                 continue
 
-            if not session_start:
-                session_start = ts
-            session_end = ts
+            events_file    = session_dir / "events.jsonl"
+            workspace_file = session_dir / "workspace.yaml"
 
-            etype = e.get("type", "")
+            if not events_file.exists():
+                continue
 
-            if etype == "user.message":
-                raw = e.get("data", {}).get("content", "")
-                if isinstance(raw, str) and raw.strip():
-                    text = _strip_injected_context(raw).strip()
-                    if text and not _is_approval(text):
-                        messages.append({
-                            "role":        "user",
-                            "text":        text,
-                            "timestamp":   ts,
-                            "tools_after": [],
-                        })
+            workspace = _read_workspace(workspace_file)
+            events = _read_jsonl_events(events_file)
+            if not events:
+                continue
 
-            elif etype == "assistant.message":
-                tool_requests = e.get("data", {}).get("toolRequests", [])
-                for tr in tool_requests:
-                    # intentionSummary is already human-readable (e.g. "Read report.py")
-                    summary = tr.get("intentionSummary") or tr.get("name", "")
-                    if summary and messages and messages[-1]["role"] == "user":
-                        messages[-1]["tools_after"].append(summary)
+            session = _build_session_from_events(
+                events, target_date,
+                session_id=session_dir.name,
+                source_path=session_dir,
+                cwd_default=workspace.get("cwd", ""),
+                repository_default=workspace.get("repository", ""),
+                branch_default=workspace.get("branch", ""),
+                workspace_summary=workspace.get("summary", ""),
+                entrypoint="copilot",
+            )
+            if session is not None:
+                sessions.append(session)
 
-                    # Track files touched by edit/create tool operations
-                    tool_name_lower = (tr.get("name") or "").lower()
-                    if tool_name_lower in ("edit", "create"):
-                        path_str = (tr.get("input", {}) or {}).get("path", "")
-                        if not path_str and summary:
-                            pm = _re.search(r'[\\/]([^\\/]+\.\w{1,8})\.?\s*$', summary)
-                            if pm:
-                                path_str = pm.group(1)
-                        if path_str:
-                            files_touched.add(path_str.replace("\\", "/"))
+    # ── VS Code agent transcripts ──────────────────────────────────────
+    # Authoritative event log (same schema as CLI events.jsonl) — parsed
+    # first so the chatSessions pass can dedupe against (workspace,
+    # sessionId) we've already covered.
+    transcript_sessions, transcript_ids = get_vscode_transcripts_for_date(target_date)
+    sessions.extend(transcript_sessions)
 
-            elif etype == "tool.execution_complete":
-                tool_name = e.get("data", {}).get("toolName", "")
-                if "pull_request" in tool_name.lower() or "pr" in tool_name.lower():
-                    if e.get("data", {}).get("success", False):
-                        git_ops_list.append("pr")
-
-        # Detect PRs and commits from user messages and tool summaries
-        _pr_keywords = {"create the pr", "create a pr", "create pr", "gh pr create",
-                        "pull request", "open a pr", "open pr", "submit pr"}
-        _commit_keywords = {"commit", "git commit", "push to remote", "push to origin",
-                            "push it", "commit and push"}
-        for m in messages:
-            txt = m["text"].lower().strip()
-            tools_text = " ".join(m.get("tools_after", [])).lower()
-            if any(k in txt for k in _pr_keywords) or "create pr" in tools_text:
-                if "pr" not in git_ops_list[-1:]:  # Avoid consecutive dupes
-                    git_ops_list.append("pr")
-            if any(k in txt for k in _commit_keywords) or "commit" in tools_text:
-                if "commit" not in git_ops_list[-1:]:
-                    git_ops_list.append("commit")
-
-        # Two-phase token/credit extraction.
-        #
-        # Phase 1 always walks every event and accumulates the per-event signals
-        # the agent emits directly. Phase 2 reconciles: when `session.shutdown`
-        # is present we use its server-rolled-up `modelMetrics` as canonical;
-        # otherwise we reconstruct from per-event data (the only way to attribute
-        # cost to sessions that crashed, were killed, are still active, or were
-        # suspended — i.e. sessions which never write a clean shutdown record).
-        #
-        # No modeling or estimation: only token counts that the CLI emits in
-        # the event stream are used. Anything we don't have direct data for
-        # (e.g. per-turn input tokens for non-compaction calls) stays 0 and the
-        # session is flagged `session_state="open"` so the report can disclose
-        # that costs are a lower bound.
-        tokens_by_model = {}  # {model_name: {input, output, cache_read, cache_creation}}
-        requests_by_model = {}  # {model_name: api_call_count}
-        ai_credits = None  # server-emitted credit total if available
-        ai_credits_by_model = {}  # {model_name: credits_used} if present
-        premium_requests = 0
-        total_api_ms     = 0
-        code_changes     = {}
-        model_used       = ""
-        plan_tier        = ""
-        auto_model       = False
-
-        # ── Phase 1: per-event accumulation (always runs) ────────────────────
-        #
-        # IMPORTANT: every per-event signal is date-filtered to `target_date`.
-        # Without this, a single multi-day open session would inflate totals
-        # by N× when the report aggregates across the dates it touches (the
-        # same session.tokens would be returned N times by N harvest calls).
-        per_msg_output_by_model: dict[str, int] = {}
-        per_msg_count_by_model:  dict[str, int] = {}
-        compaction_blocks:       list[dict]     = []
-        last_assistant_model = ""
-        shutdown_data: dict | None = None
-        shutdown_ts:   str         = ""
-
-        for e in events:
-            t = e.get("type")
-            d = e.get("data") or {}
-            ts = e.get("timestamp", "") or ""
-            on_target_day = ts[:10] == target_date
-
-            if t == "assistant.message":
-                if not on_target_day:
-                    continue
-                m = d.get("model") or "unknown"
-                out = d.get("outputTokens") or 0
-                per_msg_count_by_model[m] = per_msg_count_by_model.get(m, 0) + 1
-                if isinstance(out, (int, float)) and out > 0:
-                    per_msg_output_by_model[m] = per_msg_output_by_model.get(m, 0) + int(out)
-                if m and m != "unknown":
-                    last_assistant_model = m
-            elif t == "session.compaction_complete":
-                if not on_target_day:
-                    continue
-                ctu = d.get("compactionTokensUsed") or {}
-                if ctu:
-                    compaction_blocks.append(ctu)
-            elif t == "session.shutdown":
-                # Capture every shutdown (use the last one if multiple exist).
-                # Whether we attribute its rollup to *this* date is decided in
-                # Phase 2 based on the shutdown timestamp.
-                shutdown_data = d
-                shutdown_ts   = ts
-
-        # ── Phase 2: reconcile ───────────────────────────────────────────────
-        session_state = "unknown"
-
-        # The shutdown rollup is the *entire* session bill. Only credit it to
-        # the date the shutdown actually fired on, otherwise a multi-day
-        # session would over-count its tokens on every date it touches.
-        shutdown_on_target = (shutdown_data is not None
-                              and shutdown_ts[:10] == target_date)
-
-        if shutdown_on_target:
-            # Clean shutdown present today — trust the server-rolled-up totals.
-            session_state    = "complete"
-            premium_requests = shutdown_data.get("totalPremiumRequests", 0)
-            total_api_ms     = shutdown_data.get("totalApiDurationMs", 0)
-            code_changes     = shutdown_data.get("codeChanges", {})
-            model_used       = shutdown_data.get("currentModel", "") or last_assistant_model
-            # AI Credits billing fields (June 2026+) — read if present.
-            if "totalAiCredits" in shutdown_data:
-                ai_credits = shutdown_data.get("totalAiCredits")
-            elif "totalAICredits" in shutdown_data:
-                ai_credits = shutdown_data.get("totalAICredits")
-            elif "totalCredits" in shutdown_data:
-                ai_credits = shutdown_data.get("totalCredits")
-            plan_tier  = shutdown_data.get("planTier") or shutdown_data.get("plan") or ""
-            auto_model = bool(shutdown_data.get("autoModelSelection")
-                              or shutdown_data.get("autoModel")
-                              or shutdown_data.get("modelSelectionMode") == "auto")
-            for model_name, model_data in shutdown_data.get("modelMetrics", {}).items():
-                usage = model_data.get("usage", {}) or {}
-                tokens_by_model[model_name] = {
-                    "input":          usage.get("inputTokens", 0)      or 0,
-                    "output":         usage.get("outputTokens", 0)     or 0,
-                    "cache_read":     usage.get("cacheReadTokens", 0)  or 0,
-                    "cache_creation": usage.get("cacheWriteTokens", 0) or 0,
-                }
-                requests_meta = model_data.get("requests", {}) or {}
-                if requests_meta.get("count"):
-                    requests_by_model[model_name] = requests_meta["count"]
-                credits_meta = (model_data.get("creditsUsed")
-                                or model_data.get("credits"))
-                if credits_meta is not None:
-                    ai_credits_by_model[model_name] = credits_meta
-        else:
-            # No shutdown on this date — use the date-filtered per-event totals.
-            # This covers: still-open sessions, crashed/killed sessions, and
-            # multi-day sessions whose shutdown fired on a different date.
-            has_per_event = bool(per_msg_count_by_model or compaction_blocks)
-            session_state = "open" if has_per_event else "unknown"
-            model_used    = last_assistant_model
-
-            def _bucket(m: str) -> dict:
-                if m not in tokens_by_model:
-                    tokens_by_model[m] = {"input": 0, "output": 0,
-                                          "cache_read": 0, "cache_creation": 0}
-                return tokens_by_model[m]
-
-            # Direct fact: per-message output tokens summed by model
-            # (already restricted to events on target_date in Phase 1).
-            for m, out in per_msg_output_by_model.items():
-                _bucket(m)["output"] += out
-
-            # Direct fact: each compaction on target_date emits exact
-            # tokenDetails (the same data GitHub uses to bill nano-AIU).
-            # Attribute to the model that ran the compaction call.
-            for ctu in compaction_blocks:
-                m = ctu.get("model") or "unknown"
-                b = _bucket(m)
-                b["input"]          += int(ctu.get("inputTokens", 0)      or 0)
-                b["output"]         += int(ctu.get("outputTokens", 0)     or 0)
-                b["cache_read"]     += int(ctu.get("cacheReadTokens", 0)  or 0)
-                b["cache_creation"] += int(ctu.get("cacheWriteTokens", 0) or 0)
-
-            # Request count per model — proxy from assistant.message count.
-            # We don't claim these are "premium requests" (that distinction is
-            # server-side); leave the top-level premium_requests at 0 so
-            # downstream effort estimation falls back to other signals.
-            for m, c in per_msg_count_by_model.items():
-                requests_by_model[m] = c
-
-            # Plan tier may still be supplied via env var below.
-
-        # Derive scalar `tokens` totals from the per-model breakdown so both
-        # code paths produce the same canonical shape.
-        tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0}
-        for mt in tokens_by_model.values():
-            for k in tokens:
-                tokens[k] += mt.get(k, 0) or 0
-        tokens["total"] = sum(tokens.values())
-
-        # Plan can also be supplied via env var (COPILOT_PLAN=pro|pro+|max|business|enterprise)
-        # when the session log doesn't carry it. Useful for individuals on monthly plans.
-        if not plan_tier:
-            plan_tier = _os.environ.get("COPILOT_PLAN", "").strip()
-
-        # Merge files: shutdown data + tool event extraction
-        shutdown_files = set(code_changes.get("filesModified", []))
-        all_modified = shutdown_files | files_touched
-        if all_modified and not shutdown_files:
-            code_changes.setdefault("filesModified", sorted(all_modified))
-
-        # Split lines into logic vs boilerplate by file extension.
-        # Copilot sessions don't give per-file line counts, so estimate from
-        # the proportion of modified files with logic extensions.
-        total_lines = code_changes.get("linesAdded", 0)
-        if all_modified:
-            import os
-            logic_files = sum(1 for f in all_modified
-                              if os.path.splitext(f)[1].lower() in _LOGIC_EXTS)
-            logic_frac = logic_files / len(all_modified)
-        else:
-            logic_frac = 1.0  # no file info → assume all logic
-        lines_logic = round(total_lines * logic_frac)
-        lines_boilerplate = total_lines - lines_logic
-
-        user_messages = [m for m in messages if m["role"] == "user"]
-        if not user_messages:
-            continue
-
-        git_repos = [repository] if repository else []
-
-        sessions.append({
-            "session_id":        session_dir.name,
-            "project":           project_name,
-            "project_path":      cwd or str(session_dir),
-            "repository":        repository,
-            "branch":            branch,
-            "entrypoint":        "copilot",
-            "date":              target_date,
-            "messages":          messages,
-            "tokens":            tokens,
-            "tokens_by_model":   tokens_by_model,
-            "premium_requests":  premium_requests,
-            "requests_by_model": requests_by_model,
-            "ai_credits":        ai_credits,           # None when server didn't emit
-            "ai_credits_by_model": ai_credits_by_model,
-            "plan":              plan_tier,
-            "auto_model_selection": auto_model,
-            "session_state":     session_state,        # complete | open | unknown
-            "total_api_ms":      total_api_ms,
-            "code_changes":      code_changes,
-            "model_used":        model_used,
-            "session_start":     session_start,
-            "session_end":       session_end,
-            "git_repos":         git_repos,
-            "git_ops":           git_ops_list,
-            "workspace_summary": workspace.get("summary", ""),
-            "tool_invocations":  sum(len(m.get("tools_after", [])) for m in messages if m["role"] == "user"),
-            "files_touched":     sorted(all_modified),
-            "lines_logic":       lines_logic,
-            "lines_boilerplate": lines_boilerplate,
-            # Per-session burn findings (cost-saving opportunities). Token counts
-            # are observational only; credit conversion happens in the renderer.
-            "burn_findings":     _analyze_burn_patterns(events, target_date),
-        })
-
-    # Also harvest VS Code Copilot Chat sessions
-    sessions.extend(get_vscode_sessions_for_date(target_date))
+    # ── VS Code chatSessions (UI rehydration store) ────────────────────
+    # Sparse rolling-window snapshots; only the sessions NOT already
+    # captured by the agent transcripts above are added (transcripts
+    # are complete; chatSessions can drop most turns of a multi-turn
+    # session).
+    sessions.extend(get_vscode_sessions_for_date(target_date, skip=transcript_ids))
 
     return sessions
 
@@ -1008,18 +1088,22 @@ def _vscode_workspace_cwd(workspace_json: Path) -> str:
         return ""
 
 
-def _get_vscode_chat_dirs() -> "list[tuple[Path, str]]":
+def _get_vscode_chat_dirs() -> "list[tuple[Path, str, str]]":
     """All VS Code Copilot Chat session directories with optional workspace cwd hints.
 
-    Returns a list of ``(chat_dir, workspace_cwd)`` tuples.  ``workspace_cwd``
-    is the absolute path to the workspace folder for workspace-scoped sessions,
-    or ``""`` for empty-window sessions (no folder open).
+    Returns a list of ``(chat_dir, workspace_cwd, workspace_key)`` tuples.
+    ``workspace_cwd`` is the absolute path to the workspace folder for
+    workspace-scoped sessions, or ``""`` for empty-window sessions (no
+    folder open). ``workspace_key`` is the workspaceStorage hash folder
+    name for workspace-scoped sessions, or ``""`` for empty-window — used
+    to dedupe against the transcripts harvester which scans the same
+    workspaceStorage hashes.
     """
-    results: "list[tuple[Path, str]]" = []
+    results: "list[tuple[Path, str, str]]" = []
     for base in _vscode_user_dirs():
         ews = base / "globalStorage" / "emptyWindowChatSessions"
         if ews.is_dir():
-            results.append((ews, ""))
+            results.append((ews, "", ""))
         ws_root = base / "workspaceStorage"
         if ws_root.is_dir():
             try:
@@ -1033,7 +1117,7 @@ def _get_vscode_chat_dirs() -> "list[tuple[Path, str]]":
                 if not chat_dir.is_dir():
                     continue
                 cwd_hint = _vscode_workspace_cwd(ws_dir / "workspace.json")
-                results.append((chat_dir, cwd_hint))
+                results.append((chat_dir, cwd_hint, ws_dir.name))
     return results
 
 
@@ -1149,8 +1233,11 @@ def _normalize_vscode_model(model_id: str) -> str:
     return model_id
 
 
-def get_vscode_sessions_for_date(target_date: str) -> list:
-    """Parse VS Code Copilot Chat sessions for a given date.
+def get_vscode_sessions_for_date(
+    target_date: str,
+    skip: "set | None" = None,
+) -> list:
+    """Parse VS Code Copilot Chat sessions (chatSessions/ store) for a given date.
 
     VS Code sessions use a different schema than CLI sessions:
       kind=0 → session header (creationDate, sessionId)
@@ -1161,20 +1248,113 @@ def get_vscode_sessions_for_date(target_date: str) -> list:
     date (they can't have earlier activity). Files created before are always
     parsed; the inner loop filters events by date so non-matching turns are
     skipped cheaply even in large files.
+
+    ``skip`` is an optional set of ``(workspace_key, jsonl_stem)`` pairs that
+    have already been harvested from the more-complete agent transcripts
+    store; matching files in this chatSessions pass are dropped so the same
+    sessionId isn't double-counted.
     """
     chat_dirs = _get_vscode_chat_dirs()
     if not chat_dirs:
         return []
 
     sessions = []
+    skip = skip or set()
 
-    for chat_dir, cwd_hint in chat_dirs:
+    for chat_dir, cwd_hint, workspace_key in chat_dirs:
         for jsonl_file in chat_dir.glob("*.jsonl"):
+            if (workspace_key, jsonl_file.stem) in skip:
+                continue
             session = _parse_vscode_chat_file(jsonl_file, target_date, cwd_hint)
             if session is not None:
                 sessions.append(session)
 
     return sessions
+
+
+def get_vscode_transcripts_for_date(
+    target_date: str,
+) -> "tuple[list, set]":
+    """Parse VS Code Copilot Chat **agent transcripts** for a given date.
+
+    Path: ``<appdata>/Code/User/workspaceStorage/<hash>/GitHub.copilot-chat/transcripts/<id>.jsonl``
+
+    These files are the agent's authoritative event log — the same
+    event-stream schema as the CLI's ``events.jsonl`` (``type``/``data``/
+    ``timestamp`` per line). The CLI parser is reused via
+    ``_build_session_from_events`` so the same date filter, message
+    extraction, token reconciliation, and burn-pattern detection apply
+    uniformly.
+
+    Returns ``(sessions, harvested)`` where ``harvested`` is a set of
+    ``(workspace_key, jsonl_stem)`` pairs the caller can pass to
+    ``get_vscode_sessions_for_date(skip=…)`` so the lossy chatSessions
+    store doesn't double-count any sessionId already captured here.
+
+    Pre-filter: any transcript file whose newest event timestamp is
+    older than ``target_date`` is skipped without a full read. Files
+    created later than ``target_date`` are also skipped — they cannot
+    contain events on a date before they existed.
+    """
+    sessions: list = []
+    harvested: set = set()
+
+    try:
+        td_dt = datetime.strptime(target_date, "%Y-%m-%d")
+    except Exception:
+        td_dt = None
+
+    for base in _vscode_user_dirs():
+        ws_root = base / "workspaceStorage"
+        if not ws_root.is_dir():
+            continue
+        try:
+            ws_entries = list(ws_root.iterdir())
+        except OSError:
+            continue
+        for ws_dir in ws_entries:
+            if not ws_dir.is_dir():
+                continue
+            tx_dir = ws_dir / "GitHub.copilot-chat" / "transcripts"
+            if not tx_dir.is_dir():
+                continue
+            cwd_hint = _vscode_workspace_cwd(ws_dir / "workspace.json")
+            workspace_key = ws_dir.name
+            for jsonl_file in tx_dir.glob("*.jsonl"):
+                # Cheap pre-filter: if the file hasn't been written to since
+                # target_date, it can't contain events from that day. Avoids
+                # parsing huge transcripts (one in-the-wild user has a
+                # multi-hundred-MB transcript file).
+                try:
+                    st = jsonl_file.stat()
+                except OSError:
+                    continue
+                if st.st_size == 0:
+                    continue
+                if td_dt is not None:
+                    try:
+                        mtime_dt = datetime.fromtimestamp(st.st_mtime)
+                        if mtime_dt.date() < td_dt.date():
+                            continue
+                    except Exception:
+                        pass
+
+                events = _read_jsonl_events(jsonl_file)
+                if not events:
+                    continue
+
+                session = _build_session_from_events(
+                    events, target_date,
+                    session_id=jsonl_file.stem,
+                    source_path=jsonl_file,
+                    cwd_default=cwd_hint,
+                    entrypoint="vscode",
+                )
+                if session is not None:
+                    sessions.append(session)
+                    harvested.add((workspace_key, jsonl_file.stem))
+
+    return sessions, harvested
 
 
 def _parse_vscode_chat_file(
