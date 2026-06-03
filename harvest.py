@@ -677,7 +677,7 @@ def _build_session_from_events(
     repository = session_ctx.get("repository", "") or repository_default
     branch     = session_ctx.get("branch", "")     or branch_default
 
-    project_name = Path(cwd).name if cwd else source_path.name[:12]
+    project_name = Path(cwd).name if cwd else source_path.stem[:12]
 
     # Extract user messages and tool summaries
     messages      = []
