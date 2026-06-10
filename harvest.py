@@ -2121,17 +2121,26 @@ def compute_elapsed_minutes(session_start: str, session_end: str) -> float:
 def compute_active_minutes(messages: list) -> float:
     """Estimate active engagement time from message timestamps.
 
-    Sums intervals between consecutive messages, capping each interval at
-    10 minutes.  Long gaps are presumed to mix focused thinking/reading with
-    pure idle time (user away from keyboard), so we credit the threshold's
-    worth of work for each long gap rather than dropping it entirely.
+    Two-tier model (calibrated to match the methodology's 5-6× speed
+    multiplier expectation for typical agentic work):
 
-    Rationale: in agentic workflows much of the user's wall-clock time is
-    spent reading diffs, watching tools run, or reasoning between prompts.
-    Dropping any gap over 5 minutes — the prior behavior — discarded most
-    of that lived experience and produced a metric that consistently
-    underreported felt engagement.  Capping at the threshold yields a
-    conservative-but-not-zero credit for those intervals.
+      * gap ≤ 5 min  → count fully (focused interaction, typing, reading)
+      * 5 min < gap ≤ 30 min → cap at 5 min (extended reading/thinking, but
+        we don't keep crediting time the user is almost certainly not at
+        the keyboard for)
+      * gap > 30 min → drop entirely (out-of-session: meetings, lunch,
+        overnight, the agent running unattended)
+
+    Rationale: the earlier "drop every gap > 5 min" behavior wiped out
+    legitimate reading/thinking time and produced under-reported active
+    figures.  The follow-up "cap every gap at 10 min" over-corrected by
+    crediting every long idle stretch — including overnight gaps and
+    away-from-keyboard time — collapsing the speed multiplier toward 1×.
+    The two-tier scheme preserves credit for genuine in-session thinking
+    while not pretending the user was engaged during clearly out-of-session
+    gaps.  The 30 min session-break threshold matches typical short-break
+    behaviour (coffee, hallway chat); anything longer is treated as
+    out-of-session.
     """
     timestamps = []
     for m in messages:
@@ -2148,12 +2157,15 @@ def compute_active_minutes(messages: list) -> float:
         return 1.0  # Single message ≈ 1 min engagement
 
     timestamps.sort()
-    ACTIVE_THRESHOLD = 600  # 10 minutes in seconds
+    ACTIVE_CAP    = 300   # 5 min — max credit per in-session gap
+    SESSION_BREAK = 1800  # 30 min — gaps larger than this are out-of-session
     active_s = 0.0
 
     for i in range(1, len(timestamps)):
         gap = (timestamps[i] - timestamps[i - 1]).total_seconds()
-        active_s += min(gap, ACTIVE_THRESHOLD)
+        if gap > SESSION_BREAK:
+            continue  # treat as a break / session boundary, don't credit
+        active_s += min(gap, ACTIVE_CAP)
 
     active_s += 30  # buffer for final message processing
     return round(active_s / 60, 1)

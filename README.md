@@ -39,24 +39,7 @@
 <a id="get-started"></a>
 ## Try it now
 
-The fastest way is the **VS Code extension** &mdash; one click, no terminal. Prefer the
-command line? The Copilot CLI plugin and a plain clone work exactly the same way.
-
-### ⭐ Easiest &mdash; the VS Code extension *(one click, no terminal)*
-
-1. Open the **Extensions** view (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>),
-   search **`What I Did`**, and click **Install**
-   *(or install the bundled `what-i-did-copilot-*.vsix` via **Extensions: Install from VSIX&hellip;**)*.
-2. Click **✦ What I Did** in the status bar, or run **What I Did: Open Report Builder** from the Command Palette.
-3. Pick a time range, flip any toggles, and click **Generate my report**. The finished report opens right inside VS Code.
-
-<div align="center">
-
-<img src="https://raw.githubusercontent.com/microsoft/What-I-Did-Copilot/main/docs/images/report-builder.png" alt="The What I Did Report Builder inside VS Code" width="640">
-
-</div>
-
-### Prefer the command line?
+Pick whichever matches how you use Copilot &mdash; all three install and run the same thing.
 
 **Option A &mdash; Copilot CLI plugin** *(requires the GitHub Copilot CLI)*
 
@@ -72,11 +55,10 @@ Then just run:
 whatidid                # defaults to a 7-day lookback
 ```
 
-**Option B &mdash; VS Code chat plugin (Awesome Copilot marketplace)**
+**Option B &mdash; VS Code chat plugin via `@agentPlugins`** *(Awesome Copilot marketplace)*
 
-1. Open the **Command Palette** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) &rarr; **Chat: Plugins**  
-   *(or type `@agentPlugins` in the Extensions search view)*
-2. Search **`whatidid`** &rarr; click **Install**
+1. Open the Command Palette &rarr; **`Chat: Plugins`** *(or type **`@agentPlugins`** in the Extensions search view)*.
+2. Search **`whatidid`** &rarr; click **Install**.
 3. In Copilot Chat, just ask:
    > *"give me a 7-day Copilot report"* &nbsp;·&nbsp; *"whatidid this month"* &nbsp;·&nbsp; *"summarize what Copilot helped me with today"*
 
