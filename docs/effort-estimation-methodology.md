@@ -44,7 +44,7 @@ code (LOC) and function points (FP). However:
 
 | System | Approach | Strength | Limitation |
 |--------|----------|----------|------------|
-| Deterministic formula | `base × complexity_mult` where `base = interaction_h + lines_h + reads_h + tools_h` (log curves with bounded multiplier) | Transparent, reproducible, auditable floor | Cannot see context, business value, or qualitative complexity |
+| Deterministic formula | `base × complexity_mult` where `base = max(interaction_h + lines_h + reads_h + tools_h, active_anchor_h)` (log curves + active-time floor + bounded multiplier) | Transparent, reproducible, auditable floor | Cannot see context, business value, or qualitative complexity |
 | AI semantic estimate | Reads full transcript, applies judgment using active time × 2–6 as anchor | Understands what was done, distinguishes boilerplate from architecture | Depends on prompt quality, may vary across model versions |
 
 **Our response:** We use two complementary systems — a deterministic formula as
@@ -54,7 +54,7 @@ blind to context; the AI understands what was done but is opaque. No single numb
 drives the estimate alone.
 
 
-### 2.2 "LLMs provide 1.4–4× speed-ups" → Active time as AI anchor
+### 2.2 "LLMs provide 1.4–4× speed-ups" → Active time as estimation anchor
 
 - **Cambon et al. (2023)** — Microsoft's AI Productivity study synthesised 30+
   experiments and found that participants with Copilot tools completed tasks in
@@ -63,11 +63,13 @@ drives the estimate alone.
 - **Peng et al. (2023)** — In a controlled trial with 95 developers, those using
   GitHub Copilot completed a programming task **55.8% faster** on average.
 
-**Our response:** Active time is the AI estimator's primary anchor — it reflects
-actual human engagement and is multiplied by 2–6× depending on work type and
-complexity. This is *not* part of the deterministic formula (which uses turns,
-lines, reads, tools, and a complexity multiplier). The AI applies the speedup
-contextually:
+**Our response:** Active time is a primary anchor for both estimators. The
+deterministic formula uses an **active-time anchor floor**
+(`active_anchor_h = active_minutes × 5`) via
+`base = max(additive_terms, active_anchor_h)`, so agentic sessions with heavy
+review/decision work are not undercounted by mechanical counters alone. The AI
+estimator applies the speedup contextually (typically ×2–6) based on work type
+and transcript evidence:
 
 | Work type | Speedup applied | Rationale |
 |-----------|-----------------|-----------|
@@ -183,8 +185,10 @@ applies the same logic and may go higher when transcript evidence supports it.
   boilerplate in seconds. But an expert human writing 500 lines of production
   code needs 4+ hours.
 
-**Our response:** Lines are additive on top of the base estimate (before applying
-the complexity multiplier). They use an effective rate of ~200 LoC/hr in the formula
+**Our response:** Lines are an additive component in the deterministic base
+(`interaction_h + lines_h + reads_h + tools_h`) before the active-time
+`max()` anchor and complexity multiplier. They use an effective rate of
+~200 LoC/hr in the formula
 (higher than the raw 100–150 LoC/hr expert rate because some writing effort is
 already captured in tool invocations).
 
@@ -238,7 +242,7 @@ effort in LLM-assisted work:
 | 3 | **Transformation scope** | Breadth and impact of changes | `lines_logic` (via `lines_h` log curve) | Distinguishes logic from boilerplate, assesses architectural impact |
 | 4 | **Iterative reasoning cycles** | Back-and-forth to reach a solution | `iteration_depth` and `files_touched_count` (via `complexity_mult`) | +25–50% qualitative adjustment for heavy iteration |
 | 5 | **Tool execution breadth** | Total tool calls including non-coding work | `tool_invocations` (via `tools_h` log curve) | Recognises image analysis, synthesis, browser tasks |
-| 6 | **Human oversight effort** | Review, testing, correction by the human | Not in formula | `active_minutes` × 2–6 as primary anchor |
+| 6 | **Human oversight effort** | Review, testing, correction by the human | `active_anchor_h = active_minutes × 5` (base floor via `max()`) | `active_minutes` × 2–6 as primary anchor |
 
 ---
 
@@ -276,10 +280,14 @@ reqs_h   = max(0,  −0.10 + 0.45 × ln(reqs + 1))     ← fallback when turns =
 lines_h  = 0.40 × log₂(lines_logic ÷ 100 + 1)
 reads_h  = 0.10 × log₂(read_calls + 1)
 tools_h  = 0.07 × log₂(tool_invocations + 1)
+active_anchor_h = active_minutes ÷ 60 × 5.0
 
 interaction_h = turns_h if turns > 0, else reqs_h
-total    = interaction_h + lines_h + reads_h + tools_h
-total    = max(total, 0.25)          ← floor at 15 min
+additive_base = interaction_h + lines_h + reads_h + tools_h
+base     = max(additive_base, active_anchor_h)
+base     = max(base, 0.25)           ← floor at 15 min
+complexity_mult = 1.0–1.60 (from iteration_depth + files_touched_count; activates when base ≥ 0.50h)
+total    = base × complexity_mult
 total    = round to nearest 0.25h
 ```
 
@@ -298,6 +306,11 @@ total    = round to nearest 0.25h
   work (image analysis, document synthesis, browser automation, data exploration)
   where `lines_logic` = 0 but meaningful work still occurred. Uses a low
   coefficient (0.07) to avoid double-counting with `reads_h` for coding tasks.
+- **active_minutes** = active user-engagement minutes in the session. Converted
+  to `active_anchor_h = active_minutes ÷ 60 × 5.0` and used as a floor via
+  `max(additive_base, active_anchor_h)`.
+- **complexity_mult** = bounded multiplier (1.0–1.60×) driven by
+  `iteration_depth` and `files_touched_count`; activates only when `base ≥ 0.50h`.
 
 For multi-day merged goals: compute per-day, then sum (matches how the AI
 analyses each day independently).
@@ -306,15 +319,20 @@ analyses each day independently).
 ### 4C. Worked example
 
 > **Project:** Built a reporting tool — 22 substantive turns, +400 logic lines,
-> +800 boilerplate lines, 35 reads + 15 searches, 120 tool invocations
+> +800 boilerplate lines, 35 reads + 15 searches, 120 tool invocations,
+> 45 active minutes
 
 ```
 turns_h = max(0, −0.15 + 0.67 × ln(23)) = 1.95h
 lines_h = 0.40 × log₂(400 ÷ 100 + 1)   = 0.40 × 2.32 = 0.93h
 reads_h = 0.10 × log₂(50 + 1)           = 0.10 × 5.67 = 0.57h
 tools_h = 0.07 × log₂(120 + 1)          = 0.07 × 6.93 = 0.49h
+active_anchor_h = 45 ÷ 60 × 5.0         = 3.75h
 
-Total   = 1.95 + 0.93 + 0.57 + 0.49 = 3.94h → 4.00h (nearest 0.25h)
+additive_base = 1.95 + 0.93 + 0.57 + 0.49 = 3.94h
+base          = max(3.94, 3.75)            = 3.94h
+complexity_mult (low iteration + focused scope) = 1.00
+Total         = 3.94 × 1.00 = 3.94h → 4.00h (nearest 0.25h)
 ```
 
 Note: The 800 boilerplate lines (HTML/CSS/config) are excluded from `lines_logic`
@@ -345,7 +363,7 @@ caught an edge case the AI overlooked.
 | Mechanical tasks (install, deploy, git push) → 0.25–0.5h max | These are execution, not thinking. Alaswad's complexity inversion: AI handles these trivially. |
 | No single task exceeds 8h | If the work is that large, it should be split into sub-tasks for granularity. |
 | Multi-day goals: formula computed per-day, then summed | Matches how the AI analyses each day independently. Prevents metrics accumulation from inflating estimates. |
-| Deterministic formula floor: 0.25h (15 min minimum) | Any meaningful work — even a quick fix — involves context-gathering, understanding, and verification. |
+| Deterministic formula base floor: 0.25h (15 min minimum) before multiplier | Any meaningful work — even a quick fix — involves context-gathering, understanding, and verification. |
 
 ---
 
