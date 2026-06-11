@@ -60,6 +60,43 @@ TITLE RULE: The goal title must describe the PRIMARY DELIVERABLE, not the first 
 If a session starts with "prepare for github" but spends 80% of time building a report tool,
 the title should be about the report tool, not the git setup.
 
+ACTIVITY-TYPE RULE: Name the goal after the DOMINANT KIND OF WORK, not just the surface artifact.
+Decide what most of the time was spent on, then frame the title accordingly:
+  - If most of the time was RESEARCH / INVESTIGATION / ANALYSIS (reading docs, exploring code,
+    comparing options, gathering evidence) — name it "Research on <subject>" or
+    "Investigated <question> for <project>", not after the file that happened to get edited.
+  - If most of the time was DESIGN / PLANNING / DECISION-MAKING — name it
+    "Designed <thing>" or "Defined approach for <thing>".
+  - If most of the time was BUILDING / SHIPPING a concrete artifact — name it after the artifact.
+  - If most of the time was CLEANUP / REFACTOR / MAINTENANCE — name it that, but only if real
+    code was actually moved or removed; "directory cleanup" is NOT a valid label for a session
+    that was mostly research.
+
+MANDATORY SELF-CHECK before you write a goal title:
+  1. Look at the tags on this goal's tasks. Count how many tasks carry tags like
+     "Technical Research", "Requirements Analysis", "Data Analysis", "Product Planning",
+     "System Architecture" vs how many produced a concrete shipped artifact.
+  2. If RESEARCH/ANALYSIS/PLANNING tags dominate (more than half the tasks, or more than half
+     the hours), the title MUST lead with "Research on", "Investigated", "Analyzed",
+     "Evaluated", "Defined", or "Designed" — NOT with "Built", "Cleaned up", "Organized",
+     "Updated", "Reformatted", or any artifact-centric verb.
+  3. Lame surface-action verbs like "Organized", "Cleaned up", "Reformatted", "Touched up"
+     are only allowed when the work genuinely was that — i.e., real files moved/deleted/
+     restructured with little reading or thinking involved.
+
+Examples:
+  ✗ "Daybreak directory cleanup"        (when 80% of the work was reading + analysis)
+  ✓ "Research on Daybreak repo structure"
+  ✗ "Organized Daybreak project directory and implemented publish pipeline"
+                                        (when tasks are dominated by Technical Research +
+                                         Requirements Analysis + Data Analysis tags)
+  ✓ "Researched Daybreak repo structure and methodology for publish pipeline"
+  ✓ "Investigated time-saving estimate methodology for Daybreak"
+  ✗ "Updated whatidid README"           (when the real work was rethinking the install story)
+  ✓ "Rewrote whatidid install guide to lead with the CLI plugin"
+The "what got built" rule still applies for build sessions — but research, planning, and
+decision-making are first-class deliverables and must be labeled honestly as such.
+
 CANONICAL NAME RULE (overrides everything below): Each session header includes a line
 "CANONICAL PROJECT NAME (anchor the goal label on this): <name>". That <name> is the real
 workspace folder / git repository the work happened in. You MUST build the goal label around

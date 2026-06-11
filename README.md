@@ -39,24 +39,7 @@
 <a id="get-started"></a>
 ## Try it now
 
-The fastest way is the **VS Code extension** &mdash; one click, no terminal. Prefer the
-command line? The Copilot CLI plugin and a plain clone work exactly the same way.
-
-### ⭐ Easiest &mdash; the VS Code extension *(one click, no terminal)*
-
-1. Open the **Extensions** view (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>),
-   search **`What I Did`**, and click **Install**
-   *(or install the bundled `what-i-did-copilot-*.vsix` via **Extensions: Install from VSIX&hellip;**)*.
-2. Click **✦ What I Did** in the status bar, or run **What I Did: Open Report Builder** from the Command Palette.
-3. Pick a time range, flip any toggles, and click **Generate my report**. The finished report opens right inside VS Code.
-
-<div align="center">
-
-<img src="https://raw.githubusercontent.com/microsoft/What-I-Did-Copilot/main/docs/images/report-builder.png" alt="The What I Did Report Builder inside VS Code" width="640">
-
-</div>
-
-### Prefer the command line?
+Pick whichever matches how you use Copilot &mdash; all three install and run the same thing.
 
 **Option A &mdash; Copilot CLI plugin** *(requires the GitHub Copilot CLI)*
 
@@ -72,17 +55,16 @@ Then just run:
 whatidid                # defaults to a 7-day lookback
 ```
 
-**Option B &mdash; VS Code chat plugin (Awesome Copilot marketplace)**
+**Option B &mdash; VS Code chat plugin via `@agentPlugins`** *(Awesome Copilot marketplace)*
 
-1. Open the **Command Palette** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> / <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) &rarr; **Chat: Plugins**  
-   *(or type `@agentPlugins` in the Extensions search view)*
-2. Search **`whatidid`** &rarr; click **Install**
+1. Open the Command Palette &rarr; **`Chat: Plugins`** *(or type **`@agentPlugins`** in the Extensions search view)*.
+2. Search **`whatidid`** &rarr; click **Install**.
 3. In Copilot Chat, just ask:
    > *"give me a 7-day Copilot report"* &nbsp;·&nbsp; *"whatidid this month"* &nbsp;·&nbsp; *"summarize what Copilot helped me with today"*
 
 > 💡 **Power user tip:** the plugin is a full Python checkout under  
 > `~/.copilot/installed-plugins/awesome-copilot/whatidid/` (Windows: `%USERPROFILE%\.copilot\...`).  
-> `cd` there and run `python whatidid.py --30D` directly. Note this is the marketplace-pinned release &mdash; run `copilot plugin update whatidid@awesome-copilot` to refresh, or use Option C for true latest-`main`.
+> `cd` there and run `python whatidid.py --30D` directly. Note this is the marketplace-pinned release &mdash; see *Updating* below to refresh, or use Option C for true latest-`main`.
 
 **Option C &mdash; Clone the repo** *(maximum control, dev-mode)*
 
@@ -98,6 +80,18 @@ python whatidid.py                                      # defaults to a 7-day lo
 Prerequisites: **Python 3.10+**, **[`git`](https://git-scm.com/)**, and **[GitHub CLI (`gh`)](https://cli.github.com/)**. See the [full requirements table](#requirements) below.
 
 That's it. A report opens in your browser showing your last 7 days with Copilot.
+
+### 🔄 Already installed? Update to the latest release
+
+The plugin ships new features and methodology tweaks regularly &mdash; refresh whichever way you installed:
+
+| You installed via&hellip; | How to update |
+|---|---|
+| **Option A &mdash; Copilot CLI plugin** | In a Copilot CLI session, run `/plugin update whatidid@awesome-copilot`. |
+| **Option B &mdash; VS Code `@agentPlugins`** | Open the Command Palette &rarr; **`Chat: Plugins`** (or `@agentPlugins`), find **`whatidid`**, and click **Update**. If no Update button appears, the marketplace already has you on the latest. |
+| **Option C &mdash; Cloned repo** | `cd` into your clone and run `git pull`. |
+
+> The CLI plugin and VS Code plugin install the **same** marketplace package &mdash; updating one will not update the other. If you use both, run both update steps.
 
 ---
 

@@ -363,6 +363,7 @@ def _merge_analyses(day_analyses: list) -> dict:
             per_day_lines_h = 0.0
             per_day_reads_h = 0.0
             per_day_tools_h = 0.0
+            per_day_active_h = 0.0
             for d in all_dates:
                 found = False
                 for pname in equiv_names:
@@ -400,6 +401,7 @@ def _merge_analyses(day_analyses: list) -> dict:
                             per_day_lines_h += cfe["lines_h"]
                             per_day_reads_h += cfe["reads_h"]
                             per_day_tools_h += cfe["tools_h"]
+                            per_day_active_h += cfe.get("active_h", 0.0)
                             found = True
                             break
                     if found:
@@ -410,17 +412,47 @@ def _merge_analyses(day_analyses: list) -> dict:
             agg["iteration_depth"] = round(total_e / max(total_f, 1), 1)
             # Store per-day formula sums so the evidence table components add up correctly
             per_day_formula_total = round(per_day_formula_total * 4) / 4
-            per_day_base = per_day_turns_h + per_day_lines_h + per_day_reads_h + per_day_tools_h
+            per_day_additive = per_day_turns_h + per_day_lines_h + per_day_reads_h + per_day_tools_h
+            # Effective complexity mult is total ÷ whichever base dominated
+            # (additive or active anchor) — match what compute_formula_estimate
+            # would have used per-day to avoid double-counting.
+            per_day_base = max(per_day_additive, per_day_active_h)
             per_day_effective_mult = (per_day_formula_total / per_day_base) if per_day_base > 0 else 1.0
             agg["_per_day_formula_total"] = per_day_formula_total
             agg["_per_day_turns_h"] = per_day_turns_h
             agg["_per_day_lines_h"] = per_day_lines_h
             agg["_per_day_reads_h"] = per_day_reads_h
             agg["_per_day_tools_h"] = per_day_tools_h
+            agg["_per_day_active_h"] = per_day_active_h
             agg["_per_day_complexity_mult"] = per_day_effective_mult
             # Store aggregated metrics under the earliest date key
             merged_session_metrics[all_dates[0] + "|" + proj] = agg
             merged_session_metrics[all_dates[0] + "|" + norm] = agg
+
+    # Enforce the deterministic formula as a hard floor on every goal's
+    # `human_hours`. The methodology calls the formula the "transparency
+    # floor" and the LLM prompt asks it to land "AT OR ABOVE" the floor —
+    # but the LLM doesn't see the formula number, so this enforcement
+    # closes the loop. Without it, the active-time anchor inside the
+    # formula has no effect on the displayed Human Effort number.
+    from report import compute_formula_estimate as _cfe2
+    for g in all_goals:
+        proj = g.get("project", "")
+        norm = _normalize_project(proj)
+        date_key = g.get("date", "")
+        m = (merged_session_metrics.get(date_key + "|" + proj)
+             or merged_session_metrics.get(date_key + "|" + norm)
+             or {})
+        if not m:
+            continue
+        floor = _cfe2(m).get("total", 0)
+        if floor > g.get("human_hours", 0):
+            # Scale per-task hours proportionally so the breakdown stays consistent
+            old_h = g.get("human_hours", 0) or 0.0001
+            scale = floor / old_h
+            for t in g.get("tasks", []):
+                t["human_hours"] = round((t.get("human_hours", 0) or 0) * scale * 4) / 4
+            g["human_hours"] = round(floor * 4) / 4
 
     if len(active_dates) == 1:
         headline  = day_analyses[0][1].get("headline", f"Activity on {active_dates[0]}")

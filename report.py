@@ -1346,23 +1346,32 @@ def _complexity_multiplier(metrics: dict, base_total: float) -> float:
 
 
 def compute_formula_estimate(metrics: dict) -> dict:
-    """Deterministic effort estimate — additive log formula with complexity multiplier.
+    """Deterministic effort estimate — additive log formula with active-time anchor.
 
-    Formula: base = interaction_h + lines_h + reads_h + tools_h
+    Formula: base  = max(interaction_h + lines_h + reads_h + tools_h,  active_anchor_h)
              total = base × complexity_mult
-      interaction_h = turns_h when turns > 0, else reqs_h (fallback)
-      turns_h = max(0, −0.15 + 0.67 × ln(turns + 1))
-      reqs_h  = max(0, −0.10 + 0.45 × ln(reqs + 1))     [fallback]
-      lines_h = 0.40 × log₂(lines_logic ÷ 100 + 1)
-      reads_h = 0.10 × log₂(read_calls + 1)
-      tools_h = 0.07 × log₂(tool_invocations + 1)
-      complexity_mult = 1.0–1.60× based on iteration_depth and files_touched_count
+      interaction_h    = turns_h when turns > 0, else reqs_h (fallback)
+      turns_h          = max(0, −0.15 + 0.67 × ln(turns + 1))
+      reqs_h           = max(0, −0.10 + 0.45 × ln(reqs + 1))     [fallback]
+      lines_h          = 0.40 × log₂(lines_logic ÷ 100 + 1)
+      reads_h          = 0.10 × log₂(read_calls + 1)
+      tools_h          = 0.07 × log₂(tool_invocations + 1)
+      active_anchor_h  = active_minutes ÷ 60 × ACTIVE_ANCHOR_MULT  [5.0]
+      complexity_mult  = 1.0–1.60× based on iteration_depth and files_touched_count
 
-    tools_h ensures non-coding work (image analysis, doc synthesis, browser
-    tasks) gets meaningful credit even when lines_h ≈ 0.
+    active_anchor_h acts as a floor on the additive base.  Agentic sessions
+    often have short bursts of typing with long stretches of reading diffs,
+    reviewing tool output, and making decisions — work the additive log
+    counters (turns, lines, reads, tools) systematically undercount.  The
+    methodology calibration places "design / debugging / research /
+    decision-making" at active × 4-6×; using 5× as the floor sits in the
+    middle of that range and lets the complexity multiplier push complex
+    sessions to 7-8×.
+    tools_h continues to credit non-coding work (image analysis, doc
+    synthesis, browser tasks) for sessions with little active-time signal.
     reqs_h is a fallback for older sessions without conversation turn data.
-    complexity_mult amplifies the base for sessions with high rework depth or
-    broad file scope, only when base ≥ 0.50h.
+    complexity_mult amplifies the base for sessions with high rework depth
+    or broad file scope, only when base ≥ 0.50h.
     """
     turns = metrics.get("substantive_turns")
     if turns is None:
@@ -1373,6 +1382,7 @@ def compute_formula_estimate(metrics: dict) -> dict:
         logic_lines = metrics.get("lines_added", 0)
     read_calls  = metrics.get("reads", 0) + metrics.get("searches", 0)
     tools       = metrics.get("tool_invocations", 0)
+    active_min  = metrics.get("active_minutes", 0)
 
     th = _turns_h(turns)
     rqh = _reqs_h(reqs)
@@ -1384,6 +1394,12 @@ def compute_formula_estimate(metrics: dict) -> dict:
     # for older sessions that lack conversation turn data.
     interaction_h = th if turns > 0 else rqh
 
+    # Active-time anchor — matches "design/debugging/research" tier in the
+    # methodology (active × 5). Acts as a floor, not an additional term,
+    # to avoid double-counting work already captured by turns/lines/reads.
+    ACTIVE_ANCHOR_MULT = 5.0
+    active_anchor_h = (active_min / 60.0) * ACTIVE_ANCHOR_MULT
+
     # For multi-day merged goals, use pre-computed per-day sums so that
     # the component breakdown is consistent with the displayed total.
     per_day_total = metrics.get("_per_day_formula_total")
@@ -1394,12 +1410,14 @@ def compute_formula_estimate(metrics: dict) -> dict:
             "lines_h":         metrics.get("_per_day_lines_h", lh),
             "reads_h":         metrics.get("_per_day_reads_h", rh),
             "tools_h":         metrics.get("_per_day_tools_h", tlh),
+            "active_h":        metrics.get("_per_day_active_h", active_anchor_h),
             "interaction_h":   interaction_h,
             "complexity_mult": metrics.get("_per_day_complexity_mult", 1.0),
             "total":           per_day_total,
         }
 
-    base = interaction_h + lh + rh + tlh
+    additive_base = interaction_h + lh + rh + tlh
+    base = max(additive_base, active_anchor_h)
     base = max(base, 0.25)  # floor at 15 min
     cmult = _complexity_multiplier(metrics, base)
     total = base * cmult
@@ -1410,6 +1428,7 @@ def compute_formula_estimate(metrics: dict) -> dict:
         "lines_h":         lh,
         "reads_h":         rh,
         "tools_h":         tlh,
+        "active_h":        active_anchor_h,
         "interaction_h":   interaction_h,
         "complexity_mult": cmult,
         "total":           round(total * 4) / 4,  # nearest 0.25h
@@ -1448,11 +1467,21 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         ai_h        = _fmt_h(g.get("human_hours", 0))
         formula_h   = _fmt_h(fe["total"])
 
-        # Formula sub-row: show which interaction signal was used
+        # Formula sub-row: show which interaction signal was used.
+        # When the active-time anchor dominates the additive base, show it
+        # so the formula breakdown matches the displayed total.
         int_label = f"turns {_fmt_h(fe['turns_h'])}" if turns > 0 else f"reqs {_fmt_h(fe['reqs_h'])}"
         cmult = fe.get("complexity_mult", 1.0)
         cmult_label = f" &times; {cmult:.2f}" if cmult > 1.0 else ""
-        formula_parts = f"({int_label} + lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])} + tools {_fmt_h(fe['tools_h'])}){cmult_label}"
+        additive_h = fe['turns_h'] + fe['lines_h'] + fe['reads_h'] + fe['tools_h'] if turns > 0 \
+                     else fe['reqs_h'] + fe['lines_h'] + fe['reads_h'] + fe['tools_h']
+        active_h_val = fe.get('active_h', 0.0)
+        additive_label = f"{int_label} + lines {_fmt_h(fe['lines_h'])} + reads {_fmt_h(fe['reads_h'])} + tools {_fmt_h(fe['tools_h'])}"
+        if active_h_val > additive_h and active_h_val > 0.25:
+            # Active anchor wins — show it as the dominant term
+            formula_parts = f"max({additive_label}, active &times; 5 = {_fmt_h(active_h_val)}){cmult_label}"
+        else:
+            formula_parts = f"({additive_label}){cmult_label}"
 
         # Lines display: logic lines prominent, boilerplate in grey
         if logic_lines or bp_lines:
@@ -2979,16 +3008,9 @@ def _activity_bar(analysis: dict) -> str:
     else:
         model_label = analysis.get("model_used", "") or "unknown"
 
-    # Copilot seat — fixed, plan-aware. The seat price is real and known.
-    # We do NOT estimate overage here: the user's actual GitHub bill depends
-    # on plan, included allowance, auto-model discount, and surface (Chat
-    # vs CLI vs API), none of which we can observe reliably.
-    seat_cost, n_months = _prorated_seat_cost(analysis)
-    plan_key    = _plan_key(analysis)
-    plan_pretty = {"pro+": "Pro+", "free": "Free"}.get(plan_key, plan_key.capitalize())
-    seat_label  = (f"${seat_cost}/mo" if n_months == 1
-                   else f"${seat_cost} ({n_months}mo)")
-    seat_sub    = f"({plan_pretty} plan)"
+    # Copilot seat cost intentionally omitted — actual GitHub bill depends on
+    # plan, included allowance, auto-model discount, and surface (Chat vs CLI
+    # vs API), none of which we can observe reliably from local logs.
 
     tok_str      = f"{total_t / 1_000:.0f}K" if total_t < 1_000_000 else f"{total_t / 1_000_000:.1f}M"
     api_time_str = _fmt_ms(total_api_ms)
@@ -3030,11 +3052,6 @@ def _activity_bar(analysis: dict) -> str:
                border:1px solid {C['border']}">
       <span style="font-size:10px;font-weight:700;text-transform:uppercase;
                    letter-spacing:0.7px;color:{C['muted']};margin-right:10px">Cost</span>
-      <span style="font-size:11px;color:{C['text']}">
-        <span style="color:{C['muted']}">Copilot seat</span> <strong>{seat_label}</strong>
-        <span style="font-size:10px;color:{C['muted']}">{seat_sub}</span>
-      </span>
-      &nbsp;&nbsp;·&nbsp;&nbsp;
       <span style="font-size:11px;color:{C['text']}">
         <span style="color:{C['muted']}">Open-market API value</span> <strong>~${market_cost:.2f}</strong>
         <span style="font-size:10px;color:{C['muted']}">(est. from published per-model rates)</span>
