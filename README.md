@@ -109,6 +109,8 @@ The plugin ships new features and methodology tweaks regularly &mdash; refresh w
 | 💸 **Credit-burn patterns** | Every flagged pattern cites the Anthropic / OpenAI / GitHub guidance it implements &mdash; with clickable sources. *Where am I burning credits, and what does the published guidance say?* See the [credit-optimization methodology](docs/credit-optimization.md). |
 
 > 📊 **A note on the numbers.** Credit and cost figures are estimates, calculated from the token counts in your local session logs and GitHub's published per-model rates. They give an accurate picture of the *shape* of your AI usage, but your actual GitHub bill can differ depending on your plan, included credit allowance, and billing details that aren't visible in local logs.
+>
+> ⚠️ **Disclaimer:** The credit figures shown in reports are **directional only** and may be understated. Unclean shutdowns, incomplete session logs, and coverage gaps can all impact the calculation. **Only GitHub Copilot's official billing should be relied upon for accuracy.** The credits reported by this tool cannot be relied upon for precise tracking or reconciliation with your actual bill.
 
 ---
 
