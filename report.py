@@ -372,19 +372,16 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
     active_days     = max(1, len(analysis.get("active_dates", ["x"])))
 
     # Total active engagement time across all sessions.
-    _seen_metric_keys: set = set()
+    _seen_metric_ids: set = set()
     total_active_min = 0
     for _key, _m in analysis.get("session_metrics", {}).items():
         if isinstance(_m, str):
             continue
-        if "|" in _key:
-            _date, _proj = _key.split("|", 1)
-            _canon_key = (_date, _proj.replace("\\", "/").split("/")[-1].lower().strip().replace(" ", "-"))
-        else:
-            _canon_key = (_key,)
-        if _canon_key in _seen_metric_keys:
+        # Dedupe by object identity: proj/norm/repo-alias keys all point at the
+        # same metrics object, so id() dedupe avoids double-counting aliases.
+        if id(_m) in _seen_metric_ids:
             continue
-        _seen_metric_keys.add(_canon_key)
+        _seen_metric_ids.add(id(_m))
         total_active_min += _m.get("active_minutes", 0)
 
     # Active time display
@@ -428,32 +425,114 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int, total_prs: int = 
 
 
 def _leverage_banner(goals: list, analysis: dict) -> str:
-    """Stacked Value / Investment banner — disambiguates output from input.
+    """Hero banner — leads with the leverage/effort story, not cost.
 
-    The hero (top section) shows **what was delivered** — research-grounded
-    human-hour estimate × blended hourly rate, the headline value claim.
+    The hero states, in one prominent sentence, what Copilot turned a set of
+    human instructions into (autonomous actions) and the equivalent human
+    effort that represents. The headline effort number is toggle-able between
+    the **AI estimate** (semantic transcript reading) and the **deterministic
+    formula** (turns + lines + reads + tools), so the defensible number is a
+    first-class citizen rather than fine print.
 
-    A secondary section beneath it shows **what was invested** — measured
-    tokens converted to AI Credits + open-market value using GitHub's
-    published per-model rates. Sized smaller so it visually reads as
-    supporting context rather than competing with the hero.
-
-    A footer disclaimer makes the estimate caveat explicit, because the
-    user's actual GitHub bill depends on plan, included allowance,
-    auto-model discount, and other factors we cannot observe locally.
+    A supporting line shows the dollar value delivered (effort × blended rate,
+    an upside figure — not the user's AI bill). The incomplete AI-cost block
+    (credits / open-market estimate) is intentionally omitted here because
+    open sessions never persist their dominant cost tokens locally, making any
+    cost headline misleading. Actual spend lives on the GitHub billing page.
     """
     total_human_h = sum(g.get("human_hours", 0) for g in goals)
-    human_value   = total_human_h * HOURLY_RATE
-    market_cost   = _resolve_market_cost(analysis)
-    ai_credits    = _ai_credits_for(analysis)
-
     if total_human_h <= 0:
         return ""
 
-    credits_str = (f"{_fmt_credits(ai_credits)} credits"
-                   if ai_credits else "— credits")
-    market_str  = (f"~${market_cost:,.0f} open-market value (estimated)"
-                   if market_cost > 0 else "no AI activity recorded")
+    session_metrics = analysis.get("session_metrics", {})
+
+    # Effort totals are goal-scoped (they measure delivered initiatives):
+    # AI estimate is the summed human_hours; the deterministic total sums each
+    # goal's formula estimate from the same resolved metrics.
+    det_total_h = 0.0
+    for g in goals:
+        mm = _resolve_metrics(g.get("project", ""), session_metrics, g.get("date", ""))
+        det_total_h += compute_formula_estimate(mm).get("total", 0) or 0
+
+    # Instruction / action counts span all engagement. The merged
+    # session_metrics dict stores, for multi-day projects, BOTH per-day entries
+    # AND a single summed aggregate entry (marked with _per_day_formula_total,
+    # keyed on the earliest date). To count each unit exactly once we: dedupe by
+    # object identity (proj + normalized aliases point at the same object), take
+    # the aggregate for any multi-day project, and take per-day entries only for
+    # projects that have no aggregate.
+    seen_ids: set = set()
+    entries = []
+    agg_projs: set = set()
+
+    def _norm_proj(key: str) -> str:
+        p = key.split("|", 1)[1] if "|" in key else key
+        return p.replace("\\", "/").split("/")[-1].lower().strip().replace(" ", "-")
+
+    for k, m in session_metrics.items():
+        if not isinstance(m, dict) or id(m) in seen_ids:
+            continue
+        seen_ids.add(id(m))
+        entries.append((k, m))
+        if "_per_day_formula_total" in m:
+            agg_projs.add(_norm_proj(k))
+
+    instructions = 0
+    actions = 0
+    for k, m in entries:
+        if "_per_day_formula_total" not in m and _norm_proj(k) in agg_projs:
+            continue  # per-day leftover already covered by its aggregate
+        instructions += (m.get("substantive_turns", 0) or m.get("conversation_turns", 0) or 0)
+        actions += m.get("tool_invocations", 0) or 0
+
+    active_days = max(1, len(analysis.get("active_dates", ["x"])))
+    n_tasks     = sum(len(g.get("tasks", [])) for g in goals)
+    n_init      = len(goals)
+    leverage_x  = (actions / instructions) if instructions > 0 else 0
+
+    ai_h_str  = _fmt_h(total_human_h)
+    det_h_str = _fmt_h(det_total_h)
+    ai_val    = f"${total_human_h * HOURLY_RATE:,.0f}"
+    det_val   = f"${det_total_h * HOURLY_RATE:,.0f}"
+
+    # Prominent headline sentence — grounded entirely in measured counts.
+    lead_num = f"{instructions:,}" if instructions else "your"
+    act_num  = f"{actions:,}" if actions else "many"
+    headline = (
+        f"In {active_days} active day{'s' if active_days != 1 else ''}, Copilot turned "
+        f"<strong>{lead_num} instruction{'s' if instructions != 1 else ''}</strong> into "
+        f"<strong>{act_num} autonomous action{'s' if actions != 1 else ''}</strong> &mdash; "
+        f"<span class=\"eff-ai\">~{ai_h_str}</span>"
+        f"<span class=\"eff-det\" style=\"display:none\">~{det_h_str}</span> of equivalent "
+        f"effort across <strong>{n_tasks} task{'s' if n_tasks != 1 else ''}</strong> and "
+        f"<strong>{n_init} major initiative{'s' if n_init != 1 else ''}</strong>."
+    )
+
+    # Supporting metric chips.
+    def _chip(val, label):
+        return (f'<td style="padding:0 10px;text-align:center;white-space:nowrap">'
+                f'<div style="font-size:16px;font-weight:700;color:#fff">{val}</div>'
+                f'<div style="font-size:9px;color:rgba(255,255,255,0.65);'
+                f'text-transform:uppercase;letter-spacing:0.6px;margin-top:1px">{label}</div></td>')
+    lev_val = f"{leverage_x:.0f}&times;" if leverage_x >= 1 else "&mdash;"
+    chips = (
+        _chip(f"{active_days}", "active days")
+        + _chip(lev_val, "actions / instr")
+        + _chip(f"{n_tasks}", "tasks")
+        + _chip(f"{n_init}", "initiatives")
+    )
+
+    # Toggle pill (AI estimate | Deterministic).
+    tab_base = ("cursor:pointer;user-select:none;font-size:10px;font-weight:700;"
+                "padding:3px 12px;border-radius:20px;transition:all .15s")
+    toggle = f"""
+      <div style="display:inline-flex;gap:4px;padding:3px;border-radius:22px;
+                  background:rgba(0,0,0,0.18)">
+        <span id="eff-tab-ai" data-on="1" onclick="setEffortBasis('ai')"
+              style="{tab_base};background:#fff;color:#15803d">AI estimate</span>
+        <span id="eff-tab-det" data-on="0" onclick="setEffortBasis('det')"
+              style="{tab_base};background:rgba(255,255,255,0.12);color:rgba(255,255,255,0.85)">Deterministic</span>
+      </div>"""
 
     return f"""
   <tr>
@@ -461,33 +540,45 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
       <table width="100%" cellpadding="0" cellspacing="0" bgcolor="{C['green']}"
              style="background:linear-gradient(135deg,{C['green']},#15803d);border-collapse:collapse">
         <tr>
-          <td bgcolor="{C['green']}" style="padding:18px 24px 14px;text-align:center">
+          <td bgcolor="{C['green']}" style="padding:20px 28px 14px;text-align:center">
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;
-                        color:rgba(255,255,255,0.7)">Value Delivered</div>
-            <div style="font-size:34px;font-weight:700;color:#fff;margin-top:6px;line-height:1.1">
-              ${human_value:,.0f}</div>
-            <div style="font-size:12px;color:rgba(255,255,255,0.8);margin-top:4px">
-              {total_human_h:.1f}h &times; ${HOURLY_RATE}/hr blended rate</div>
+                        color:rgba(255,255,255,0.7)">Human Effort Equivalent</div>
+            <div style="margin-top:8px;line-height:1.05">
+              <span class="eff-ai" style="font-size:44px;font-weight:800;color:#fff">{ai_h_str}</span>
+              <span class="eff-det" style="display:none;font-size:44px;font-weight:800;color:#fff">{det_h_str}</span>
+            </div>
+            <div style="font-size:12px;color:rgba(255,255,255,0.8);margin-top:6px">
+              <span class="eff-ai">{ai_val} value delivered &middot; {total_human_h:.1f}h &times; ${HOURLY_RATE}/hr blended rate</span>
+              <span class="eff-det" style="display:none">{det_val} value delivered &middot; {det_total_h:.1f}h &times; ${HOURLY_RATE}/hr blended rate</span>
+            </div>
+            <div style="margin-top:12px">{toggle}</div>
           </td>
         </tr>
         <tr>
-          <td bgcolor="#15803d" style="padding:12px 24px;text-align:center;
+          <td bgcolor="#15803d" style="padding:14px 28px;text-align:center;
                                        border-top:1px solid rgba(255,255,255,0.18)">
-            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;
-                        color:rgba(255,255,255,0.55)">AI Investment</div>
-            <div style="font-size:20px;font-weight:700;color:#fff;margin-top:3px;line-height:1.1">
-              {credits_str}</div>
-            <div style="font-size:11px;color:rgba(255,255,255,0.7);margin-top:3px">
-              {market_str}</div>
+            <div style="font-size:15px;font-weight:600;color:#fff;line-height:1.5;
+                        max-width:760px;margin:0 auto">
+              {headline}
+            </div>
           </td>
         </tr>
         <tr>
-          <td bgcolor="#15803d" style="padding:0 24px 12px;text-align:center">
-            <div style="font-size:10px;color:rgba(255,255,255,0.55);line-height:1.4;
-                        font-style:italic">
-              AI investment estimated from measured tokens &times; GitHub's published
-              per-model rates — your actual bill depends on your plan and included
-              credit allowance.</div>
+          <td bgcolor="#15803d" style="padding:0 28px 16px">
+            <table width="100%" cellpadding="0" cellspacing="0"><tr>{chips}</tr></table>
+          </td>
+        </tr>
+        <tr>
+          <td bgcolor="#15803d" style="padding:0 28px 14px;text-align:center">
+            <div style="font-size:9px;color:rgba(255,255,255,0.5);line-height:1.4;font-style:italic">
+              Effort is a human-equivalent estimate, shown two ways &mdash;
+              <strong style="color:rgba(255,255,255,0.75)">AI estimate</strong> (reads the full
+              session transcript) or <strong style="color:rgba(255,255,255,0.75)">Deterministic</strong>
+              (turns + logic-lines + reads + tools). Instructions and actions are directly counted
+              from the event log. This banner reports value &amp; leverage, not AI cost &mdash;
+              open/killed sessions never persist their dominant cost tokens locally, so any cost
+              figure here would understate reality; see the GitHub billing page for actual spend.
+            </div>
           </td>
         </tr>
       </table>
@@ -3159,21 +3250,84 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
         doc_html     = _doc_refs_html(g.get("docs_referenced", []))
         date_badge   = _date_badge(g.get("date", ""))
         tasks        = g.get("tasks", [])
-        # Resolve AI credits for this goal from session metrics
+        # Resolve AI credits + token detail for this goal from session metrics
         project       = g.get("project", "")
         goal_date     = g.get("date", "")
         metrics       = _resolve_metrics(project, session_metrics, goal_date)
         goal_credits  = _ai_credits_for(metrics)
-        # Always show a credits cell — empty looks broken. Render "0"
-        # explicitly when a goal really cost nothing (e.g., all included
-        # models or no token data harvested for that project).
-        credits_html  = _fmt_credits(goal_credits) if goal_credits > 0 else "0"
-        credits_color = C['green'] if goal_credits > 0 else C['muted']
-        credits_cell  = f"""
-          <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
+        # Per-goal token split. The scalar ``tokens`` field is a single total;
+        # the real input/output/cache-read breakdown lives in ``tokens_by_model``
+        # (per-model dicts). Sum across models. Fall back to a dict-shaped
+        # ``tokens`` field for the cross-date aggregate path.
+        out_tok = 0
+        in_cache_tok = 0
+        _tbm = metrics.get("tokens_by_model") or {}
+        if isinstance(_tbm, dict) and _tbm:
+            for _mtok in _tbm.values():
+                if isinstance(_mtok, dict):
+                    out_tok += _mtok.get("output", 0) or 0
+                    in_cache_tok += (_mtok.get("input", 0) or 0) + (_mtok.get("cache_read", 0) or 0)
+        elif isinstance(metrics.get("tokens"), dict):
+            _tok = metrics["tokens"]
+            out_tok = _tok.get("output", 0) or 0
+            in_cache_tok = (_tok.get("input", 0) or 0) + (_tok.get("cache_read", 0) or 0)
+        # Input/cache-read tokens are only written to disk on a clean
+        # session.shutdown rollup. When they're absent but output tokens
+        # exist, the session was killed or is still running, so its true
+        # cost was never persisted locally.
+        clean_shutdown = in_cache_tok > 0
+
+        # ── Cost cell ── definitive only when the session closed cleanly.
+        if clean_shutdown and goal_credits > 0:
+            cost_inner = (f'<div style="font-size:14px;font-weight:700;color:{C["green"]}">'
+                          f'{_fmt_credits(goal_credits)}</div>'
+                          f'<div style="font-size:9px;color:{C["muted"]};margin-top:1px">credits</div>')
+        elif out_tok > 0:
+            cost_inner = (f'<div style="font-size:11px;font-weight:700;color:{C["muted"]}">n/a</div>'
+                          f'<div style="font-size:9px;color:{C["muted"]};margin-top:1px">no clean shutdown</div>')
+        else:
+            cost_inner = (f'<div style="font-size:13px;font-weight:700;color:{C["muted"]}">&mdash;</div>'
+                          f'<div style="font-size:9px;color:{C["muted"]};margin-top:1px">no token data</div>')
+        cost_cell = f"""
+          <td style="padding:10px 6px;border-bottom:1px solid {C['border']};
+                     vertical-align:middle;text-align:right;width:11%">{cost_inner}</td>"""
+
+        # ── Output tokens cell ── captured on every assistant turn, so it is
+        # populated even for unclean-shutdown sessions.
+        out_html = _fmt_tokens(out_tok) if out_tok > 0 else "&mdash;"
+        output_cell = f"""
+          <td style="padding:10px 6px;border-bottom:1px solid {C['border']};
                      vertical-align:middle;text-align:right;width:10%">
-            <div style="font-size:14px;font-weight:700;color:{credits_color}">{credits_html}</div>
-            <div style="font-size:10px;color:{C['muted']};margin-top:1px">credits</div>
+            <div style="font-size:13px;font-weight:700;color:{C['text']}">{out_html}</div>
+            <div style="font-size:9px;color:{C['muted']};margin-top:1px">output tok</div>
+          </td>"""
+
+        # ── Input / cache-read cell ── only persisted on clean shutdown.
+        if clean_shutdown:
+            inc_inner = (f'<div style="font-size:13px;font-weight:700;color:{C["text"]}">'
+                         f'{_fmt_tokens(in_cache_tok)}</div>'
+                         f'<div style="font-size:9px;color:{C["muted"]};margin-top:1px">in+cache tok</div>')
+        elif out_tok > 0:
+            inc_inner = (f'<div style="font-size:11px;font-weight:700;color:{C["muted"]}">n/a</div>'
+                         f'<div style="font-size:9px;color:{C["muted"]};margin-top:1px">not recorded</div>')
+        else:
+            inc_inner = (f'<div style="font-size:13px;font-weight:700;color:{C["muted"]}">&mdash;</div>'
+                         f'<div style="font-size:9px;color:{C["muted"]};margin-top:1px">in+cache tok</div>')
+        inputcache_cell = f"""
+          <td style="padding:10px 6px;border-bottom:1px solid {C['border']};
+                     vertical-align:middle;text-align:right;width:11%">{inc_inner}</td>"""
+
+        # ── Effort cell ── dual value: AI-calibrated estimate above the
+        # deterministic formula estimate for the same goal.
+        fe    = compute_formula_estimate(metrics)
+        det_h = _fmt_h(fe.get("total", 0))
+        effort_cell = f"""
+          <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
+                     vertical-align:middle;text-align:right;width:12%">
+            <div style="font-size:16px;font-weight:700;color:{C['accent']}">{h}</div>
+            <div style="font-size:9px;color:{C['muted']};margin-top:1px">AI est.</div>
+            <div style="font-size:11px;font-weight:600;color:{C['muted']};margin-top:4px">{det_h}</div>
+            <div style="font-size:9px;color:{C['muted']}">det. formula</div>
           </td>"""
         return f"""
         <tr id="{gid}-hdr" style="background:{bg};cursor:pointer"
@@ -3185,7 +3339,7 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
                         line-height:22px">{i+1}</div>
           </td>
           <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
-                     vertical-align:top;width:40%">
+                     vertical-align:top;width:30%">
             <div style="font-size:12px;font-weight:600;color:{C['text']};line-height:1.35">
               <span id="{gid}-arrow" style="font-size:10px;color:{C['accent']};
                                             margin-right:5px">&#9654;</span>
@@ -3194,19 +3348,17 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
             {f'<div style="margin-top:5px">{doc_html}</div>' if doc_html else ''}
           </td>
           <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
-                     vertical-align:middle;width:34%">
+                     vertical-align:middle;width:22%">
             <div>{skill_pills}</div>
             <div style="font-size:10px;color:{C['muted']};margin-top:5px">{task_sub}</div>
           </td>
-          {credits_cell}
-          <td style="padding:10px 8px;border-bottom:1px solid {C['border']};
-                     vertical-align:middle;text-align:right;width:12%">
-            <div style="font-size:16px;font-weight:700;color:{C['accent']}">{h}</div>
-            <div style="font-size:10px;color:{C['muted']};margin-top:1px">human est.</div>
-          </td>
+          {cost_cell}
+          {output_cell}
+          {inputcache_cell}
+          {effort_cell}
         </tr>
         <tr id="{gid}-tasks" style="display:none">
-          <td colspan="5" style="padding:0 8px 12px;background:{C['bg']}">
+          <td colspan="7" style="padding:0 8px 12px;background:{C['bg']}">
             {_goal_context_bar(g, session_lookup)}
             <table width="100%" cellpadding="0" cellspacing="0"
                    style="border:1px solid {C['border']};border-radius:6px;overflow:hidden">
@@ -3236,7 +3388,7 @@ def _goals_summary(goals: list, session_lookup: dict = None, session_metrics: di
         label = f"Show {n_extra} more project{'s' if n_extra != 1 else ''}"
         rows += f"""
         <tr>
-          <td colspan="5" style="padding:0;border-bottom:1px solid {C['border']}">>
+          <td colspan="7" style="padding:0;border-bottom:1px solid {C['border']}">
             <button id="goals-show-more" onclick="toggleExtraGoals({n_extra})"
                     style="width:100%;background:{C['subtle']};border:none;border-top:1px solid {C['border']};
                            padding:8px 16px;font-size:11px;font-weight:600;color:{C['accent']};
@@ -3422,6 +3574,12 @@ def generate_html(target_date: str, analysis: dict, sessions: list,
     total_prs     = sum(s.get("git_ops", []).count("pr")     for s in sessions)
     total_commits = sum(s.get("git_ops", []).count("commit") for s in sessions)
 
+    _all_tok       = analysis.get("tokens", {}) if isinstance(analysis.get("tokens"), dict) else {}
+    total_out_tok  = _all_tok.get("output", 0) or 0
+    total_inc_tok  = (_all_tok.get("input", 0) or 0) + (_all_tok.get("cache_read", 0) or 0)
+    total_out_fmt  = _fmt_tokens(total_out_tok) if total_out_tok > 0 else "&mdash;"
+    total_inc_fmt  = _fmt_tokens(total_inc_tok) if total_inc_tok > 0 else "&mdash;"
+
     totals_row= f"""
         <tr style="background:{C['accent_lt']}">
           <td style="padding:10px 16px;border-top:2px solid {C['border']}"></td>
@@ -3430,9 +3588,17 @@ def generate_html(target_date: str, analysis: dict, sessions: list,
             {len(goals)} project{'s' if len(goals) != 1 else ''} &nbsp;·&nbsp; {total_tasks} tasks total
           </td>
           <td style="padding:10px 16px;border-top:2px solid {C['border']}"></td>
-          <td style="padding:10px 16px;border-top:2px solid {C['border']};
+          <td style="padding:10px 6px;border-top:2px solid {C['border']};
                      text-align:right;font-size:14px;font-weight:700;color:{C['green']}">
             {total_cred_fmt}
+          </td>
+          <td style="padding:10px 6px;border-top:2px solid {C['border']};
+                     text-align:right;font-size:13px;font-weight:700;color:{C['text']}">
+            {total_out_fmt}
+          </td>
+          <td style="padding:10px 6px;border-top:2px solid {C['border']};
+                     text-align:right;font-size:13px;font-weight:700;color:{C['text']}">
+            {total_inc_fmt}
           </td>
           <td style="padding:10px 16px;border-top:2px solid {C['border']};
                      text-align:right;font-size:18px;font-weight:700;color:{C['accent']}">
@@ -3521,6 +3687,21 @@ function toggleFormulaCol() {
   cols.forEach(function(el) { el.style.display = hide ? 'none' : ''; });
   btn.setAttribute('data-open', hide ? '0' : '1');
   btn.innerHTML = hide ? '&#9654; Insert deterministic formula' : '&#9660; Hide deterministic formula';
+}
+function setEffortBasis(basis) {
+  var showDet = basis === 'det';
+  document.querySelectorAll('.eff-ai').forEach(function(el){ el.style.display = showDet ? 'none' : ''; });
+  document.querySelectorAll('.eff-det').forEach(function(el){ el.style.display = showDet ? '' : 'none'; });
+  var ai = document.getElementById('eff-tab-ai');
+  var dt = document.getElementById('eff-tab-det');
+  if (ai && dt) {
+    ai.setAttribute('data-on', showDet ? '0' : '1');
+    dt.setAttribute('data-on', showDet ? '1' : '0');
+    ai.style.background = showDet ? 'rgba(255,255,255,0.12)' : '#fff';
+    ai.style.color      = showDet ? 'rgba(255,255,255,0.85)' : '#15803d';
+    dt.style.background = showDet ? '#fff' : 'rgba(255,255,255,0.12)';
+    dt.style.color      = showDet ? '#15803d' : 'rgba(255,255,255,0.85)';
+  }
 }
 function shareViaEmail(subject, body) {
   var a = document.createElement('a');
@@ -3696,6 +3877,44 @@ window.onload = function() {
         {_goals_summary(goals, session_lookup, analysis.get("session_metrics", {}))}
         <tbody>{totals_row}</tbody>
       </table>
+      <div style="margin-top:12px;padding:10px 12px;background:{C['subtle']};
+                  border:1px solid {C['border']};border-radius:6px;font-size:10px;
+                  color:{C['muted']};line-height:1.55">
+        <div style="margin-bottom:6px">
+          <strong style="color:{C['text']}">Why some rows show no cost.</strong>
+          <strong style="color:{C['text']}">Cost</strong> and
+          <strong style="color:{C['text']}">Input/Cache&nbsp;Read</strong> tokens are only
+          written to disk when a session ends with a clean
+          <code style="background:{C['bg']};padding:0 3px;border-radius:3px">session.shutdown</code>
+          rollup. Sessions that were killed or are still running (long-lived
+          monitors, aborted runs) never wrote that record, so GitHub never
+          persisted their input &amp; cache-read tokens locally &mdash; those are
+          the dominant cost of agentic work, and they are physically absent from
+          the logs, not zero. Such rows read <strong>&ldquo;n/a &middot; no clean
+          shutdown.&rdquo;</strong> <strong style="color:{C['text']}">Output tokens</strong>
+          are captured on every assistant turn, so they are populated for every
+          project. For an authoritative billed total, use the
+          <a href="https://github.com/settings/billing" target="_blank"
+             style="color:{C['accent']};text-decoration:none">GitHub billing page</a>.
+        </div>
+        <div>
+          <strong style="color:{C['text']}">&#9432; Effort:</strong>
+          <strong style="color:{C['accent']}">AI est.</strong> is a semantic estimate
+          from reading the full session transcript;
+          <strong style="color:{C['muted']}">det. formula</strong> is the deterministic
+          estimate (turns + logic-lines + reads + tools). Both are human-effort
+          equivalents for the same work &mdash; use the
+          <em>&ldquo;Insert deterministic formula&rdquo;</em> toggle in the Effort
+          Reconciliation section for the full side-by-side breakdown.
+        </div>
+        <div style="margin-top:6px">
+          <strong style="color:{C['text']}">&#9432; Agent turns:</strong>
+          one agent turn = one autonomous model step (a single assistant response
+          that reasons and/or fires a tool call). A single human prompt typically
+          triggers many turns as the agent works, so turns measure the AI's
+          autonomous leverage, not the number of things you asked for.
+        </div>
+      </div>
       <div id="expand-hint" style="display:none;font-size:11px;color:{C['muted']};
                                     text-align:right;margin-top:6px">
         Click a project to see task details &#9656;
