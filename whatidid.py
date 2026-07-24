@@ -333,6 +333,15 @@ def _merge_analyses(day_analyses: list) -> dict:
             for p, c in project_canonical.items():
                 if c == canon:
                     equiv_names.add(p)
+            # Bridge repo-slug goal.project → working-folder metrics: when the
+            # goal's project is a git repo name (e.g. "owner/coworkpipeline"),
+            # its per-day session metrics are keyed by the working folder (e.g.
+            # "Daybreak"). Add every folder that shares this repo so the per-day
+            # lookup below actually finds them; without this the aggregate comes
+            # back all-zero and both the effort formula and token columns render
+            # empty for that goal.
+            for _cand in {norm, proj.replace("\\", "/").split("/")[-1].lower()}:
+                equiv_names |= _repo_to_projects.get(_cand, set())
 
             # Sum raw metrics for display, but compute formula per-day.
             # files_touched_count is a count of unique files per day — use max()
@@ -428,6 +437,23 @@ def _merge_analyses(day_analyses: list) -> dict:
             # Store aggregated metrics under the earliest date key
             merged_session_metrics[all_dates[0] + "|" + proj] = agg
             merged_session_metrics[all_dates[0] + "|" + norm] = agg
+
+    # Alias each project's per-date metrics under its git-repo name(s) too, so
+    # goals whose `project` is a repo slug (e.g. "owner/coworkpipeline") resolve
+    # to the working-folder metrics (e.g. "Daybreak"). Aliases point at the same
+    # object, so id()-based dedupe keeps aggregate totals correct. Runs after the
+    # multi-day aggregate block so repo aliases capture the summed aggregate.
+    _proj_to_repos: dict = {}
+    for _repo_short, _projs in _repo_to_projects.items():
+        for _p in _projs:
+            _proj_to_repos.setdefault(_p, set()).add(_repo_short)
+    for _key in list(merged_session_metrics.keys()):
+        if "|" not in _key:
+            continue
+        _dte, _proj = _key.split("|", 1)
+        for _repo_short in _proj_to_repos.get(_normalize_project(_proj), ()):
+            merged_session_metrics.setdefault(_dte + "|" + _repo_short,
+                                              merged_session_metrics[_key])
 
     # Enforce the deterministic formula as a hard floor on every goal's
     # `human_hours`. The methodology calls the formula the "transparency
@@ -788,6 +814,160 @@ def _preprocess_argv(argv: list) -> list:
     return out
 
 
+def estimate_billed_credits(date_set):
+    """Independent, one-count-per-session credit ESTIMATE for local CLI sessions.
+
+    Unlike the main report path (which date-filters every event and therefore
+    drops non-compaction input / cache-read tokens for any session without a
+    same-day ``session.shutdown``), this pass reads each CLI session file once
+    and, when a ``session.shutdown`` rollup is present, prices the *complete*
+    per-model ``modelMetrics.usage`` token set (input + cache_read +
+    cache_write + output) at GitHub's published per-model rates — the same math
+    GitHub uses to bill AI Credits. Each session is attributed exactly once (on
+    its shutdown / last-checkpoint / last-event date) to avoid multi-day
+    double-counting.
+
+    This reports only what is DEFINITIVELY recorded in the local CLI event
+    stream — no extrapolation or modeling:
+
+    * For sessions that wrote a ``session.shutdown`` rollup, it prices the
+      complete per-model ``modelMetrics.usage`` token set (input + cache_read +
+      cache_write + output) at GitHub's published per-model rates — the same
+      math GitHub uses to bill AI Credits — and sums the recorded
+      ``totalNanoAiu``.
+    * Sessions that never wrote a shutdown rollup (open / killed / still
+      running) log only ``outputTokens`` per turn; their input and cache-read
+      tokens are simply absent from the local files, so those sessions are
+      counted only by their recorded output/compaction tokens.
+
+    Because of that second case, the returned total is a hard FLOOR, not the
+    full bill: any consumption whose tokens GitHub never wrote to disk cannot
+    be counted here. The authoritative, definitive total is the GitHub billing
+    / usage page.
+
+    Calibration note: on this machine's clean sessions, summed ``totalNanoAiu``
+    and independent per-model token pricing agree to within ~6%, i.e.
+    1 AIU ≈ 1 AI Credit ≈ $0.01.
+
+    Returns a dict, or ``None`` when no local CLI sessions are found.
+    """
+    from report import _cost_by_model, _credits
+    from harvest import SESSION_DIR
+
+    if not SESSION_DIR.exists():
+        return None
+
+    total_credits = 0.0   # measured floor across all sessions
+    total_aiu     = 0.0
+    n_sessions    = 0
+    n_full        = 0   # sessions priced from a full shutdown rollup
+    n_est_only    = 0   # sessions with output/compaction tokens only (undercounted)
+
+    for sess_dir in SESSION_DIR.iterdir():
+        ev = sess_dir / "events.jsonl"
+        if not ev.exists():
+            continue
+
+        shutdown = None
+        shutdown_ts = ""
+        ckpt_aiu = 0.0
+        ckpt_ts = ""
+        last_ts = ""
+        per_out = {}       # model -> summed output tokens (fallback path)
+        compaction = []    # list of compactionTokensUsed dicts (fallback path)
+
+        try:
+            lines = ev.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                o = _json.loads(line)
+            except ValueError:
+                continue
+            t = o.get("type")
+            d = o.get("data") or {}
+            ts = o.get("timestamp", "") or ""
+            if ts:
+                last_ts = ts
+            if t == "session.shutdown":
+                shutdown = d
+                shutdown_ts = ts
+            elif t == "session.usage_checkpoint":
+                a = float(d.get("totalNanoAiu") or 0)
+                if a > ckpt_aiu:
+                    ckpt_aiu = a
+                    ckpt_ts = ts
+            elif t == "assistant.message":
+                m = d.get("model") or "unknown"
+                out = d.get("outputTokens") or 0
+                if isinstance(out, (int, float)) and out > 0:
+                    per_out[m] = per_out.get(m, 0) + int(out)
+            elif t == "session.compaction_complete":
+                ctu = d.get("compactionTokensUsed") or {}
+                if ctu:
+                    compaction.append(ctu)
+
+        attr_ts = shutdown_ts or ckpt_ts or last_ts
+        if not attr_ts:
+            continue
+        if attr_ts[:10] not in date_set:
+            continue
+
+        n_sessions += 1
+        auto = False
+        tokens_by_model = {}
+
+        if shutdown and shutdown.get("modelMetrics"):
+            auto = bool(shutdown.get("autoModelSelection")
+                        or shutdown.get("autoModel")
+                        or shutdown.get("modelSelectionMode") == "auto")
+            for mname, mdata in (shutdown.get("modelMetrics") or {}).items():
+                usage = mdata.get("usage") or {}
+                itok = int(usage.get("inputTokens", 0) or 0)
+                cr   = int(usage.get("cacheReadTokens", 0) or 0)
+                cw   = int(usage.get("cacheWriteTokens", 0) or 0)
+                td   = mdata.get("tokenDetails") or {}
+                fresh = (td.get("input") or {}).get("tokenCount")
+                fresh_in = fresh if isinstance(fresh, int) else max(0, itok - cr - cw)
+                tokens_by_model[mname] = {
+                    "input":          fresh_in,
+                    "output":         int(usage.get("outputTokens", 0) or 0),
+                    "cache_read":     cr,
+                    "cache_creation": cw,
+                }
+            n_full += 1
+        else:
+            for m, out in per_out.items():
+                tokens_by_model.setdefault(
+                    m, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0})["output"] += out
+            for ctu in compaction:
+                m = ctu.get("model") or "unknown"
+                b = tokens_by_model.setdefault(
+                    m, {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0})
+                b["input"]          += int(ctu.get("inputTokens", 0) or 0)
+                b["output"]         += int(ctu.get("outputTokens", 0) or 0)
+                b["cache_read"]     += int(ctu.get("cacheReadTokens", 0) or 0)
+                b["cache_creation"] += int(ctu.get("cacheWriteTokens", 0) or 0)
+            n_est_only += 1
+
+        total_credits += _credits(_cost_by_model(tokens_by_model, auto_model=auto))
+        total_aiu += (float(shutdown.get("totalNanoAiu") or 0) if shutdown else ckpt_aiu) / 1e9
+
+    if n_sessions == 0:
+        return None
+    return {
+        "credits":   int(round(total_credits)),
+        "aiu":       total_aiu,
+        "sessions":  n_sessions,
+        "full":      n_full,
+        "est_only":  n_est_only,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate a digest of what GitHub Copilot helped you accomplish."
@@ -1052,6 +1232,30 @@ def main():
             print(" opened — review and click Send." if ok else " failed.")
 
     print("\nDone.")
+    # Definitive, one-count-per-session full-token credit FLOOR for local CLI
+    # sessions. The headline "AI credits used" above date-filters events and
+    # drops input/cache-read tokens for sessions without a same-day shutdown;
+    # this pass prices the complete per-model shutdown token set instead. No
+    # extrapolation — only what is recorded in the local event stream.
+    try:
+        est = estimate_billed_credits(set(dates))
+    except Exception:
+        est = None
+    if est:
+        from report import USD_PER_CREDIT as _UPC
+        print(f"  Recorded credits (full-token, local CLI): "
+              f"{est['credits']:,} (~${est['credits'] * _UPC:,.2f})")
+        print(f"    Definitive floor: complete input+cache-read+cache-write+output token set")
+        print(f"    from each session.shutdown rollup ({est['full']} of {est['sessions']} "
+              f"CLI session(s) had one).")
+        if est['aiu'] > 0:
+            print(f"    Recorded billed compute (totalNanoAiu): {est['aiu']:,.1f} AIU "
+                  f"(1 AIU \u2248 1 credit \u2248 $0.01).")
+        if est['est_only'] > 0:
+            print(f"    NOT COUNTABLE: {est['est_only']} open/killed session(s) never wrote a")
+            print(f"    shutdown rollup, so their input & cache-read tokens are absent from disk")
+            print(f"    and cannot be priced from local data. This floor therefore understates")
+            print(f"    the true bill. The GitHub billing / usage page is the definitive total.")
     burn_count = len(analysis.get("burn_findings") or [])
     if burn_count > 0:
         print(f"  Expand any of the top expensive sessions in the HTML report to see")
