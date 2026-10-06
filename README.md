@@ -14,6 +14,10 @@
 
 <br>
 
+**▶ [Watch the 2-minute overview](https://github.com/microsoft/What-I-Did-Copilot/raw/main/media/What_I_Did_Copilot_Overview.mp4)** — see what the report shows and why it matters.
+
+<br>
+
 [![Built by Microsoft](https://img.shields.io/badge/Built%20by-Microsoft-0078d4?style=for-the-badge&logo=microsoft&logoColor=white)](https://microsoft.github.io/Analytics-Hub/team/)
 [![Analytics Hub](https://img.shields.io/badge/Analytics%20Hub-11%20Repositories-8661c5?style=for-the-badge&logo=github&logoColor=white)](https://microsoft.github.io/Analytics-Hub/)
 
