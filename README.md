@@ -14,7 +14,7 @@
 
 <br>
 
-**▶ [Watch the 2-minute overview](https://github.com/microsoft/What-I-Did-Copilot/raw/main/media/What_I_Did_Copilot_Overview.mp4)** — see what the report shows and why it matters.
+**▶ [Watch the 2-minute overview](#watch-the-overview)** — see what the report shows and why it matters.
 
 <br>
 
@@ -36,6 +36,18 @@
 <br>
 
 </div>
+
+---
+
+
+<a id="watch-the-overview"></a>
+## Watch the overview
+
+A 2-minute tour — what the report shows, where Copilot helped, and the leverage you're getting from your seat.
+
+https://github.com/microsoft/What-I-Did-Copilot/raw/main/media/What_I_Did_Copilot_Overview.mp4
+
+> If the player above doesn't load, [download the overview video](media/What_I_Did_Copilot_Overview.mp4).
 
 ---
 
