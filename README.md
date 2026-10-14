@@ -14,6 +14,10 @@
 
 <br>
 
+**▶ [Watch the 2-minute overview](https://youtu.be/NrygF8hE6vo)** — see what the report shows and why it matters.
+
+<br>
+
 [![Built by Microsoft](https://img.shields.io/badge/Built%20by-Microsoft-0078d4?style=for-the-badge&logo=microsoft&logoColor=white)](https://microsoft.github.io/Analytics-Hub/team/)
 [![Analytics Hub](https://img.shields.io/badge/Analytics%20Hub-11%20Repositories-8661c5?style=for-the-badge&logo=github&logoColor=white)](https://microsoft.github.io/Analytics-Hub/)
 
@@ -32,6 +36,18 @@
 <br>
 
 </div>
+
+---
+
+
+<a id="watch-the-overview"></a>
+## Watch the overview
+
+A 2-minute tour — what the report shows, where Copilot helped, and the leverage you're getting from your seat.
+
+[![Watch the 2-minute overview on YouTube](https://img.youtube.com/vi/NrygF8hE6vo/maxresdefault.jpg)](https://youtu.be/NrygF8hE6vo)
+
+**▶ [Watch on YouTube](https://youtu.be/NrygF8hE6vo)**
 
 ---
 
