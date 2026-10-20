@@ -18,11 +18,10 @@
 
 <br>
 
-[![Analytics Hub](https://img.shields.io/badge/Analytics%20Hub-11%20Repositories-8661c5?style=for-the-badge&logo=github&logoColor=white)](https://microsoft.github.io/Analytics-Hub/)
+All reports and guides can be found on the [Analytics Hub](https://microsoft.github.io/Analytics-Hub/).
 
 <br>
 
-**🚀 [All Analytics Hub Reports](https://microsoft.github.io/Analytics-Hub/)**
 
 <br>
 
